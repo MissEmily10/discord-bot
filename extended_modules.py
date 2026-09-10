@@ -295,15 +295,18 @@ class FormListView(PanelView):
 # =========================
 
 class TemplateModal(discord.ui.Modal, title="СОХРАНИТЬ ШАБЛОН"):
-    name=discord.ui.TextInput(label="Название",max_length=100); typ=discord.ui.TextInput(label="message / buttons / form",max_length=20); category=discord.ui.TextInput(label="Категория",max_length=50); visibility=discord.ui.TextInput(label="private / public",max_length=7); roles=discord.ui.TextInput(label="Role IDs через запятую",required=False,max_length=1000); payload=discord.ui.TextInput(label="JSON payload",style=discord.TextStyle.paragraph,max_length=4000)
+    name=discord.ui.TextInput(label="Название",max_length=100); typ=discord.ui.TextInput(label="message / buttons / form",max_length=20); category_visibility=discord.ui.TextInput(label="Категория · private/public",max_length=60); roles=discord.ui.TextInput(label="Role IDs через запятую",required=False,max_length=1000); payload=discord.ui.TextInput(label="JSON payload",style=discord.TextStyle.paragraph,max_length=4000)
     async def on_submit(self,i):
-        typ=self.typ.value.strip().lower(); vis=self.visibility.value.strip().lower()
+        typ=self.typ.value.strip().lower()
+        category, _, vis = self.category_visibility.value.partition("/")
+        category=category.strip() or "general"
+        vis=vis.strip().lower() or "private"
         if typ not in {'message','buttons','form'} or vis not in {'private','public'}:
-            await i.response.send_message('Проверь тип и видимость.',ephemeral=True); return
+            await i.response.send_message('Проверь тип и поле `категория/private` или `категория/public`.',ephemeral=True); return
         try: json.loads(self.payload.value)
         except json.JSONDecodeError: await i.response.send_message('JSON некорректен.',ephemeral=True); return
         roles=[int(x.strip()) for x in self.roles.value.split(',') if x.strip().isdigit()]
-        tid=save_template(i.guild.id,i.user.id,self.name.value.strip(),typ,self.payload.value,vis,self.category.value.strip() or 'general',json.dumps(roles))
+        tid=save_template(i.guild.id,i.user.id,self.name.value.strip(),typ,self.payload.value,vis,category,json.dumps(roles))
         await i.response.send_message(f'Шаблон сохранён: `{tid}`',ephemeral=True)
 
 
