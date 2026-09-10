@@ -338,7 +338,8 @@ class VisibilityView(PanelView):
     @discord.ui.button(label="Ограниченный", emoji="🎭", style=discord.ButtonStyle.primary)
     async def restricted(self, interaction, button):
         self.state.visibility = "restricted"
-        await interaction.response.edit_message(
+        await interaction.response.defer()
+        await interaction.edit_original_response(
             embed=E(interaction, "ОГРАНИЧЕННЫЙ ДОСТУП", "По уровню доступа или по конкретной роли?"),
             view=RestrictionModeView(self.state, back_target=(interaction.message.embeds[0], self))
         )
@@ -351,7 +352,8 @@ class RestrictionModeView(PanelView):
 
     @discord.ui.button(label="По уровню доступа", emoji="🛡️", style=discord.ButtonStyle.primary)
     async def by_level(self, interaction, button):
-        await interaction.response.edit_message(
+        await interaction.response.defer()
+        await interaction.edit_original_response(
             embed=E(interaction, "УРОВЕНЬ", "Кто минимум сможет видеть это сообщение?"),
             view=LevelRestrictionView(self.state, back_target=(interaction.message.embeds[0], self))
         )
@@ -367,7 +369,8 @@ class RestrictionModeView(PanelView):
 
         select.callback = selected
         view.add_item(select)
-        await interaction.response.edit_message(embed=E(interaction, "РОЛИ", "Выбери до 5 ролей."), view=view)
+        await interaction.response.defer()
+        await interaction.edit_original_response(embed=E(interaction, "РОЛИ", "Выбери до 5 ролей."), view=view)
 
 
 class LevelRestrictionView(PanelView):
@@ -389,7 +392,8 @@ class LevelRestrictionView(PanelView):
 
 
 async def go_to_editor(interaction, state, back_target):
-    await interaction.response.edit_message(
+    await interaction.response.defer()
+    await interaction.edit_original_response(
         embed=render_active_preview(state),
         view=EmbedEditorView(state, back_target=back_target)
     )
