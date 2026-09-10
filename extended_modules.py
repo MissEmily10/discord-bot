@@ -320,7 +320,13 @@ class TemplateActions(discord.ui.View):
         row=get_template(self.tid); p=j(row[5],{}) if row else {}
         if not row: await i.response.send_message('Шаблон не найден.',ephemeral=True); return
         if row[4]=='message':
-            await i.response.send_message(content=p.get('content') or None,embeds=[build_embed(x) for x in p.get('embeds',[])[:MAX_EMBEDS]],view=button_view(p.get('buttons',[])),ephemeral=True)
+            content=p.get('content') or None
+            embeds=[build_embed(x) for x in p.get('embeds',[])[:MAX_EMBEDS]]
+            view=button_view(p.get('buttons',[]))
+            if not content and not embeds and view is None:
+                await i.response.send_message('Этот шаблон пустой и не может быть показан.',ephemeral=True)
+                return
+            await i.response.send_message(content=content,embeds=embeds,view=view,ephemeral=True)
         elif row[4]=='buttons': await i.response.send_message(embed=E(row[3],'Набор кнопок.'),view=button_view(p.get('buttons',[])),ephemeral=True)
         else: await i.response.send_message('Для формы используй сохранённый Form ID в payload.',ephemeral=True)
     @discord.ui.button(label='Удалить',emoji='🗑️',style=discord.ButtonStyle.danger)
@@ -535,6 +541,12 @@ class MessageList(discord.ui.View):
                 from database import get_message_build
                 row=get_message_build(bid)
                 if not row: await i.response.send_message('Build не найден.',ephemeral=True); return
-                await i.response.send_message(content=row[4] or None,embeds=[build_embed(x) for x in j(row[5],[])[:MAX_EMBEDS]],view=button_view(j(row[6],[])),ephemeral=True)
+                content=row[4] or None
+                embeds=[build_embed(x) for x in j(row[5],[])[:MAX_EMBEDS]]
+                view=button_view(j(row[6],[]))
+                if not content and not embeds and view is None:
+                    await i.response.send_message('Этот Message Build пустой и не может быть показан.',ephemeral=True)
+                    return
+                await i.response.send_message(content=content,embeds=embeds,view=view,ephemeral=True)
             b.callback=cb; self.add_item(b)
         if not rows:self.add_item(discord.ui.Button(label='Build пока нет',disabled=True))

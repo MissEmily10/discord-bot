@@ -123,14 +123,7 @@ def build_custom_list_view(options):
             return
         action_key = chosen.get("action_key")
         value = chosen.get("value")
-        if action_key == "message.send":
-            await interaction.response.send_message(value or "РЕПЛИКА ОС — действие выполнено.", ephemeral=True)
-        elif action_key == "message.confirm":
-            await interaction.response.send_message(value or "РЕПЛИКА ОС — подтверждение получено.", ephemeral=True)
-        elif action_key == "message.edit":
-            await open_message_edit_modal(interaction)
-        else:
-            await interaction.response.send_message(f"РЕПЛИКА ОС — действие `{action_key}` пока в разработке.", ephemeral=True)
+        await dispatch_action(interaction, action_key, value)
 
     select.callback = callback
     view.add_item(select)
@@ -189,6 +182,32 @@ class MessageEditModal(discord.ui.Modal, title="РЕДАКТИРОВАТЬ СО�
         )
 
 
+class WebhookSendModal(discord.ui.Modal, title="ОТПРАВИТЬ ЧЕРЕЗ WEBHOOK"):
+    url_input = discord.ui.TextInput(label="Webhook URL", max_length=1000)
+    content_input = discord.ui.TextInput(
+        label="Текст сообщения",
+        style=discord.TextStyle.paragraph,
+        max_length=2000,
+    )
+
+    def __init__(self, default_url=""):
+        super().__init__()
+        self.url_input.default = default_url
+
+    async def on_submit(self, interaction):
+        webhook_url = normalize_url(self.url_input.value)
+        if not webhook_url:
+            await interaction.response.send_message("Укажи URL webhook.", ephemeral=True)
+            return
+        try:
+            webhook = discord.Webhook.from_url(webhook_url, client=interaction.client)
+            await webhook.send(self.content_input.value, username=interaction.client.user.name)
+        except (discord.HTTPException, discord.InvalidArgument):
+            await interaction.response.send_message("Не удалось отправить сообщение через webhook.", ephemeral=True)
+            return
+        await interaction.response.send_message("Сообщение через webhook отправлено.", ephemeral=True)
+
+
 async def open_message_edit_modal(interaction):
     if not core.is_action_allowed(core.get_user_level(interaction), "message.edit"):
         await interaction.response.send_message(
@@ -197,6 +216,97 @@ async def open_message_edit_modal(interaction):
         )
         return
     await interaction.response.send_modal(MessageEditModal(interaction.message))
+
+
+async def dispatch_action(interaction, action_key, value):
+    """Единая маршрутизация действий кнопок и пользовательских списков."""
+    if not action_key:
+        await interaction.response.send_message("Действие не настроено.", ephemeral=True)
+        return
+    if not core.is_action_allowed(core.get_user_level(interaction), action_key):
+        await interaction.response.send_message("У тебя нет доступа к этому действию.", ephemeral=True)
+        return
+
+    if action_key == "message.send":
+        await interaction.response.send_message(value or "РЕПЛИКА ОС — действие выполнено.", ephemeral=True)
+    elif action_key == "message.confirm":
+        await interaction.response.send_message(value or "РЕПЛИКА ОС — подтверждение получено.", ephemeral=True)
+    elif action_key == "message.edit":
+        await open_message_edit_modal(interaction)
+    elif action_key == "form.trigger":
+        from database import get_form
+        from extended_modules import SubmissionModal
+
+        try:
+            form_id = int((value or "").strip())
+        except ValueError:
+            await interaction.response.send_message("Для form.trigger укажи ID формы.", ephemeral=True)
+            return
+        row = get_form(form_id)
+        if not row:
+            await interaction.response.send_message("Форма не найдена.", ephemeral=True)
+            return
+        await interaction.response.send_modal(SubmissionModal(row))
+    elif action_key == "select.trigger":
+        kind = (value or "role").strip().lower()
+        if kind not in NATIVE_SELECT_CLASSES:
+            await interaction.response.send_message("Для select.trigger укажи: role, user, channel или mentionable.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "Выбери значение:",
+            view=build_native_select_view(kind),
+            ephemeral=True,
+        )
+    elif action_key in {"role.assign", "role.remove"}:
+        try:
+            role_id = int((value or "").strip())
+        except ValueError:
+            await interaction.response.send_message("Для действия с ролью укажи ID роли.", ephemeral=True)
+            return
+        if interaction.guild is None or not interaction.guild.me.guild_permissions.manage_roles:
+            await interaction.response.send_message("У бота нет права Manage Roles.", ephemeral=True)
+            return
+        role = interaction.guild.get_role(role_id)
+        member = interaction.guild.get_member(interaction.user.id)
+        bot_member = interaction.guild.me
+        if not role or not member or role >= bot_member.top_role:
+            await interaction.response.send_message("Роль не найдена или находится выше роли бота.", ephemeral=True)
+            return
+        try:
+            if action_key == "role.assign":
+                await member.add_roles(role, reason="Message action role.assign")
+                result = "Роль выдана."
+            else:
+                await member.remove_roles(role, reason="Message action role.remove")
+                result = "Роль снята."
+        except discord.Forbidden:
+            await interaction.response.send_message("Discord запретил изменение роли.", ephemeral=True)
+            return
+        await interaction.response.send_message(result, ephemeral=True)
+    elif action_key == "webhook.send":
+        await interaction.response.send_modal(WebhookSendModal(value or ""))
+    elif action_key == "build.trigger":
+        try:
+            build_id = int((value or "").strip())
+        except ValueError:
+            await interaction.response.send_message("Для build.trigger укажи ID Message Build.", ephemeral=True)
+            return
+        row = get_message_build(build_id)
+        if not row:
+            await interaction.response.send_message("Message Build не найден.", ephemeral=True)
+            return
+        embeds_data = json.loads(row[5])
+        buttons_data = json.loads(row[6])
+        interactive_data = json.loads(row[11]) if row[11] else None
+        content = row[4] or None
+        embeds = [build_discord_embed(item) for item in embeds_data[:MAX_EMBEDS]]
+        view = build_final_view(buttons_data, interactive_data)
+        if not content and not embeds and view is None:
+            await interaction.response.send_message("Этот Message Build пустой.", ephemeral=True)
+            return
+        await interaction.response.send_message(content=content, embeds=embeds, view=view, ephemeral=True)
+    else:
+        await interaction.response.send_message(f"РЕПЛИКА ОС — действие `{action_key}` пока в разработке.", ephemeral=True)
 
 
 def build_native_select_view(kind):
@@ -239,16 +349,7 @@ def build_button_view(buttons):
         button = discord.ui.Button(label=label, emoji=emoji, style=style)
 
         async def callback(interaction, action_key=action_key, value=value):
-            if action_key == "message.send":
-                await interaction.response.send_message(value or "РЕПЛИКА ОС — действие выполнено.", ephemeral=True)
-            elif action_key == "message.confirm":
-                await interaction.response.send_message(value or "РЕПЛИКА ОС — подтверждение получено.", ephemeral=True)
-            elif action_key == "message.edit":
-                await open_message_edit_modal(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"РЕПЛИКА ОС — действие `{action_key}` пока в разработке.", ephemeral=True
-                )
+            await dispatch_action(interaction, action_key, value)
 
         button.callback = callback
         view.add_item(button)
