@@ -53,8 +53,8 @@ def build_embed(data):
     except (TypeError, ValueError):
         color = COLOR.value
     e = discord.Embed(
-        title=data.get("title") or discord.Embed.Empty,
-        description=data.get("description") or discord.Embed.Empty,
+        title=data.get("title") or None,
+        description=data.get("description") or None,
         color=color,
     )
     if data.get("url"):
@@ -434,7 +434,7 @@ class WebhookMessageModal(discord.ui.Modal,title='WEBHOOK MESSAGE'):
     async def on_submit(self,i):
         row=get_webhook(self.rid); e=None
         if self.title.value.strip() or self.description.value.strip():
-            e=discord.Embed(title=self.title.value.strip() or discord.Embed.Empty,description=self.description.value.strip() or discord.Embed.Empty,color=COLOR)
+            e=discord.Embed(title=self.title.value.strip() or None,description=self.description.value.strip() or None,color=COLOR)
             if url(self.image.value): e.set_image(url=url(self.image.value))
             if url(self.thumbnail.value): e.set_thumbnail(url=url(self.thumbnail.value))
         try:
