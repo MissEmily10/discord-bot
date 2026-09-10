@@ -529,7 +529,7 @@ class MessageList(discord.ui.View):
         super().__init__(timeout=900)
         from database import get_message_builds
         rows=get_message_builds(guild_id,user_id,True)
-        for bid,owner,name,vis,cat,roles,updated in rows[:20]:
+        for bid, owner, name, vis, cat, updated in rows[:20]:
             b=discord.ui.Button(label=name[:70],style=discord.ButtonStyle.secondary)
             async def cb(i,bid=bid):
                 from database import get_message_build
