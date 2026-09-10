@@ -1,10 +1,10 @@
 import io
 import json
-import urllib.request
 import os
 from datetime import datetime
 
 import discord
+from core import PanelView, can_manage_access, fetch_bytes
 
 from database import (
     save_form, get_form, get_forms, save_submission, get_submission,
@@ -187,17 +187,17 @@ class FormRoutingModal(discord.ui.Modal, title="МАРШРУТИЗАЦИЯ ФО�
         await interaction.response.edit_message(embed=E("FORM BUILDER",form_text(self.state)),view=FormView(self.state))
 
 
-class FormTargetRoleView(discord.ui.View):
-    def __init__(self,state):
-        super().__init__(timeout=300); self.state=state
+class FormTargetRoleView(PanelView):
+    def __init__(self,state,back_target=None):
+        super().__init__(back_target=back_target, timeout=300); self.state=state
         s=discord.ui.RoleSelect(placeholder="Роль, на которую подаётся заявка",min_values=1,max_values=1); s.callback=self.selected; self.add_item(s)
     async def selected(self,interaction):
         self.state.target_role=self.children[0].values[0].id
-        await interaction.response.edit_message(embed=E("FORM BUILDER",form_text(self.state)),view=FormView(self.state))
+        await interaction.response.edit_message(embed=E("FORM BUILDER",form_text(self.state)),view=FormView(self.state, back_target=self.back_target))
 
 
-class FormView(discord.ui.View):
-    def __init__(self,state): super().__init__(timeout=900); self.state=state
+class FormView(PanelView):
+    def __init__(self,state,back_target=None): super().__init__(back_target=back_target); self.state=state
     @discord.ui.button(label="Основные",emoji="✏️",style=discord.ButtonStyle.primary)
     async def basic(self,i,b): await i.response.send_modal(FormBasicModal(self.state))
     @discord.ui.button(label="Вопрос",emoji="➕",style=discord.ButtonStyle.secondary)
@@ -205,17 +205,17 @@ class FormView(discord.ui.View):
     @discord.ui.button(label="Маршрутизация",emoji="📨",style=discord.ButtonStyle.secondary)
     async def routing(self,i,b): await i.response.send_modal(FormRoutingModal(self.state))
     @discord.ui.button(label="Роль для заявки",emoji="🎭",style=discord.ButtonStyle.secondary)
-    async def target(self,i,b): await i.response.edit_message(embed=E("TARGET ROLE", "Выберите роль, на которую человек подаёт заявку."),view=FormTargetRoleView(self.state))
+    async def target(self,i,b): await i.response.edit_message(embed=E("TARGET ROLE", "Выберите роль, на которую человек подаёт заявку."),view=FormTargetRoleView(self.state, back_target=(i.message.embeds[0], self)))
     @discord.ui.button(label="Сохранить",emoji="💾",style=discord.ButtonStyle.success)
     async def save(self,i,b):
         if not self.state.questions or not self.state.destination:
             await i.response.send_message("Нужны хотя бы один вопрос и канал заявок.",ephemeral=True); return
         fid=save_form(self.state.guild_id,self.state.owner_id,self.state.name,self.state.description,json.dumps(self.state.questions,ensure_ascii=False),self.state.visibility,self.state.category,json.dumps(self.state.allowed_roles),self.state.destination,json.dumps(self.state.reviewer_roles),json.dumps(self.state.reviewer_users),self.state.post_action,self.state.post_role,self.state.target_role)
-        await i.response.edit_message(embed=E("ФОРМА СОХРАНЕНА",f"ID: `{fid}`\nКанал заявок: <#{self.state.destination}>\nРоль: {('<@&'+str(self.state.target_role)+'>') if self.state.target_role else 'не задана'}"),view=FormUseView(fid))
+        await i.response.edit_message(embed=E("ФОРМА СОХРАНЕНА",f"ID: `{fid}`\nКанал заявок: <#{self.state.destination}>\nРоль: {('<@&'+str(self.state.target_role)+'>') if self.state.target_role else 'не задана'}"),view=FormUseView(fid, back_target=(i.message.embeds[0], self)))
 
 
-class FormUseView(discord.ui.View):
-    def __init__(self,form_id): super().__init__(timeout=900); self.form_id=form_id
+class FormUseView(PanelView):
+    def __init__(self,form_id,back_target=None): super().__init__(back_target=back_target); self.form_id=form_id
     @discord.ui.button(label="Подать заявку",emoji="📝",style=discord.ButtonStyle.primary)
     async def apply(self,i,b):
         row=get_form(self.form_id)
@@ -252,32 +252,38 @@ class ReviewView(discord.ui.View):
         if row[5] != 'pending': await i.response.send_message(f"Уже обработано: {row[5]}.",ephemeral=True); return
         review_submission(self.sid,i.user.id,status)
         role_id=form[14] if len(form)>14 else form[13]
+        role_error=None
         if status=='approved' and form[12]=='role' and role_id:
             member=i.guild.get_member(row[3]); role=i.guild.get_role(role_id)
             if member and role:
                 try: await member.add_roles(role,reason=f"Form #{self.sid} approved")
-                except discord.Forbidden: pass
-        await i.response.edit_message(embed=E("ЗАЯВКА ОБРАБОТАНА",f"Статус: **{status}**\nReviewer: {i.user.mention}"),view=None)
+                except discord.Forbidden: role_error="Discord не разрешил выдать роль. Проверь права бота и иерархию ролей."
+            else:
+                role_error="Не удалось найти участника или роль для назначения."
+        result=f"Статус: **{status}**\nReviewer: {i.user.mention}"
+        if role_error:
+            result += f"\n\n⚠️ {role_error}"
+        await i.response.edit_message(embed=E("ЗАЯВКА ОБРАБОТАНА",result),view=None)
 
 
-class FormStartView(discord.ui.View):
-    def __init__(self,guild_id,user_id): super().__init__(timeout=900); self.guild_id=guild_id; self.user_id=user_id
+class FormStartView(PanelView):
+    def __init__(self,guild_id,user_id,back_target=None): super().__init__(back_target=back_target); self.guild_id=guild_id; self.user_id=user_id
     @discord.ui.button(label="Создать",emoji="➕",style=discord.ButtonStyle.success)
     async def create(self,i,b):
         state = FormState(self.guild_id, self.user_id)
-        await i.response.edit_message(embed=E("FORM BUILDER",form_text(state)),view=FormView(state))
+        await i.response.edit_message(embed=E("FORM BUILDER",form_text(state)),view=FormView(state, back_target=(i.message.embeds[0], self)))
     @discord.ui.button(label="Сохранённые",emoji="📦",style=discord.ButtonStyle.secondary)
-    async def saved(self,i,b): await i.response.edit_message(embed=E("FORMS","Выберите форму."),view=FormListView(i.guild.id,i.user.id))
+    async def saved(self,i,b): await i.response.edit_message(embed=E("FORMS","Выберите форму."),view=FormListView(i.guild.id,i.user.id, back_target=(i.message.embeds[0], self)))
 
 
-class FormListView(discord.ui.View):
-    def __init__(self,guild_id,user_id):
-        super().__init__(timeout=900); rows=get_forms(guild_id,user_id,True)
+class FormListView(PanelView):
+    def __init__(self,guild_id,user_id,back_target=None):
+        super().__init__(back_target=back_target); rows=get_forms(guild_id,user_id,True)
         for fid,owner,name,visibility,category,roles,updated in rows[:20]:
             b=discord.ui.Button(label=name[:70],style=discord.ButtonStyle.secondary)
             async def cb(i,fid=fid):
                 row=get_form(fid)
-                if row and role_allowed(i,row[2],row[6],j(row[8],[])): await i.response.send_message(embed=E(row[3],row[4] or 'Без описания'),view=FormUseView(fid),ephemeral=True)
+                if row and role_allowed(i,row[2],row[6],j(row[8],[])): await i.response.send_message(embed=E(row[3],row[4] or 'Без описания'),view=FormUseView(fid, back_target=(i.message.embeds[0], self)),ephemeral=True)
                 else: await i.response.send_message('Форма недоступна.',ephemeral=True)
             b.callback=cb; self.add_item(b)
         if not rows:self.add_item(discord.ui.Button(label='Форм пока нет',disabled=True))
@@ -300,21 +306,21 @@ class TemplateModal(discord.ui.Modal, title="СОХРАНИТЬ ШАБЛОН"):
         await i.response.send_message(f'Шаблон сохранён: `{tid}`',ephemeral=True)
 
 
-class TemplateListView(discord.ui.View):
-    def __init__(self,guild_id,user_id):
-        super().__init__(timeout=900); rows=get_templates(guild_id,user_id,include_public=True)
+class TemplateListView(PanelView):
+    def __init__(self,guild_id,user_id,back_target=None):
+        super().__init__(back_target=back_target); rows=get_templates(guild_id,user_id,include_public=True)
         for tid,owner,name,typ,payload,vis,cat,roles,updated in rows[:20]:
             b=discord.ui.Button(label=f'{name[:50]} · {typ}',style=discord.ButtonStyle.secondary)
             async def cb(i,tid=tid):
                 row=get_template(tid)
                 if not row or not role_allowed(i,row[2],row[6],j(row[8],[])): await i.response.send_message('Шаблон недоступен.',ephemeral=True); return
-                await i.response.send_message(embed=E(row[3],f'Type: `{row[4]}`\nCategory: `{row[7]}`\nVisibility: `{row[6]}`'),view=TemplateActions(tid),ephemeral=True)
+                await i.response.send_message(embed=E(row[3],f'Type: `{row[4]}`\nCategory: `{row[7]}`\nVisibility: `{row[6]}`'),view=TemplateActions(tid, back_target=(i.message.embeds[0], self)),ephemeral=True)
             b.callback=cb; self.add_item(b)
         if not rows:self.add_item(discord.ui.Button(label='Шаблонов нет',disabled=True))
 
 
-class TemplateActions(discord.ui.View):
-    def __init__(self,tid): super().__init__(timeout=900); self.tid=tid
+class TemplateActions(PanelView):
+    def __init__(self,tid,back_target=None): super().__init__(back_target=back_target); self.tid=tid
     @discord.ui.button(label='Использовать',emoji='▶️',style=discord.ButtonStyle.success)
     async def use(self,i,b):
         row=get_template(self.tid); p=j(row[5],{}) if row else {}
@@ -342,10 +348,7 @@ class TemplateActions(discord.ui.View):
 # =========================
 
 async def avatar_bytes(value):
-    if not value:return None
-    try:
-        with urllib.request.urlopen(value,timeout=8) as r:return r.read()
-    except Exception:return None
+    return await fetch_bytes(value)
 
 
 class WebhookCreateModal(discord.ui.Modal, title='СОЗДАТЬ WEBHOOK'):
@@ -353,9 +356,9 @@ class WebhookCreateModal(discord.ui.Modal, title='СОЗДАТЬ WEBHOOK'):
     async def on_submit(self,i): await i.response.send_message('Выберите канал.',view=WebhookChannelView(self.name.value.strip(),self.avatar.value.strip()),ephemeral=True)
 
 
-class WebhookChannelView(discord.ui.View):
-    def __init__(self,name,avatar):
-        super().__init__(timeout=300); self.name=name; self.avatar=avatar; s=discord.ui.ChannelSelect(placeholder='Канал',channel_types=[discord.ChannelType.text]); s.callback=self.selected; self.add_item(s)
+class WebhookChannelView(PanelView):
+    def __init__(self,name,avatar,back_target=None):
+        super().__init__(back_target=back_target, timeout=300); self.name=name; self.avatar=avatar; s=discord.ui.ChannelSelect(placeholder='Канал',channel_types=[discord.ChannelType.text]); s.callback=self.selected; self.add_item(s)
     async def selected(self,i):
         ch=self.children[0].values[0]
         try: wh=await ch.create_webhook(name=self.name,avatar=await avatar_bytes(self.avatar),reason='Webhook Manager')
@@ -365,35 +368,42 @@ class WebhookChannelView(discord.ui.View):
         await i.response.edit_message(embed=E('WEBHOOK СОЗДАН',f'Канал: {ch.mention}\nИмя: **{wh.name}**\nID: `{wh.id}`\n\n🔒 URL скрыт.'),view=WebhookActions(rid))
 
 
-class WebhookListView(discord.ui.View):
-    def __init__(self,guild_id,user_id):
-        super().__init__(timeout=900); rows=get_webhooks(guild_id,user_id)
+class WebhookListView(PanelView):
+    def __init__(self,guild_id,user_id,back_target):
+        super().__init__(back_target=back_target); rows=get_webhooks(guild_id,user_id)
         for rid,owner,wid,cid,name,avatar,created,updated in rows[:20]:
             b=discord.ui.Button(label=name[:70],style=discord.ButtonStyle.secondary)
             async def cb(i,rid=rid):
                 row=get_webhook(rid)
-                if row: await i.response.edit_message(embed=E('WEBHOOK',f'Имя: **{row[5]}**\nКанал: <#{row[4]}>\nID: `{row[3]}`\n\n🔒 URL скрыт.'),view=WebhookActions(rid))
+                if row: await i.response.edit_message(embed=E('WEBHOOK',f'Имя: **{row[5]}**\nКанал: <#{row[4]}>\nID: `{row[3]}`\n\n🔒 URL скрыт.'),view=WebhookActions(rid, back_target=(i.message.embeds[0], self)))
                 else: await i.response.send_message('Webhook не найден.',ephemeral=True)
             b.callback=cb; self.add_item(b)
         if not rows:self.add_item(discord.ui.Button(label='Webhook нет',disabled=True))
 
 
-class WebhookActions(discord.ui.View):
-    def __init__(self,rid): super().__init__(timeout=900); self.rid=rid
-    def admin(self,i): return i.user.id==int(__import__('os').getenv('OWNER_ID','0')) or getattr(i.user,'guild_permissions',None) and i.user.guild_permissions.manage_webhooks
+class WebhookActions(PanelView):
+    def __init__(self,rid,back_target=None): super().__init__(back_target=back_target); self.rid=rid
+    def admin(self,i): return can_manage_access(i)
     @discord.ui.button(label='Показать URL',emoji='🔑',style=discord.ButtonStyle.secondary)
     async def show(self,i,b):
         row=get_webhook(self.rid)
         if not row or not self.admin(i): await i.response.send_message('Доступ запрещён.',ephemeral=True); return
         await i.response.send_message(f'🔑 `{row[6]}`\n\nНе публикуй этот URL.',ephemeral=True)
     @discord.ui.button(label='Отправить',emoji='📨',style=discord.ButtonStyle.primary)
-    async def send(self,i,b): await i.response.send_modal(WebhookMessageModal(self.rid))
+    async def send(self,i,b):
+        if not self.admin(i): await i.response.send_message('Недостаточно прав.',ephemeral=True); return
+        await i.response.send_modal(WebhookMessageModal(self.rid))
     @discord.ui.button(label='Переименовать',emoji='✏️',style=discord.ButtonStyle.secondary)
-    async def rename(self,i,b): await i.response.send_modal(WebhookRenameModal(self.rid))
+    async def rename(self,i,b):
+        if not self.admin(i): await i.response.send_message('Недостаточно прав.',ephemeral=True); return
+        await i.response.send_modal(WebhookRenameModal(self.rid))
     @discord.ui.button(label='Аватар',emoji='🖼️',style=discord.ButtonStyle.secondary)
-    async def avatar(self,i,b): await i.response.send_modal(WebhookAvatarModal(self.rid))
+    async def avatar(self,i,b):
+        if not self.admin(i): await i.response.send_message('Недостаточно прав.',ephemeral=True); return
+        await i.response.send_modal(WebhookAvatarModal(self.rid))
     @discord.ui.button(label='Тест',emoji='🧪',style=discord.ButtonStyle.success)
     async def test(self,i,b):
+        if not self.admin(i): await i.response.send_message('Недостаточно прав.',ephemeral=True); return
         row=get_webhook(self.rid)
         try:
             wh=await i.client.fetch_webhook(row[3]); await wh.send('Webhook Manager · тестовое сообщение.',wait=False); log_webhook_event(i.guild.id,i.user.id,row[3],'test',row[4]); await i.response.send_message('Тест отправлен.',ephemeral=True)
@@ -404,15 +414,15 @@ class WebhookActions(discord.ui.View):
     @discord.ui.button(label='Удалить',emoji='🗑️',style=discord.ButtonStyle.danger)
     async def delete(self,i,b):
         if not self.admin(i): await i.response.send_message('Недостаточно прав.',ephemeral=True); return
-        await i.response.send_message('⚠️ Webhook будет удалён. Подтвердить?',view=WebhookDeleteView(self.rid),ephemeral=True)
+        await i.response.send_message('⚠️ Webhook будет удалён. Подтвердить?',view=WebhookDeleteView(self.rid, back_target=(i.message.embeds[0], self)),ephemeral=True)
     @discord.ui.button(label='Пересоздать URL',emoji='♻️',style=discord.ButtonStyle.danger)
     async def regenerate(self,i,b):
         if i.user.id!=int(__import__('os').getenv('OWNER_ID','0')): await i.response.send_message('Пересоздавать URL может только владелец.',ephemeral=True); return
-        await i.response.send_message('⚠️ Старый URL перестанет работать. Подтвердить?',view=WebhookRegenerateView(self.rid),ephemeral=True)
+        await i.response.send_message('⚠️ Старый URL перестанет работать. Подтвердить?',view=WebhookRegenerateView(self.rid, back_target=(i.message.embeds[0], self)),ephemeral=True)
 
 
-class WebhookDeleteView(discord.ui.View):
-    def __init__(self,rid): super().__init__(timeout=300); self.rid=rid
+class WebhookDeleteView(PanelView):
+    def __init__(self,rid,back_target=None): super().__init__(back_target=back_target, timeout=300); self.rid=rid
     @discord.ui.button(label='Удалить',emoji='🗑️',style=discord.ButtonStyle.danger)
     async def yes(self,i,b):
         row=get_webhook(self.rid)
@@ -422,8 +432,8 @@ class WebhookDeleteView(discord.ui.View):
     async def no(self,i,b): await i.response.send_message('Отменено.',ephemeral=True)
 
 
-class WebhookRegenerateView(discord.ui.View):
-    def __init__(self,rid): super().__init__(timeout=300); self.rid=rid
+class WebhookRegenerateView(PanelView):
+    def __init__(self,rid,back_target=None): super().__init__(back_target=back_target, timeout=300); self.rid=rid
     @discord.ui.button(label='Да, пересоздать',emoji='♻️',style=discord.ButtonStyle.danger)
     async def yes(self,i,b):
         row=get_webhook(self.rid); old_id=row[3]; ch=i.guild.get_channel(row[4])
@@ -439,6 +449,8 @@ class WebhookMessageModal(discord.ui.Modal,title='WEBHOOK MESSAGE'):
     def __init__(self,rid): super().__init__(); self.rid=rid
     async def on_submit(self,i):
         row=get_webhook(self.rid); e=None
+        if not any((self.text.value.strip(), self.title.value.strip(), self.description.value.strip(), self.image.value.strip(), self.thumbnail.value.strip())):
+            await i.response.send_message('Добавь текст или данные для embed.',ephemeral=True); return
         if self.title.value.strip() or self.description.value.strip():
             e=discord.Embed(title=self.title.value.strip() or None,description=self.description.value.strip() or None,color=COLOR)
             if url(self.image.value): e.set_image(url=url(self.image.value))
@@ -467,19 +479,19 @@ class WebhookAvatarModal(discord.ui.Modal,title='ИЗМЕНИТЬ АВАТАР')
         except discord.HTTPException as e: await i.response.send_message(f'Ошибка: `{e}`',ephemeral=True)
 
 
-class WebhookHome(discord.ui.View):
+class WebhookHome(PanelView):
+    def __init__(self,back_target=None): super().__init__(back_target=back_target)
     @discord.ui.button(label='Создать',emoji='➕',style=discord.ButtonStyle.success)
     async def create(self,i,b): await i.response.send_modal(WebhookCreateModal())
     @discord.ui.button(label='Список',emoji='📚',style=discord.ButtonStyle.secondary)
-    async def list(self,i,b): await i.response.edit_message(embed=E('WEBHOOKS','Сохранённые webhook. URL скрыты.'),view=WebhookListView(i.guild.id,i.user.id))
+    async def list(self,i,b): await i.response.edit_message(embed=E('WEBHOOKS','Сохранённые webhook. URL скрыты.'),view=WebhookListView(i.guild.id,i.user.id,back_target=(i.message.embeds[0], self)))
     @discord.ui.button(label='История',emoji='📜',style=discord.ButtonStyle.secondary)
     async def history(self,i,b):
-        rows=get_webhook_history(i.guild.id); text='\n'.join(f'<@{o}> · `{a}` · webhook `{w}`' for o,w,a,_,_,_ in rows) or 'История пуста.'; await i.response.edit_message(embed=E('WEBHOOK HISTORY',text),view=WebhookBack())
+        rows=get_webhook_history(i.guild.id); text='\n'.join(f'<@{o}> · `{a}` · webhook `{w}`' for o,w,a,_,_,_ in rows) or 'История пуста.'; await i.response.edit_message(embed=E('WEBHOOK HISTORY',text),view=WebhookBack(back_target=(i.message.embeds[0], self)))
 
 
-class WebhookBack(discord.ui.View):
-    @discord.ui.button(label='Назад',emoji='↩️',style=discord.ButtonStyle.secondary)
-    async def back(self,i,b): await i.response.edit_message(embed=E('WEBHOOK MANAGER','Создание · список · отправка · тест · история · удаление · URL regeneration.'),view=WebhookHome())
+class WebhookBack(PanelView):
+    def __init__(self,back_target=None): super().__init__(back_target=back_target)
 
 
 # =========================
@@ -513,7 +525,8 @@ def register_extended(bot, require_access):
         await i.response.send_message(embed=E('WEBHOOK MANAGER','Создать · удалить · переименовать · аватар · отправка · тест · история · безопасный URL.'),view=WebhookHome(),ephemeral=True)
 
 
-class SelectHome(discord.ui.View):
+class SelectHome(PanelView):
+    def __init__(self,back_target=None): super().__init__(back_target=back_target)
     @discord.ui.button(label='Выбор роли',emoji='🎭',style=discord.ButtonStyle.primary)
     async def role(self,i,b):
         s=discord.ui.RoleSelect(placeholder='Выберите роль',min_values=1,max_values=1); s.callback=lambda x: x.response.send_message(f'Выбрано: {s.values[0].mention}',ephemeral=True); self.clear_items(); self.add_item(s); await i.response.edit_message(embed=E('ROLE SELECT','Выберите роль в списке.'),view=self)
@@ -523,16 +536,17 @@ class SelectHome(discord.ui.View):
     async def user(self,i,b): await i.response.send_message('Выбор пользователей используется в Access Manager и Forms.',ephemeral=True)
 
 
-class TemplateHome(discord.ui.View):
+class TemplateHome(PanelView):
+    def __init__(self,back_target=None): super().__init__(back_target=back_target)
     @discord.ui.button(label='Список',emoji='📚',style=discord.ButtonStyle.primary)
-    async def list(self,i,b): await i.response.edit_message(embed=E('ШАБЛОНЫ','Доступные вам шаблоны.'),view=TemplateListView(i.guild.id,i.user.id))
+    async def list(self,i,b): await i.response.edit_message(embed=E('ШАБЛОНЫ','Доступные вам шаблоны.'),view=TemplateListView(i.guild.id,i.user.id, back_target=(i.message.embeds[0], self)))
     @discord.ui.button(label='Сохранить JSON',emoji='💾',style=discord.ButtonStyle.secondary)
     async def save(self,i,b): await i.response.send_modal(TemplateModal())
 
 
-class MessageList(discord.ui.View):
-    def __init__(self,guild_id,user_id):
-        super().__init__(timeout=900)
+class MessageList(PanelView):
+    def __init__(self,guild_id,user_id,back_target=None):
+        super().__init__(back_target=back_target)
         from database import get_message_builds
         rows=get_message_builds(guild_id,user_id,True)
         for bid, owner, name, vis, cat, updated in rows[:20]:

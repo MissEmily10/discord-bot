@@ -218,7 +218,29 @@ async def open_message_edit_modal(interaction):
     await interaction.response.send_modal(MessageEditModal(interaction.message))
 
 
-async def dispatch_action(interaction, action_key, value):
+class DangerousActionView(discord.ui.View):
+    def __init__(self, action_key, value, target_message=None):
+        super().__init__(timeout=300)
+        self.action_key = action_key
+        self.value = value
+        self.target_message = target_message
+
+    @discord.ui.button(label="Подтвердить", emoji="⚠️", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction, button):
+        await dispatch_action(
+            interaction,
+            self.action_key,
+            self.value,
+            skip_confirmation=True,
+            target_message=self.target_message,
+        )
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction, button):
+        await interaction.response.edit_message(content="Действие отменено.", view=None)
+
+
+async def dispatch_action(interaction, action_key, value, skip_confirmation=False, target_message=None):
     """Единая маршрутизация действий кнопок и пользовательских списков."""
     if not action_key:
         await interaction.response.send_message("Действие не настроено.", ephemeral=True)
@@ -227,12 +249,26 @@ async def dispatch_action(interaction, action_key, value):
         await interaction.response.send_message("У тебя нет доступа к этому действию.", ephemeral=True)
         return
 
+    action_row = core.get_action(action_key)
+    if action_row and action_row[2] and not skip_confirmation:
+        await interaction.response.send_message(
+            f"⚠️ Действие `{action_key}` может изменить данные или отправить сообщение. Продолжить?",
+            view=DangerousActionView(action_key, value, target_message=interaction.message),
+            ephemeral=True,
+        )
+        return
+
     if action_key == "message.send":
         await interaction.response.send_message(value or "РЕПЛИКА ОС — действие выполнено.", ephemeral=True)
     elif action_key == "message.confirm":
         await interaction.response.send_message(value or "РЕПЛИКА ОС — подтверждение получено.", ephemeral=True)
     elif action_key == "message.edit":
-        await open_message_edit_modal(interaction)
+        if target_message is None:
+            target_message = interaction.message
+        if target_message is None:
+            await interaction.response.send_message("Исходное сообщение недоступно для редактирования.", ephemeral=True)
+            return
+        await interaction.response.send_modal(MessageEditModal(target_message))
     elif action_key == "form.trigger":
         from database import get_form
         from extended_modules import SubmissionModal

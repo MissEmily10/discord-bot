@@ -251,6 +251,7 @@ class EmbedBuilderState:
         self.category = "general"
         self.visibility = "private"
         self.channel_id = None
+        self.standalone_button_set = False
 
     def preview_embed(self):
         if self.embeds:
@@ -794,6 +795,27 @@ class InlineButtonBuilderView(discord.ui.View):
         style=discord.ButtonStyle.primary
     )
     async def done(self, interaction, button):
+        if self.state.standalone_button_set:
+            set_id = save_button_set(
+                guild_id=interaction.guild.id,
+                owner_id=interaction.user.id,
+                name=self.state.name,
+                buttons_json=json.dumps(self.state.buttons, ensure_ascii=False),
+                visibility=self.state.visibility,
+                category=self.state.category,
+            )
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="BUTTON SET СОХРАНЁН",
+                    description=f"ID: `{set_id}`\nКнопок: **{len(self.state.buttons)}**",
+                    color=EMBED_COLOR,
+                ),
+                view=ButtonSetListView(
+                    self.state.guild_id,
+                    interaction.user.id,
+                ),
+            )
+            return
         await finish_message_build(interaction, self.state)
 
     @discord.ui.button(
@@ -981,6 +1003,8 @@ class StandaloneButtonStartView(discord.ui.View):
         style=discord.ButtonStyle.success
     )
     async def create(self, interaction, button):
+        self.state.standalone_button_set = True
+        self.state.name = "Новый набор кнопок"
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title="BUTTON BUILDER",

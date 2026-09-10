@@ -393,6 +393,9 @@ class RoleAccessView(PanelView):
         self.add_item(select)
 
     async def selected(self, interaction):
+        if not can_manage_access(interaction):
+            await interaction.response.send_message("Нужны права администратора.", ephemeral=True)
+            return
         role = self.children[0].values[0]
         await interaction.response.edit_message(
             embed=E(interaction, "ДОСТУП РОЛИ", f"{role.mention}\n\nВыберите уровень доступа для обладателей этой роли."),
@@ -407,12 +410,22 @@ class RoleLevelAccessView(PanelView):
         self.role_id = role_id
         self.mention = mention
 
+    def embed(self, interaction):
+        return E(
+            interaction,
+            "ДОСТУП РОЛИ",
+            f"{self.mention}\n\nВыберите уровень доступа для обладателей этой роли.",
+        )
+
     async def apply(self, interaction, level):
         if not can_manage_access(interaction):
             await interaction.response.send_message("Недостаточно прав.", ephemeral=True)
             return
         set_role_access(interaction.guild.id, self.role_id, level, None)
-        await interaction.response.send_message(f"{self.mention} → {ACCESS_LABELS[level]}", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=self.embed(interaction),
+            view=self,
+        )
 
     @discord.ui.button(label="Ограниченный", style=discord.ButtonStyle.secondary)
     async def limited(self, interaction, button):
@@ -436,7 +449,10 @@ class RoleLevelAccessView(PanelView):
             await interaction.response.send_message("Недостаточно прав.", ephemeral=True)
             return
         remove_role_access(interaction.guild.id, self.role_id)
-        await interaction.response.send_message(f"Привязка {self.mention} удалена.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=self.embed(interaction),
+            view=self,
+        )
 
 
 # ============================================================
@@ -458,6 +474,9 @@ class DenialAccessView(PanelView):
         self.add_item(select)
 
     async def selected(self, interaction):
+        if not can_manage_access(interaction):
+            await interaction.response.send_message("Нужны права администратора.", ephemeral=True)
+            return
         user = self.children[0].values[0]
         reason = is_user_denied(interaction.guild.id, user.id)
 
@@ -508,8 +527,16 @@ class SettingsView(PanelView):
         super().__init__(back_target=back_target)
         self.bot = bot
 
+    async def ensure_owner(self, interaction):
+        if is_owner(interaction):
+            return True
+        await interaction.response.send_message("Настройки доступны только владельцу.", ephemeral=True)
+        return False
+
     @discord.ui.button(label="Бэкап bot.db", emoji="💾", style=discord.ButtonStyle.secondary)
     async def backup(self, interaction, button):
+        if not await self.ensure_owner(interaction):
+            return
         try:
             await interaction.response.send_message(
                 file=discord.File("bot.db", filename=f"bot_backup_{int(time.time())}.db"),
@@ -520,6 +547,8 @@ class SettingsView(PanelView):
 
     @discord.ui.button(label="Денаи", emoji="🚫", style=discord.ButtonStyle.secondary)
     async def denials(self, interaction, button):
+        if not await self.ensure_owner(interaction):
+            return
         await interaction.response.edit_message(
             embed=denial_list_embed(interaction),
             view=DenialAccessView(interaction, back_target=(interaction.message.embeds[0], self))
@@ -527,6 +556,8 @@ class SettingsView(PanelView):
 
     @discord.ui.button(label="Action Registry", emoji="🔑", style=discord.ButtonStyle.primary)
     async def registry(self, interaction, button):
+        if not await self.ensure_owner(interaction):
+            return
         ensure_default_actions()
         await interaction.response.edit_message(
             embed=action_registry_embed(interaction),
@@ -535,6 +566,8 @@ class SettingsView(PanelView):
 
     @discord.ui.button(label="Перезапуск", emoji="🔄", style=discord.ButtonStyle.danger)
     async def restart(self, interaction, button):
+        if not await self.ensure_owner(interaction):
+            return
         # Discord-бот не может сам себя перезапустить как процесс —
         # это должен делать внешний менеджер процессов (systemd/pm2/docker restart).
         # bot.close() корректно завершает соединение, а менеджер поднимает заново.
@@ -578,9 +611,20 @@ class ActionEditView(PanelView):
         super().__init__(back_target=back_target)
         self.action_key = action_key
 
+    async def ensure_owner(self, interaction):
+        if is_owner(interaction):
+            return True
+        await interaction.response.send_message("Настройки доступны только владельцу.", ephemeral=True)
+        return False
+
     async def set_level(self, interaction, level):
+        if not await self.ensure_owner(interaction):
+            return
         set_action_min_level(self.action_key, level)
-        await interaction.response.send_message(f"`{self.action_key}` → минимум {ACCESS_LABELS[level]}", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=action_registry_embed(interaction),
+            view=self.back_target[1],
+        )
 
     @discord.ui.button(label="Member", row=0, style=discord.ButtonStyle.secondary)
     async def member(self, interaction, button):
@@ -596,13 +640,23 @@ class ActionEditView(PanelView):
 
     @discord.ui.button(label="Включить", emoji="🟢", row=1, style=discord.ButtonStyle.success)
     async def enable(self, interaction, button):
+        if not await self.ensure_owner(interaction):
+            return
         set_action_enabled(self.action_key, True)
-        await interaction.response.send_message(f"`{self.action_key}` включено.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=action_registry_embed(interaction),
+            view=self.back_target[1],
+        )
 
     @discord.ui.button(label="Выключить", emoji="🔴", row=1, style=discord.ButtonStyle.danger)
     async def disable(self, interaction, button):
+        if not await self.ensure_owner(interaction):
+            return
         set_action_enabled(self.action_key, False)
-        await interaction.response.send_message(f"`{self.action_key}` выключено.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=action_registry_embed(interaction),
+            view=self.back_target[1],
+        )
 
 
 # ============================================================

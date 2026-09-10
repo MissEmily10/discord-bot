@@ -29,6 +29,9 @@ from database import (
     set_action_enabled,
     get_access_level,
     get_command_access,
+    get_member_info,
+    get_all_role_access,
+    is_user_denied,
 )
 
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
@@ -89,7 +92,27 @@ def get_user_level(interaction):
         return "owner"
     if interaction.guild is None:
         return "member"
-    return get_access_level(interaction.guild.id, interaction.user.id)
+
+    if is_user_denied(interaction.guild.id, interaction.user.id) is not None:
+        return "limited"
+
+    guild_id = interaction.guild.id
+    levels = [get_access_level(guild_id, interaction.user.id)]
+
+    role_levels = {
+        role_id: (access_level, expires_at)
+        for role_id, access_level, expires_at in get_all_role_access(guild_id)
+    }
+    now = int(time.time())
+    for role in getattr(interaction.user, "roles", []):
+        role_entry = role_levels.get(role.id)
+        if role_entry is None:
+            continue
+        access_level, expires_at = role_entry
+        if expires_at is None or expires_at > now:
+            levels.append(access_level)
+
+    return max(levels, key=level_value)
 
 
 def can_manage_access(interaction):
