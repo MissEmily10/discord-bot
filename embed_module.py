@@ -127,6 +127,8 @@ def build_custom_list_view(options):
             await interaction.response.send_message(value or "РЕПЛИКА ОС — действие выполнено.", ephemeral=True)
         elif action_key == "message.confirm":
             await interaction.response.send_message(value or "РЕПЛИКА ОС — подтверждение получено.", ephemeral=True)
+        elif action_key == "message.edit":
+            await open_message_edit_modal(interaction)
         else:
             await interaction.response.send_message(f"РЕПЛИКА ОС — действие `{action_key}` пока в разработке.", ephemeral=True)
 
@@ -141,6 +143,60 @@ NATIVE_SELECT_CLASSES = {
     "channel": discord.ui.ChannelSelect,
     "mentionable": discord.ui.MentionableSelect,
 }
+
+
+class MessageEditModal(discord.ui.Modal, title="РЕДАКТИРОВАТЬ СООБЩЕНИЕ"):
+    content_input = discord.ui.TextInput(
+        label="Новый текст сообщения",
+        required=False,
+        style=discord.TextStyle.paragraph,
+        max_length=4000,
+    )
+
+    def __init__(self, target_message):
+        super().__init__()
+        self.target_message = target_message
+        self.content_input.default = target_message.content[:4000]
+
+    async def on_submit(self, interaction):
+        content = self.content_input.value.strip() or None
+        embeds = list(self.target_message.embeds)
+        if content is None and not embeds:
+            await interaction.response.send_message(
+                "Нельзя сохранить пустое сообщение: добавь текст.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await self.target_message.edit(content=content)
+        except discord.NotFound:
+            await interaction.response.send_message(
+                "Сообщение уже удалено и недоступно для редактирования.",
+                ephemeral=True,
+            )
+            return
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "У бота нет права редактировать это сообщение.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "Сообщение обновлено.",
+            ephemeral=True,
+        )
+
+
+async def open_message_edit_modal(interaction):
+    if not core.is_action_allowed(core.get_user_level(interaction), "message.edit"):
+        await interaction.response.send_message(
+            "Редактировать сообщения могут только администратор и владелец.",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.send_modal(MessageEditModal(interaction.message))
 
 
 def build_native_select_view(kind):
@@ -187,6 +243,8 @@ def build_button_view(buttons):
                 await interaction.response.send_message(value or "РЕПЛИКА ОС — действие выполнено.", ephemeral=True)
             elif action_key == "message.confirm":
                 await interaction.response.send_message(value or "РЕПЛИКА ОС — подтверждение получено.", ephemeral=True)
+            elif action_key == "message.edit":
+                await open_message_edit_modal(interaction)
             else:
                 await interaction.response.send_message(
                     f"РЕПЛИКА ОС — действие `{action_key}` пока в разработке.", ephemeral=True
