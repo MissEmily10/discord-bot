@@ -174,25 +174,13 @@ def build_button_view(buttons):
             action=action,
             value=value
         ):
-            # Action system foundation.
-            # Полноценный action_registry подключается отдельным шагом —
-            # это заглушка для старых button-наборов, созданных до него.
-            if action == "message":
-                await interaction.response.send_message(
-                    value or "РЕПЛИКА ОС — действие выполнено.",
-                    ephemeral=True
-                )
-            elif action == "confirm":
-                await interaction.response.send_message(
-                    value or "РЕПЛИКА ОС — подтверждение получено.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    "РЕПЛИКА ОС — это действие пока находится "
-                    "в разработке.",
-                    ephemeral=True
-                )
+            from embed_module import dispatch_action
+
+            action_key = {
+                "message": "message.send",
+                "confirm": "message.confirm",
+            }.get(action, action)
+            await dispatch_action(interaction, action_key, value)
 
         button.callback = callback
         view.add_item(button)
