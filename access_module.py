@@ -28,7 +28,7 @@ import core
 from core import (
     ACCESS_LABELS, ACCESS_LEVELS, PanelView, level_value,
     is_owner, get_user_level, can_manage_access, can_view_access,
-    can_assign_level, embed_color, danger_color, get_setting,
+    can_assign_level, embed_color, danger_color, get_setting, set_setting,
     ensure_default_actions, get_actions, is_action_allowed,
 )
 from database import (
@@ -575,6 +575,101 @@ class SettingsView(PanelView):
         await self.bot.close()
 
 
+DESIGN_DEFAULTS = {
+    "embed_color": "0x5865F2",
+    "danger_color": "0xED4245",
+    "text_access_denied": "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
+    "nav_back": "◀️ Назад",
+    "nav_cancel": "❌ Отмена",
+}
+
+
+def design_embed(interaction):
+    guild_id = interaction.guild.id
+    return E(
+        interaction,
+        "DESIGN",
+        "Настройки оформления для этого сервера.\n\n"
+        f"Основной цвет: `{get_setting(guild_id, 'embed_color')}`\n"
+        f"Опасный цвет: `{get_setting(guild_id, 'danger_color')}`\n"
+        f"Отказ в доступе: {get_setting(guild_id, 'text_access_denied')}\n"
+        f"Назад: {get_setting(guild_id, 'nav_back')}\n"
+        f"Отмена: {get_setting(guild_id, 'nav_cancel')}",
+    )
+
+
+class DesignModal(discord.ui.Modal, title="DESIGN SETTINGS"):
+    embed_color_input = discord.ui.TextInput(label="Основной HEX цвет", max_length=8)
+    danger_color_input = discord.ui.TextInput(label="Опасный HEX цвет", max_length=8)
+    denied_input = discord.ui.TextInput(label="Текст отказа", max_length=200)
+    back_input = discord.ui.TextInput(label="Текст кнопки Назад", max_length=80)
+    cancel_input = discord.ui.TextInput(label="Текст кнопки Отмена", max_length=80)
+
+    def __init__(self, guild_id):
+        super().__init__()
+        self.guild_id = guild_id
+        self.embed_color_input.default = get_setting(guild_id, "embed_color")
+        self.danger_color_input.default = get_setting(guild_id, "danger_color")
+        self.denied_input.default = get_setting(guild_id, "text_access_denied")
+        self.back_input.default = get_setting(guild_id, "nav_back")
+        self.cancel_input.default = get_setting(guild_id, "nav_cancel")
+
+    @staticmethod
+    def valid_color(value):
+        value = value.strip().lower().replace("#", "")
+        if value.startswith("0x"):
+            value = value[2:]
+        if len(value) != 6:
+            return None
+        try:
+            int(value, 16)
+        except ValueError:
+            return None
+        return "0x" + value.upper()
+
+    async def on_submit(self, interaction):
+        primary = self.valid_color(self.embed_color_input.value)
+        danger = self.valid_color(self.danger_color_input.value)
+        if not primary or not danger:
+            await interaction.response.send_message("Цвета должны быть в формате `#RRGGBB`.", ephemeral=True)
+            return
+        set_setting(self.guild_id, "embed_color", primary)
+        set_setting(self.guild_id, "danger_color", danger)
+        set_setting(self.guild_id, "text_access_denied", self.denied_input.value.strip() or DESIGN_DEFAULTS["text_access_denied"])
+        set_setting(self.guild_id, "nav_back", self.back_input.value.strip() or DESIGN_DEFAULTS["nav_back"])
+        set_setting(self.guild_id, "nav_cancel", self.cancel_input.value.strip() or DESIGN_DEFAULTS["nav_cancel"])
+        await interaction.response.edit_message(embed=design_embed(interaction), view=DesignView())
+
+
+class DesignView(PanelView):
+    def __init__(self, back_target=None):
+        super().__init__(back_target=back_target)
+
+    async def ensure_owner(self, interaction):
+        if is_owner(interaction):
+            return True
+        await interaction.response.send_message("Настройки доступны только владельцу.", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Изменить", emoji="🎨", style=discord.ButtonStyle.primary)
+    async def edit(self, interaction, button):
+        if await self.ensure_owner(interaction):
+            await interaction.response.send_modal(DesignModal(interaction.guild.id))
+
+    @discord.ui.button(label="Предпросмотр", emoji="👁️", style=discord.ButtonStyle.secondary)
+    async def preview(self, interaction, button):
+        if await self.ensure_owner(interaction):
+            await interaction.response.edit_message(embed=design_embed(interaction), view=self)
+
+    @discord.ui.button(label="Сбросить", emoji="↩️", style=discord.ButtonStyle.danger)
+    async def reset(self, interaction, button):
+        if not await self.ensure_owner(interaction):
+            return
+        for key, value in DESIGN_DEFAULTS.items():
+            set_setting(interaction.guild.id, key, value)
+        await interaction.response.edit_message(embed=design_embed(interaction), view=self)
+
+
 def action_registry_embed(interaction):
     rows = get_actions()
     lines = []
@@ -664,6 +759,13 @@ class ActionEditView(PanelView):
 # ============================================================
 
 def register_access(bot):
+    @bot.tree.command(name="design", description="Настройка оформления бота")
+    async def design(interaction):
+        if not is_owner(interaction):
+            await interaction.response.send_message("Настройки доступны только владельцу.", ephemeral=True)
+            return
+        await interaction.response.send_message(embed=design_embed(interaction), view=DesignView(), ephemeral=True)
+
     @bot.tree.command(name="access", description="Управление доступом к функциям бота")
     async def access(interaction):
         if not can_view_access(interaction):
