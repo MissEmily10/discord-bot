@@ -646,8 +646,8 @@ class ListOptionActionSelect(discord.ui.Select):
         level = get_user_level(interaction)
         allowed = actions_for_level(level)
         options = [
-            discord.SelectOption(label=key, description=(description or "")[:100], value=key)
-            for key, min_level, dangerous, description in allowed
+            discord.SelectOption(label=row[0], description=(row[3] or "")[:100], value=row[0])
+            for row in allowed
         ] or [discord.SelectOption(label="Нет доступных действий", value="__none__")]
         super().__init__(placeholder="Выбери действие", options=options)
         self.state = state
@@ -765,8 +765,8 @@ class ButtonActionSelect(discord.ui.Select):
         level = get_user_level(interaction)
         allowed = actions_for_level(level)
         options = [
-            discord.SelectOption(label=key, description=(description or "")[:100], value=key)
-            for key, min_level, dangerous, description in allowed
+            discord.SelectOption(label=row[0], description=(row[3] or "")[:100], value=row[0])
+            for row in allowed
         ] or [discord.SelectOption(label="Нет доступных действий", value="__none__")]
         super().__init__(placeholder="Выбери действие", options=options, row=0)
         self.state = state
