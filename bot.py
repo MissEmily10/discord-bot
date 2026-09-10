@@ -1,6 +1,5 @@
 import json
 import os
-import time
 from datetime import datetime
 
 import discord
@@ -9,18 +8,6 @@ from dotenv import load_dotenv
 
 from database import (
     init_database,
-    add_command_access,
-    get_command_access,
-    get_command_access_details,
-    remove_command_access,
-    set_access_level,
-    get_access_level,
-    get_member_info,
-    set_role_access,
-    remove_role_access,
-    deny_user,
-    is_user_denied,
-    undeny_user,
     save_message_build,
     get_message_build,
     get_message_builds,
@@ -31,45 +18,23 @@ from database import (
     delete_button_set,
 )
 
+import core
+from core import require_command_access
+import access_module
+import embed_module
 from extended_modules import register_extended
 
 
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID"))
 
 # =========================
 # CONSTANTS
 # =========================
-
-ACCESS_LEVELS = {
-    "limited": 0,
-    "member": 1,
-    "staff": 2,
-    "admin": 3,
-    "owner": 4,
-}
-
-ACCESS_LABELS = {
-    "limited": "◽ Ограниченный пользователь",
-    "member": "👤 Пользователь",
-    "staff": "🔧 Staff",
-    "admin": "🛡️ Администратор бота",
-    "owner": "👑 Владелец",
-}
-
-COMMAND_MIN_LEVELS = {
-    "ping": "staff",
-    "access": "staff",
-    "embed": "staff",
-    "buttons": "staff",
-    "forms": "staff",
-    "select": "staff",
-    "templates": "staff",
-    "messages": "staff",
-    "webhooks": "admin",
-}
+# ВАЖНО: цвет/тексты постепенно переезжают в core.get_setting(), чтобы
+# потом /design мог менять их без правки кода. Embed-билдер пока не
+# трогаем в этом проходе — доберёмся до него отдельным модулем.
 
 EMBED_COLOR = discord.Color.blurple()
 
@@ -99,107 +64,8 @@ bot = commands.Bot(
 
 
 # =========================
-# PERMISSIONS
-# =========================
-
-def is_owner(interaction):
-    return interaction.user.id == OWNER_ID
-
-
-def get_user_level(interaction):
-    if is_owner(interaction):
-        return "owner"
-
-    if interaction.guild is None:
-        return "member"
-
-    return get_access_level(
-        interaction.guild.id,
-        interaction.user.id
-    )
-
-
-def level_value(level):
-    return ACCESS_LEVELS.get(level, 0)
-
-
-def can_manage_access(interaction):
-    return level_value(get_user_level(interaction)) >= level_value("admin")
-
-
-def can_view_access(interaction):
-    return level_value(get_user_level(interaction)) >= level_value("staff")
-
-
-def can_assign_level(interaction, target_level):
-    actor_level = get_user_level(interaction)
-
-    if target_level == "owner":
-        return is_owner(interaction)
-
-    if target_level in ("staff", "member", "limited"):
-        return level_value(actor_level) >= level_value("admin")
-
-    if target_level == "admin":
-        return is_owner(interaction)
-
-    return False
-
-
-def has_command_access(interaction, command_name):
-    if is_owner(interaction):
-        return True
-
-    if interaction.guild is None:
-        return False
-
-    users = get_command_access(
-        interaction.guild.id,
-        command_name
-    )
-
-    if interaction.user.id in users:
-        return True
-
-    current_level = get_user_level(interaction)
-    required_level = COMMAND_MIN_LEVELS.get(command_name)
-
-    if required_level is None:
-        return False
-
-    return level_value(current_level) >= level_value(required_level)
-
-
-async def require_command_access(interaction, command_name):
-    if has_command_access(interaction, command_name):
-        return True
-
-    await interaction.response.send_message(
-        "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
-        ephemeral=True
-    )
-    return False
-
-
-# =========================
 # HELPERS
 # =========================
-
-def format_expiration(expires_at):
-    if expires_at is None:
-        return "Постоянный"
-
-    return datetime.fromtimestamp(expires_at).strftime(
-        "%d.%m.%Y %H:%M"
-    )
-
-
-def get_bot_commands():
-    return [
-        (command.name, command.description or "Без описания")
-        for command in bot.tree.get_commands()
-    ]
-
 
 def safe_json_loads(value, fallback):
     try:
@@ -310,7 +176,8 @@ def build_button_view(buttons):
             value=value
         ):
             # Action system foundation.
-            # Forms/selects/actions will plug in here later.
+            # Полноценный action_registry подключается отдельным шагом —
+            # это заглушка для старых button-наборов, созданных до него.
             if action == "message":
                 await interaction.response.send_message(
                     value or "РЕПЛИКА ОС — действие выполнено.",
@@ -341,6 +208,7 @@ def build_button_view(buttons):
 @bot.event
 async def on_ready():
     init_database()
+    core.ensure_default_actions()
 
     print(f"Бот запущен: {bot.user}")
 
@@ -370,591 +238,8 @@ async def ping(interaction):
 
 
 # ============================================================
-# ACCESS MANAGER
-# ============================================================
-
-class AccessView(discord.ui.View):
-
-    def __init__(self, access_level):
-        super().__init__(timeout=300)
-        self.access_level = access_level
-
-    @discord.ui.button(
-        label="Пользователи",
-        emoji="👥",
-        style=discord.ButtonStyle.secondary
-    )
-    async def users_button(self, interaction, button):
-        if not can_view_access(interaction):
-            await interaction.response.send_message(
-                "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="ПОЛЬЗОВАТЕЛИ",
-                description="Выберите пользователя для просмотра уровня доступа.",
-                color=EMBED_COLOR
-            ),
-            view=UserManagementView(self.access_level)
-        )
-
-    @discord.ui.button(
-        label="Команды",
-        emoji="🧩",
-        style=discord.ButtonStyle.primary
-    )
-    async def commands_button(self, interaction, button):
-        if not can_view_access(interaction):
-            await interaction.response.send_message(
-                "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="КОМАНДЫ",
-                description="Выберите команду для просмотра и настройки доступа.",
-                color=EMBED_COLOR
-            ),
-            view=CommandSelectView(self.access_level)
-        )
-
-    @discord.ui.button(
-        label="История",
-        emoji="📜",
-        style=discord.ButtonStyle.secondary
-    )
-    async def history_button(self, interaction, button):
-        await interaction.response.send_message(
-            "Раздел истории пока в разработке.",
-            ephemeral=True
-        )
-
-    @discord.ui.button(
-        label="Доступ по ролям",
-        emoji="🎭",
-        style=discord.ButtonStyle.secondary
-    )
-    async def role_access_button(self, interaction, button):
-        if not can_manage_access(interaction):
-            await interaction.response.send_message(
-                "Нужны права администратора.", ephemeral=True
-            )
-            return
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="ДОСТУП ПО РОЛЯМ",
-                description="Выберите Discord-роль и назначьте ей уровень доступа.",
-                color=EMBED_COLOR
-            ),
-            view=RoleAccessView()
-        )
-
-    @discord.ui.button(
-        label="Запреты",
-        emoji="🚫",
-        style=discord.ButtonStyle.danger
-    )
-    async def denials_button(self, interaction, button):
-        if not can_manage_access(interaction):
-            await interaction.response.send_message(
-                "Нужны права администратора.", ephemeral=True
-            )
-            return
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="ЗАПРЕТ ДОСТУПА",
-                description="Запрет полностью блокирует использование бота конкретным пользователем.",
-                color=EMBED_COLOR
-            ),
-            view=DenialAccessView()
-        )
-
-    @discord.ui.button(
-        label="Настройки",
-        emoji="⚙️",
-        style=discord.ButtonStyle.secondary
-    )
-    async def settings_button(self, interaction, button):
-        if not is_owner(interaction):
-            await interaction.response.send_message(
-                "Настройки доступны только владельцу.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(
-            "Раздел настроек пока в разработке.",
-            ephemeral=True
-        )
-
-
-class UserManagementView(discord.ui.View):
-
-    def __init__(self, access_level):
-        super().__init__(timeout=300)
-        self.access_level = access_level
-
-        self.user_select = discord.ui.UserSelect(
-            placeholder="Выберите пользователя",
-            min_values=1,
-            max_values=1
-        )
-        self.user_select.callback = self.user_selected
-        self.add_item(self.user_select)
-
-    async def user_selected(self, interaction):
-        user = self.user_select.values[0]
-
-        level, expires_at = get_member_info(
-            interaction.guild.id,
-            user.id
-        )
-
-        embed = discord.Embed(
-            title="ПОЛЬЗОВАТЕЛЬ",
-            description=(
-                f"**Пользователь:** {user.mention}\n\n"
-                f"**Уровень:** {ACCESS_LABELS.get(level, level)}\n"
-                f"**Действует до:** {format_expiration(expires_at)}"
-            ),
-            color=EMBED_COLOR
-        )
-
-        await interaction.response.edit_message(
-            embed=embed,
-            view=UserLevelView(user.id, user.mention)
-        )
-
-
-class UserLevelView(discord.ui.View):
-
-    def __init__(self, user_id, user_mention):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-        self.user_mention = user_mention
-
-    async def set_level(self, interaction, level):
-        if not can_assign_level(interaction, level):
-            await interaction.response.send_message(
-                "У вас недостаточно прав для назначения этого уровня.",
-                ephemeral=True
-            )
-            return
-
-        set_access_level(
-            interaction.guild.id,
-            self.user_id,
-            level,
-            None
-        )
-
-        await interaction.response.send_message(
-            f"{self.user_mention} → {ACCESS_LABELS[level]}",
-            ephemeral=True
-        )
-
-    @discord.ui.button(
-        label="Ограниченный",
-        style=discord.ButtonStyle.secondary
-    )
-    async def limited_button(self, interaction, button):
-        await self.set_level(interaction, "limited")
-
-    @discord.ui.button(
-        label="Обычный участник",
-        style=discord.ButtonStyle.secondary
-    )
-    async def member_button(self, interaction, button):
-        await self.set_level(interaction, "member")
-
-    @discord.ui.button(
-        label="Staff",
-        style=discord.ButtonStyle.primary
-    )
-    async def staff_button(self, interaction, button):
-        await self.set_level(interaction, "staff")
-
-    @discord.ui.button(
-        label="Администратор",
-        style=discord.ButtonStyle.success
-    )
-    async def admin_button(self, interaction, button):
-        await self.set_level(interaction, "admin")
-
-    @discord.ui.button(
-        label="Временный уровень",
-        emoji="⏳",
-        style=discord.ButtonStyle.secondary
-    )
-    async def temporary_button(self, interaction, button):
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="ВРЕМЕННЫЙ УРОВЕНЬ",
-                description=f"Выберите срок для {self.user_mention}.",
-                color=EMBED_COLOR
-            ),
-            view=TemporaryLevelView(self.user_id, self.user_mention)
-        )
-
-
-class TemporaryLevelView(discord.ui.View):
-
-    def __init__(self, user_id, user_mention):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-        self.user_mention = user_mention
-
-    async def apply(self, interaction, level, seconds):
-        if not can_assign_level(interaction, level):
-            await interaction.response.send_message(
-                "У вас недостаточно прав.",
-                ephemeral=True
-            )
-            return
-
-        expires_at = int(time.time() + seconds)
-
-        set_access_level(
-            interaction.guild.id,
-            self.user_id,
-            level,
-            expires_at
-        )
-
-        await interaction.response.send_message(
-            f"{self.user_mention} получил {ACCESS_LABELS[level]} временно.",
-            ephemeral=True
-        )
-
-    @discord.ui.button(
-        label="Staff · 1 день",
-        style=discord.ButtonStyle.primary
-    )
-    async def staff_day(self, interaction, button):
-        await self.apply(interaction, "staff", 86400)
-
-    @discord.ui.button(
-        label="Staff · 7 дней",
-        style=discord.ButtonStyle.primary
-    )
-    async def staff_week(self, interaction, button):
-        await self.apply(interaction, "staff", 604800)
-
-    @discord.ui.button(
-        label="Admin · 1 день",
-        style=discord.ButtonStyle.success
-    )
-    async def admin_day(self, interaction, button):
-        await self.apply(interaction, "admin", 86400)
-
-
-class CommandSelectView(discord.ui.View):
-
-    def __init__(self, access_level):
-        super().__init__(timeout=300)
-        self.access_level = access_level
-
-        for command_name, description in get_bot_commands():
-            button = discord.ui.Button(
-                label=f"/{command_name}",
-                style=discord.ButtonStyle.secondary
-            )
-
-            async def command_callback(
-                interaction,
-                command_name=command_name,
-                description=description
-            ):
-                if interaction.guild is None:
-                    return
-
-                details = get_command_access_details(
-                    interaction.guild.id,
-                    command_name
-                )
-
-                if details:
-                    access_text = "\n".join(
-                        f"<@{user_id}> — {format_expiration(expires_at)}"
-                        for user_id, expires_at in details
-                    )
-                else:
-                    access_text = "Индивидуального доступа нет."
-
-                required = COMMAND_MIN_LEVELS.get(command_name)
-                level_text = ACCESS_LABELS.get(required, "Не задан")
-
-                embed = discord.Embed(
-                    title="COMMAND ACCESS",
-                    description=(
-                        f"**Команда:** `/{command_name}`\n"
-                        f"**Описание:** {description}\n\n"
-                        f"**Минимальный уровень:** {level_text}\n\n"
-                        f"**Индивидуальный доступ:**\n{access_text}"
-                    ),
-                    color=EMBED_COLOR
-                )
-
-                await interaction.response.edit_message(
-                    embed=embed,
-                    view=CommandAccessView(command_name, self.access_level)
-                )
-
-            button.callback = command_callback
-            self.add_item(button)
-
-
-class CommandAccessView(discord.ui.View):
-
-    def __init__(self, command_name, access_level):
-        super().__init__(timeout=300)
-        self.command_name = command_name
-        self.access_level = access_level
-
-    async def denied(self, interaction):
-        await interaction.response.send_message(
-            "Изменять доступ могут только администратор и владелец.",
-            ephemeral=True
-        )
-
-    @discord.ui.button(
-        label="Добавить пользователя",
-        emoji="➕",
-        style=discord.ButtonStyle.success
-    )
-    async def add_user(self, interaction, button):
-        if not can_manage_access(interaction):
-            await self.denied(interaction)
-            return
-
-        await interaction.response.send_message(
-            f"Выберите пользователя для доступа к `/{self.command_name}`:",
-            view=UserSelectView(self.command_name),
-            ephemeral=True
-        )
-
-    @discord.ui.button(
-        label="Убрать пользователя",
-        emoji="➖",
-        style=discord.ButtonStyle.danger
-    )
-    async def remove_user(self, interaction, button):
-        if not can_manage_access(interaction):
-            await self.denied(interaction)
-            return
-
-        await interaction.response.send_message(
-            f"Выберите пользователя, у которого нужно убрать доступ к "
-            f"`/{self.command_name}`:",
-            view=RemoveUserSelectView(self.command_name),
-            ephemeral=True
-        )
-
-    @discord.ui.button(
-        label="Временный доступ",
-        emoji="⏳",
-        style=discord.ButtonStyle.primary
-    )
-    async def temporary_access(self, interaction, button):
-        if not can_manage_access(interaction):
-            await self.denied(interaction)
-            return
-
-        await interaction.response.send_message(
-            f"Выберите пользователя для временного доступа к "
-            f"`/{self.command_name}`:",
-            view=TemporaryCommandUserView(self.command_name),
-            ephemeral=True
-        )
-
-
-class UserSelectView(discord.ui.View):
-
-    def __init__(self, command_name):
-        super().__init__(timeout=300)
-        self.command_name = command_name
-
-        self.user_select = discord.ui.UserSelect(
-            placeholder="Выберите пользователя",
-            min_values=1,
-            max_values=1
-        )
-        self.user_select.callback = self.user_selected
-        self.add_item(self.user_select)
-
-    async def user_selected(self, interaction):
-        user = self.user_select.values[0]
-
-        add_command_access(
-            interaction.guild.id,
-            self.command_name,
-            user.id,
-            None
-        )
-
-        await interaction.response.send_message(
-            f"Доступ к `/{self.command_name}` добавлен для "
-            f"{user.mention} на постоянной основе.",
-            ephemeral=True
-        )
-
-
-class RemoveUserSelectView(discord.ui.View):
-
-    def __init__(self, command_name):
-        super().__init__(timeout=300)
-        self.command_name = command_name
-
-        self.user_select = discord.ui.UserSelect(
-            placeholder="Выберите пользователя",
-            min_values=1,
-            max_values=1
-        )
-        self.user_select.callback = self.user_selected
-        self.add_item(self.user_select)
-
-    async def user_selected(self, interaction):
-        user = self.user_select.values[0]
-
-        remove_command_access(
-            interaction.guild.id,
-            self.command_name,
-            user.id
-        )
-
-        await interaction.response.send_message(
-            f"Доступ к `/{self.command_name}` убран для {user.mention}.",
-            ephemeral=True
-        )
-
-
-class TemporaryCommandUserView(discord.ui.View):
-
-    def __init__(self, command_name):
-        super().__init__(timeout=300)
-        self.command_name = command_name
-
-        self.user_select = discord.ui.UserSelect(
-            placeholder="Выберите пользователя",
-            min_values=1,
-            max_values=1
-        )
-        self.user_select.callback = self.user_selected
-        self.add_item(self.user_select)
-
-    async def user_selected(self, interaction):
-        user = self.user_select.values[0]
-
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="ВРЕМЕННЫЙ ДОСТУП",
-                description=(
-                    f"Выберите срок доступа {user.mention} "
-                    f"к `/{self.command_name}`."
-                ),
-                color=EMBED_COLOR
-            ),
-            view=TemporaryCommandDurationView(
-                self.command_name,
-                user.id,
-                user.mention
-            )
-        )
-
-
-class TemporaryCommandDurationView(discord.ui.View):
-
-    def __init__(self, command_name, user_id, user_mention):
-        super().__init__(timeout=300)
-        self.command_name = command_name
-        self.user_id = user_id
-        self.user_mention = user_mention
-
-    async def apply(self, interaction, seconds):
-        expires_at = int(time.time() + seconds)
-
-        add_command_access(
-            interaction.guild.id,
-            self.command_name,
-            self.user_id,
-            expires_at
-        )
-
-        await interaction.response.send_message(
-            f"Временный доступ к `/{self.command_name}` выдан "
-            f"{self.user_mention}.",
-            ephemeral=True
-        )
-
-    @discord.ui.button(
-        label="1 час",
-        style=discord.ButtonStyle.secondary
-    )
-    async def hour(self, interaction, button):
-        await self.apply(interaction, 3600)
-
-    @discord.ui.button(
-        label="1 день",
-        style=discord.ButtonStyle.primary
-    )
-    async def day(self, interaction, button):
-        await self.apply(interaction, 86400)
-
-    @discord.ui.button(
-        label="3 дня",
-        style=discord.ButtonStyle.primary
-    )
-    async def three_days(self, interaction, button):
-        await self.apply(interaction, 259200)
-
-    @discord.ui.button(
-        label="7 дней",
-        style=discord.ButtonStyle.success
-    )
-    async def week(self, interaction, button):
-        await self.apply(interaction, 604800)
-
-
-@bot.tree.command(
-    name="access",
-    description="Управление доступом к функциям бота"
-)
-async def access(interaction):
-    if not can_view_access(interaction):
-        await interaction.response.send_message(
-            "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
-            ephemeral=True
-        )
-        return
-
-    access_level = get_user_level(interaction)
-
-    embed = discord.Embed(
-        title="ACCESS MANAGER",
-        description=(
-            f"Ваш уровень: {ACCESS_LABELS.get(access_level)}\n\n"
-            "Управление пользователями, уровнями и доступом к командам."
-        ),
-        color=EMBED_COLOR
-    )
-
-    if bot.user:
-        embed.set_thumbnail(url=bot.user.display_avatar.url)
-
-    await interaction.response.send_message(
-        embed=embed,
-        view=AccessView(access_level),
-        ephemeral=True
-    )
-
-
-# ============================================================
 # MESSAGE BUILD / EMBED BUILDER
+# (без изменений в этом проходе — дорабатываем отдельным модулем следующим шагом)
 # ============================================================
 
 class EmbedBuilderState:
@@ -1671,35 +956,16 @@ class MessageBuildActionsView(discord.ui.View):
             )
 
 
-@bot.tree.command(
-    name="embed",
-    description="Создать Message Build с embed'ами и кнопками"
-)
-async def embed_command(interaction):
-    if not await require_command_access(interaction, "embed"):
-        return
-
-    state = EmbedBuilderState()
-
-    await interaction.response.send_message(
-        embed=discord.Embed(
-            title="EMBED BUILDER",
-            description=(
-                "Сначала собираем дизайн.\n\n"
-                "Можно создать до **10 отдельных embed'ов** "
-                "в одном сообщении.\n"
-                "Изображения задаются отдельными URL для thumbnail и image.\n\n"
-                "После подтверждения дизайна кнопки настраиваются отдельно."
-            ),
-            color=EMBED_COLOR
-        ),
-        view=EmbedDesignView(state),
-        ephemeral=True
-    )
+# Старая команда /embed удалена — теперь её регистрирует embed_module.py
+# (register_embed(bot) ниже). Классы выше (EmbedBuilderState, модалки,
+# EmbedDesignView, finish_message_build и тд) оставлены как есть —
+# от них по цепочке всё ещё зависит /buttons (StandaloneButtonStartView),
+# который мы договорились пока не трогать глубоко.
 
 
 # ============================================================
 # BUTTON BUILDER
+# (без изменений в этом проходе)
 # ============================================================
 
 class StandaloneButtonStartView(discord.ui.View):
@@ -1829,75 +1095,12 @@ async def buttons_command(interaction):
     )
 
 
-class RoleAccessView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=900)
-        select = discord.ui.RoleSelect(placeholder="Выберите роль", min_values=1, max_values=1)
-        select.callback = self.selected
-        self.add_item(select)
+# ============================================================
+# РЕГИСТРАЦИЯ МОДУЛЕЙ
+# ============================================================
 
-    async def selected(self, interaction):
-        role = self.children[0].values[0]
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="ДОСТУП РОЛИ",
-                description=f"{role.mention}\n\nВыберите уровень доступа для обладателей этой роли.",
-                color=EMBED_COLOR
-            ),
-            view=RoleLevelAccessView(role.id, role.mention)
-        )
-
-
-class RoleLevelAccessView(discord.ui.View):
-    def __init__(self, role_id, mention):
-        super().__init__(timeout=900)
-        self.role_id = role_id
-        self.mention = mention
-
-    async def apply(self, interaction, level):
-        if not can_manage_access(interaction):
-            await interaction.response.send_message("Недостаточно прав.", ephemeral=True)
-            return
-        set_role_access(interaction.guild.id, self.role_id, level, None)
-        await interaction.response.send_message(
-            f"{self.mention} → {ACCESS_LABELS[level]}", ephemeral=True
-        )
-
-    @discord.ui.button(label="Ограниченный", style=discord.ButtonStyle.secondary)
-    async def limited(self, i, b): await self.apply(i, "limited")
-    @discord.ui.button(label="Пользователь", style=discord.ButtonStyle.secondary)
-    async def member(self, i, b): await self.apply(i, "member")
-    @discord.ui.button(label="Staff", style=discord.ButtonStyle.primary)
-    async def staff(self, i, b): await self.apply(i, "staff")
-    @discord.ui.button(label="Администратор", style=discord.ButtonStyle.success)
-    async def admin(self, i, b): await self.apply(i, "admin")
-    @discord.ui.button(label="Убрать", emoji="🗑️", style=discord.ButtonStyle.danger)
-    async def remove(self, i, b):
-        if not can_manage_access(i):
-            await i.response.send_message("Недостаточно прав.", ephemeral=True); return
-        remove_role_access(i.guild.id, self.role_id)
-        await i.response.send_message(f"Привязка {self.mention} удалена.", ephemeral=True)
-
-
-class DenialAccessView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=900)
-        select = discord.ui.UserSelect(placeholder="Выберите пользователя", min_values=1, max_values=1)
-        select.callback = self.selected
-        self.add_item(select)
-
-    async def selected(self, interaction):
-        user = self.children[0].values[0]
-        reason = is_user_denied(interaction.guild.id, user.id)
-        if reason is None:
-            deny_user(interaction.guild.id, user.id, "Access Manager")
-            result = "запрещён"
-        else:
-            undeny_user(interaction.guild.id, user.id)
-            result = "запрет снят"
-        await interaction.response.send_message(f"{user.mention}: {result}.", ephemeral=True)
-
-
+access_module.register_access(bot)
+embed_module.register_embed(bot)
 register_extended(bot, require_command_access)
 
 
