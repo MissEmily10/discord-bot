@@ -88,7 +88,7 @@ def normalize_url(url):
 def build_discord_embed(data):
     embed = discord.Embed(
         title=data.get("title") or None,
-        description=data.get("description") or None,
+        description=data.get("description") or "\u200b",
         url=normalize_url(data.get("url")),
         color=int(data.get("color", 0x5865F2))
     )

@@ -54,7 +54,7 @@ def build_embed(data):
         color = COLOR.value
     e = discord.Embed(
         title=data.get("title") or None,
-        description=data.get("description") or None,
+        description=data.get("description") or "\u200b",
         color=color,
     )
     if data.get("url"):
