@@ -12,6 +12,7 @@ from database import (
     delete_template, save_webhook, get_webhook, get_webhooks,
     update_webhook_record, delete_webhook_record, log_webhook_event,
     get_webhook_history, log_audit, get_audit_logs,
+    set_template_favorite,
 )
 
 COLOR = discord.Color.blurple()
@@ -309,8 +310,9 @@ class TemplateModal(discord.ui.Modal, title="СОХРАНИТЬ ШАБЛОН"):
 class TemplateListView(PanelView):
     def __init__(self,guild_id,user_id,back_target=None):
         super().__init__(back_target=back_target); rows=get_templates(guild_id,user_id,include_public=True)
-        for tid,owner,name,typ,payload,vis,cat,roles,updated in rows[:20]:
-            b=discord.ui.Button(label=f'{name[:50]} · {typ}',style=discord.ButtonStyle.secondary)
+        for tid,owner,name,typ,payload,vis,cat,roles,logo,is_favorite,updated in rows[:20]:
+            marker = ' ★' if is_favorite else ''
+            b=discord.ui.Button(label=f'{name[:48]}{marker} · {typ}',style=discord.ButtonStyle.secondary)
             async def cb(i,tid=tid):
                 row=get_template(tid)
                 if not row or not role_allowed(i,row[2],row[6],j(row[8],[])): await i.response.send_message('Шаблон недоступен.',ephemeral=True); return
@@ -335,6 +337,18 @@ class TemplateActions(PanelView):
             await i.response.send_message(content=content,embeds=embeds,view=view,ephemeral=True)
         elif row[4]=='buttons': await i.response.send_message(embed=E(row[3],'Набор кнопок.'),view=button_view(p.get('buttons',[])),ephemeral=True)
         else: await i.response.send_message('Для формы используй сохранённый Form ID в payload.',ephemeral=True)
+    @discord.ui.button(label='Избранное',emoji='⭐',style=discord.ButtonStyle.secondary)
+    async def favorite(self,i,b):
+        row=get_template(self.tid)
+        if not row:
+            await i.response.send_message('Шаблон не найден.',ephemeral=True)
+            return
+        is_favorite = not bool(row[10])
+        set_template_favorite(self.tid, is_favorite)
+        await i.response.edit_message(
+            embed=E(row[3], f'Type: `{row[4]}`\nCategory: `{row[7]}`\nVisibility: `{row[6]}`\nИзбранное: **{"да" if is_favorite else "нет"}**'),
+            view=TemplateActions(self.tid, back_target=self.back_target),
+        )
     @discord.ui.button(label='Удалить',emoji='🗑️',style=discord.ButtonStyle.danger)
     async def delete(self,i,b):
         row=get_template(self.tid)

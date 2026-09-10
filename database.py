@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import time
 
@@ -6,6 +7,13 @@ DATABASE_NAME = "bot.db"
 
 def _now():
     return int(time.time())
+
+
+def _json_value(value, fallback):
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return fallback
 
 
 def get_connection():
@@ -743,10 +751,33 @@ def _ensure_extended_tables():
     )""")
     c.execute("PRAGMA table_info(templates)")
     tpl_columns = {row[1] for row in c.fetchall()}
+    legacy_template_columns = tpl_columns.copy()
+    if "owner_id" not in tpl_columns:
+        c.execute("ALTER TABLE templates ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 0")
+    if "template_type" not in tpl_columns:
+        c.execute("ALTER TABLE templates ADD COLUMN template_type TEXT NOT NULL DEFAULT 'message'")
+    if "payload_json" not in tpl_columns:
+        c.execute("ALTER TABLE templates ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'")
+    if "allowed_role_ids_json" not in tpl_columns:
+        c.execute("ALTER TABLE templates ADD COLUMN allowed_role_ids_json TEXT NOT NULL DEFAULT '[]'")
     if "logo_url" not in tpl_columns:
         c.execute("ALTER TABLE templates ADD COLUMN logo_url TEXT")
     if "is_favorite" not in tpl_columns:
         c.execute("ALTER TABLE templates ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
+    if "created_by" in legacy_template_columns:
+        legacy_rows = c.execute(
+            "SELECT id, created_by, content, embeds_json, buttons_json FROM templates WHERE owner_id=0"
+        ).fetchall()
+        for template_id, owner_id, content, embeds_json, buttons_json in legacy_rows:
+            payload = {
+                "content": content or "",
+                "embeds": _json_value(embeds_json, []),
+                "buttons": _json_value(buttons_json, []),
+            }
+            c.execute(
+                "UPDATE templates SET owner_id=?, payload_json=? WHERE id=?",
+                (owner_id or 0, json.dumps(payload, ensure_ascii=False), template_id),
+            )
     c.execute("""CREATE TABLE IF NOT EXISTS webhooks (
         id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,
         webhook_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, name TEXT NOT NULL,
@@ -817,7 +848,14 @@ def review_submission(submission_id, reviewer_id, status, reason=''):
 
 
 def save_template(guild_id,owner_id,name,template_type,payload_json,visibility='private',category='general',allowed_role_ids_json='[]',logo_url=None):
-    _ensure_extended_tables(); now=_now(); connection=get_connection(); c=connection.cursor(); c.execute("INSERT INTO templates (guild_id,owner_id,name,template_type,payload_json,visibility,category,allowed_role_ids_json,logo_url,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",(guild_id,owner_id,name,template_type,payload_json,visibility,category,allowed_role_ids_json,logo_url,now,now)); rid=c.lastrowid; connection.commit(); connection.close(); return rid
+    _ensure_extended_tables(); now=_now(); connection=get_connection(); c=connection.cursor()
+    c.execute("PRAGMA table_info(templates)")
+    columns = {row[1] for row in c.fetchall()}
+    if "created_by" in columns:
+        c.execute("INSERT INTO templates (guild_id,owner_id,created_by,name,template_type,payload_json,visibility,category,allowed_role_ids_json,logo_url,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",(guild_id,owner_id,owner_id,name,template_type,payload_json,visibility,category,allowed_role_ids_json,logo_url,now,now))
+    else:
+        c.execute("INSERT INTO templates (guild_id,owner_id,name,template_type,payload_json,visibility,category,allowed_role_ids_json,logo_url,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",(guild_id,owner_id,name,template_type,payload_json,visibility,category,allowed_role_ids_json,logo_url,now,now))
+    rid=c.lastrowid; connection.commit(); connection.close(); return rid
 
 
 def get_template(template_id):
