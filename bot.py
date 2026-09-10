@@ -6,6 +6,8 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+load_dotenv()
+
 from database import (
     init_database,
     save_message_build,
@@ -23,9 +25,6 @@ from core import require_command_access
 import access_module
 import embed_module
 from extended_modules import register_extended
-
-
-load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
