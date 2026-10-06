@@ -74,6 +74,49 @@ current data from the database.
   itself saved, so it can be undone. Sent messages follow after
   **Обновить отправленные**.
 
+## Automation and live messages
+
+All of this lives on a build's card (`/messages` → a build):
+
+- **Расписание** — post the build to a channel, thread or forum (a forum gets a
+  new post) at a given time: `18:30`, `25.12 18:30`, `+2ч`; optionally repeat
+  (`1д`, `12ч`, `1 неделя`, at most every 10 minutes). Times use `TIMEZONE`
+  from `.env` (default `Europe/Moscow`). Missed runs while the bot was off are
+  skipped, not sent in a burst.
+- **Триггеры** — the build posts itself when something happens:
+  a new member joins (to a chosen channel), a new thread / forum post appears
+  (into that thread), or someone writes a keyword (replied right there; per
+  channel or server-wide, with a cooldown). Keyword triggers need **Message
+  Content Intent** enabled in the Developer Portal and
+  `MESSAGE_CONTENT_INTENT=1` in `.env`; without it they only see messages that
+  mention the bot.
+- **Настройки** —
+  - *live refresh*: every N minutes (≥5) sent messages are re-rendered;
+  - *style parent*: the build takes the parent's color, and its author, footer
+    and thumbnail when it has none; «Обновить отправленные» on the parent
+    updates all children too;
+  - *variants by role*: when the build is opened by a button, staff/admins or
+    chosen roles see another build instead (e.g. a moderation panel).
+
+Schedules and triggers run as the person who set them up and are re-checked on
+every run (still on the server, still sees the build, may post there). Problems
+are shown next to the item in its list.
+
+**Variables** in text, titles, fields, author and footer:
+`{server} {member_count} {online} {boosts} {boost_level} {date} {time}
+{role:ROLE_ID} {counter:name} {submissions} {pending} {approved} {rejected}
+{submissions:FORM_ID} {last_submission} {user} {user_name}`.
+`{user}` is the person who pressed the button or triggered the build; messages
+with it are personal and are not re-rendered later. Sent messages using
+`{submissions}`/`{last_submission}` update after each form submission or
+review; `{counter:…}` after each counter change.
+
+**Button actions** added to the registry:
+`build.goto` (a step: an ephemeral message rewrites itself into another build —
+multi-step wizards), `build.refresh` (re-render another build's sent messages)
+and `counter.change` (`points +1`, `points -1`, `points =0` — updates every sent
+build that shows `{counter:points}`).
+
 ## Logo generator (`/logo`)
 
 Role icons generated in your own style via Hugging Face Inference Providers.

@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 from texts import CATALOG  # noqa: E402
 
 MODULES = ["core.py", "actions.py", "access_module.py", "embed_module.py", "extended_modules.py",
-           "logo_module.py", "web_panel.py", "bot.py"]
+           "logo_module.py", "web_panel.py", "bot.py", "build_tools.py", "live.py", "automation.py"]
 KEY_ARG = {"t": 0, "say": 1, "deny": 1, "reply": 1}
 
 

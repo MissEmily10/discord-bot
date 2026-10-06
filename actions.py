@@ -23,7 +23,7 @@ import discord
 
 import core
 from core import t, Modal, PanelView, get_user_level, member_level, role_problem
-from database import get_message_build, get_button_set, get_template, get_form, get_webhook
+from database import get_message_build, get_button_set, get_template, get_form, get_webhook, get_build_settings
 
 MAX_EMBEDS = 10
 # 5 рядов по 5 кнопок; один ряд может занять список — остаётся 20 кнопок.
@@ -194,10 +194,17 @@ def load_source(src, source_id):
         row = get_message_build(source_id)
         if not row:
             return None
+        settings = get_build_settings(source_id)
+        embeds = _json(row[5], [])
+        parent_id = settings.get("parent_id")
+        if parent_id and parent_id != source_id:
+            parent = get_message_build(parent_id)
+            if parent and parent[1] == row[1]:
+                embeds = inherit_style(embeds, _json(parent[5], []))
         return {
             "guild_id": row[1], "owner_id": row[2], "content": row[4] or "",
-            "embeds": _json(row[5], []), "buttons": _json(row[6], []),
-            "interactive": _json(row[11], None), "row": row,
+            "embeds": embeds, "buttons": _json(row[6], []),
+            "interactive": _json(row[11], None), "row": row, "settings": settings,
         }
     if src == "s":
         row = get_button_set(source_id)
@@ -220,6 +227,101 @@ def load_source(src, source_id):
             "interactive": payload.get("interactive"), "row": row,
         }
     return None
+
+
+# ============================================================
+# НАСЛЕДОВАНИЕ СТИЛЯ И ПЕРЕМЕННЫЕ
+# ============================================================
+
+# Что «ребёнок» берёт у родителя. Цвет — всегда родительский (в этом смысл
+# семейства), остальное — только если у ребёнка своё не задано.
+STYLE_KEYS = ("author_name", "author_url", "author_icon", "footer_text", "footer_icon", "thumbnail")
+
+
+def inherit_style(embeds, parent_embeds):
+    base = next((e for e in parent_embeds if isinstance(e, dict) and embed_has_content(e)), None)
+    if base is None:
+        base = next((e for e in parent_embeds if isinstance(e, dict)), None)
+    if base is None:
+        return embeds
+    result = []
+    for embed in embeds:
+        if not isinstance(embed, dict):
+            continue
+        merged = dict(embed)
+        if "color" in base:
+            merged["color"] = base["color"]
+        for key in STYLE_KEYS:
+            if not merged.get(key) and base.get(key):
+                merged[key] = base[key]
+        result.append(merged)
+    return result
+
+
+VARIABLE = re.compile(r"\{([a-z_]+)(?::([^{}\s]{1,40}))?\}")
+_TEXT_KEYS = ("title", "description", "author_name", "footer_text")
+
+
+def _texts(data):
+    yield data.get("content") or ""
+    for embed in data.get("embeds") or []:
+        if not isinstance(embed, dict):
+            continue
+        for key in _TEXT_KEYS:
+            yield str(embed.get(key) or "")
+        for field in embed.get("fields") or []:
+            yield str(field.get("name") or "")
+            yield str(field.get("value") or "")
+
+
+def used_variables(data):
+    """-> {(имя, аргумент|None)} — какие переменные встречаются в build'е."""
+    found = set()
+    for text in _texts(data):
+        for match in VARIABLE.finditer(text):
+            found.add((match[1], match[2]))
+    return found
+
+
+def substitute(text, variables):
+    """{имя} и {имя:аргумент}; неизвестные остаются как есть."""
+    if not text or not variables:
+        return text
+
+    def one(match):
+        value = variables.get(match[1])
+        if value is None:
+            return match[0]
+        if callable(value):
+            value = value(match[2])
+            if value is None:
+                return match[0]
+        return str(value)
+
+    return VARIABLE.sub(one, text)
+
+
+def apply_variables(data, variables):
+    if not variables:
+        return data
+    result = dict(data)
+    result["content"] = substitute(data.get("content") or "", variables)
+    embeds = []
+    for embed in data.get("embeds") or []:
+        if not isinstance(embed, dict):
+            continue
+        embed = dict(embed)
+        for key in _TEXT_KEYS:
+            if embed.get(key):
+                embed[key] = substitute(str(embed[key]), variables)
+        embed["fields"] = [
+            {**field, "name": substitute(str(field.get("name") or ""), variables),
+             "value": substitute(str(field.get("value") or ""), variables)}
+            for field in embed.get("fields") or []
+        ]
+        embeds.append(embed)
+    result["embeds"] = embeds
+    return result
 
 
 # ============================================================
@@ -305,11 +407,12 @@ def build_components(src, source_id, buttons, interactive):
     return view if view.children else None
 
 
-def render_source(src, source_id, data=None):
+def render_source(src, source_id, data=None, variables=None):
     """-> (content, [Embed], View|None) для предпросмотра и отправки."""
     data = data or load_source(src, source_id)
     if not data:
         return None, [], None
+    data = apply_variables(data, variables)
     items = [item for item in data["embeds"][:MAX_EMBEDS] if isinstance(item, dict)]
     view = build_components(src, source_id, data["buttons"], data["interactive"])
     # Пустые embed'ы не отправляем — так можно собрать сообщение из одного
@@ -320,6 +423,32 @@ def render_source(src, source_id, data=None):
         visible = items[:1]
     embeds = [build_discord_embed(item) for item in visible]
     return (data["content"] or None), embeds, view
+
+
+def message_parts(build_id, variables=None, data=None):
+    """Сообщения для отправки build'а: каждый embed отдельно, текст — с первым,
+    компоненты — с последним. None — build'а нет, [] — он пустой."""
+    data = data or load_source("b", build_id)
+    if not data:
+        return None
+    content, embeds, view = render_source("b", build_id, data, variables)
+    parts = [{"embed": embed} for embed in embeds] or [{}]
+    if content:
+        parts[0]["content"] = content
+    if view is not None:
+        parts[-1]["view"] = view
+    return [] if parts == [{}] else parts
+
+
+def single_message(parts):
+    """Склеить части в одно сообщение (для правки на месте). None — не влезает."""
+    if not parts:
+        return None
+    embeds = [part["embed"] for part in parts if "embed" in part]
+    if sum(len(embed) for embed in embeds) > EMBED_TOTAL_LIMIT:
+        return None
+    message = {"content": parts[0].get("content"), "embeds": embeds, "view": parts[-1].get("view")}
+    return message
 
 
 # ============================================================
@@ -569,7 +698,13 @@ def validate_action_value(interaction, action_key, value, style=None):
         if url and _WEBHOOK_URL.match(url):
             return url, None
         return None, "actions.webhook_modal.no_url"
-    if action_key == "build.trigger":
+    if action_key == "counter.change":
+        parsed = parse_counter(value)
+        if parsed is None:
+            return None, "actions.counter.bad_value"
+        name, op, number = parsed
+        return f"{name} {op}{number}", None
+    if action_key in BUILD_ACTIONS:
         build_id = parse_id(value)
         row = get_message_build(build_id) if build_id else None
         if not row or row[1] != guild.id or not build_visible(interaction, row):
@@ -725,28 +860,131 @@ def build_attach_allowed(interaction, row, creator_id):
     return row[7] != "restricted" or build_visible(interaction, row)
 
 
+BUILD_ACTIONS = ("build.trigger", "build.goto", "build.refresh")
+_COUNTER_NAME = re.compile(r"^[\w-]{1,32}$", re.UNICODE)
+
+
+def parse_counter(value):
+    """«очки +1», «очки -5», «очки =0», просто «очки» (= +1) -> (имя, оп, число) или None."""
+    parts = (value or "").split()
+    if not parts or len(parts) > 2 or not _COUNTER_NAME.match(parts[0]):
+        return None
+    if len(parts) == 1:
+        return parts[0].lower(), "+", 1
+    match = re.match(r"^([+=-])?(\d{1,9})$", parts[1])
+    if not match:
+        return None
+    return parts[0].lower(), match[1] or "+", int(match[2])
+
+
+def variant_for(interaction, row):
+    """
+    Условный контент: build может показывать нажавшему другой build в
+    зависимости от его уровня доступа или ролей. Первый подходящий вариант.
+    """
+    from database import get_build_settings
+
+    level = core.level_value(get_user_level(interaction))
+    roles = {role.id for role in getattr(interaction.user, "roles", [])}
+    for variant in get_build_settings(row[0]).get("variants") or []:
+        target = get_message_build(variant.get("build_id") or 0)
+        if not target or target[1] != row[1]:
+            continue
+        if variant.get("level") and level >= core.level_value(variant["level"]):
+            return target[0]
+        if set(variant.get("roles") or []) & roles:
+            return target[0]
+    return row[0]
+
+
+async def _resolve_build(interaction, value, creator_id):
+    """Общая проверка для build-действий -> id build'а для показа или None."""
+    build_id = parse_id(value)
+    row = get_message_build(build_id) if build_id else None
+    if not row or row[1] != interaction.guild.id:
+        await reply(interaction, "embed.build_not_found")
+        return None
+    if not build_attach_allowed(interaction, row, creator_id):
+        await reply(interaction, "actions.build_no_access")
+        return None
+    return variant_for(interaction, row)
+
+
+async def _send_parts(interaction, parts):
+    # Как при обычной отправке: каждый embed отдельным сообщением, иначе
+    # большой build упрётся в лимит Discord 6000 символов на сообщение.
+    for index, part in enumerate(parts):
+        if index == 0 and not interaction.response.is_done():
+            await interaction.response.send_message(ephemeral=True, **part)
+        else:
+            await interaction.followup.send(ephemeral=True, **part)
+
+
 async def _build_trigger(interaction, value, creator_id=None, **_):
-    from embed_module import message_parts
+    import live
+
+    build_id = await _resolve_build(interaction, value, creator_id)
+    if build_id is None:
+        return
+    parts = await live.parts_for(interaction.guild, build_id, user=interaction.user)
+    if not parts:
+        await reply(interaction, "embed.build_empty")
+        return
+    await _send_parts(interaction, parts)
+
+
+async def _build_goto(interaction, value, creator_id=None, **_):
+    """
+    Шаг мастера: сообщение переписывает само себя. Если кнопка нажата в
+    личном (ephemeral) сообщении — оно меняется на месте; в общем сообщении
+    менять его для всех нельзя, поэтому шаги начинаются в личном сообщении.
+    """
+    import live
+
+    build_id = await _resolve_build(interaction, value, creator_id)
+    if build_id is None:
+        return
+    parts = await live.parts_for(interaction.guild, build_id, user=interaction.user)
+    if not parts:
+        await reply(interaction, "embed.build_empty")
+        return
+    message = interaction.message
+    single = single_message(parts)
+    if message is not None and message.flags.ephemeral and single is not None:
+        await interaction.response.edit_message(**single)
+        return
+    await _send_parts(interaction, parts)
+
+
+async def _build_refresh(interaction, value, creator_id=None, **_):
+    import live
 
     build_id = parse_id(value)
     row = get_message_build(build_id) if build_id else None
     if not row or row[1] != interaction.guild.id:
         await reply(interaction, "embed.build_not_found")
         return
-    if not build_attach_allowed(interaction, row, creator_id):
-        await reply(interaction, "actions.build_no_access")
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    updated, removed, added, missing = await live.resync_build(interaction.guild, build_id)
+    await interaction.followup.send(t("actions.build_refresh.done", updated=updated + added), ephemeral=True)
+
+
+async def _counter_change(interaction, value, **_):
+    import live
+    from database import change_counter
+
+    parsed = parse_counter(value)
+    if parsed is None:
+        await reply(interaction, "actions.counter.bad_value")
         return
-    # Как при обычной отправке: каждый embed отдельным сообщением, иначе
-    # большой build упрётся в лимит Discord 6000 символов на сообщение.
-    parts = message_parts(build_id)
-    if not parts:
-        await reply(interaction, "embed.build_empty")
-        return
-    for index, part in enumerate(parts):
-        if index == 0 and not interaction.response.is_done():
-            await interaction.response.send_message(ephemeral=True, **part)
-        else:
-            await interaction.followup.send(ephemeral=True, **part)
+    name, op, number = parsed
+    if op == "=":
+        result = change_counter(interaction.guild.id, name, set_to=number)
+    else:
+        result = change_counter(interaction.guild.id, name, delta=number if op == "+" else -number)
+    core.audit(interaction, "counter.changed", "counter", name, f"{op}{number} -> {result}")
+    live.counter_changed(interaction.guild, name)
+    await reply(interaction, "actions.counter.done", name=name, value=result)
 
 
 _HANDLERS = {
@@ -760,4 +998,7 @@ _HANDLERS = {
     "role.toggle": _role_toggle,
     "webhook.send": _webhook_send,
     "build.trigger": _build_trigger,
+    "build.goto": _build_goto,
+    "build.refresh": _build_refresh,
+    "counter.change": _counter_change,
 }

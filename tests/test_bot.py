@@ -103,6 +103,11 @@ class FakeGuild:
         self.me = FakeMember(777, [self.bot_role], manage_roles=True)
         self.roles_by_id = {}
         self.members = {}
+        self.channels = {}
+        self.name = "Тестовый сервер"
+        self.member_count = 42
+        self.premium_subscription_count = 3
+        self.premium_tier = 1
 
     def add_role(self, role):
         self.roles_by_id[role.id] = role
@@ -119,7 +124,29 @@ class FakeGuild:
         return self.members.get(user_id)
 
     def get_channel(self, channel_id):
-        return None
+        return self.channels.get(channel_id)
+
+    def get_channel_or_thread(self, channel_id):
+        return self.channels.get(channel_id)
+
+
+class FakeChannel:
+    def __init__(self, guild, channel_id, allow=True):
+        self.guild = guild
+        self.id = channel_id
+        self.mention = f"<#{channel_id}>"
+        self.parent_id = None
+        self.allow = allow
+        self.sent = []
+        guild.channels[channel_id] = self
+
+    def permissions_for(self, who):
+        return discord.Permissions(view_channel=self.allow, send_messages=self.allow, embed_links=True,
+                                   send_messages_in_threads=self.allow, mention_everyone=False)
+
+    async def send(self, **kwargs):
+        self.sent.append(kwargs)
+        return types.SimpleNamespace(id=self.id * 1000 + len(self.sent), channel=self)
 
 
 class FakeResponse:
@@ -585,6 +612,157 @@ class BuildToolsTests(unittest.TestCase):
         run(check())
         database.delete_message_build(first)
         self.assertEqual(database.get_build_versions(first), [])
+
+
+class LiveAndAutomationTests(unittest.TestCase):
+    def setUp(self):
+        import automation
+        import live
+        self.automation, self.live = automation, live
+        self.guild = make_guild()
+        automation._bot = types.SimpleNamespace(get_guild=lambda gid: self.guild if gid == GUILD else None)
+        live._bot = None
+
+    def test_parse_time(self):
+        a = self.automation
+        from datetime import datetime
+        now = datetime(2026, 10, 6, 15, 0, tzinfo=self.live.TIMEZONE)
+        self.assertEqual(a.parse_when("18:30", now).hour, 18)
+        self.assertEqual(a.parse_when("14:00", now).day, 7)  # уже прошло -> завтра
+        self.assertEqual(a.parse_when("25.12 9:05", now).month, 12)
+        self.assertEqual(a.parse_when("01.01 10:00", now).year, 2027)
+        self.assertEqual((a.parse_when("+2ч", now) - now).total_seconds(), 7200)
+        self.assertEqual((a.parse_when("через 30 мин", now) - now).total_seconds(), 1800)
+        self.assertIsNone(a.parse_when("вчера", now))
+        self.assertIsNone(a.parse_when("31.02 10:00", now))
+        self.assertEqual(a.parse_interval(""), 0)
+        self.assertEqual(a.parse_interval("1 неделя"), 10080)
+        self.assertEqual(a.parse_interval("12ч"), 720)
+        self.assertIsNone(a.parse_interval("1м"))  # слишком часто
+
+    def test_variables_and_inheritance(self):
+        live = self.live
+        database.change_counter(GUILD, "очки", set_to=7)
+        parent = database.save_message_build(GUILD, STAFF, "parent", "", json.dumps([
+            {"title": "P", "color": 0xFF0000, "footer_text": "Наш сервер"}]), "[]")
+        child = database.save_message_build(GUILD, STAFF, "child", "Нас {member_count}, очков {counter:очки}, {unknown}",
+                                            json.dumps([{"title": "Привет {user}", "color": 1}]), "[]")
+        database.set_build_settings(child, {"parent_id": parent})
+        self.assertEqual(database.get_child_builds(parent), [child])
+
+        async def check():
+            member = self.guild.members[MEMBER]
+            parts = await live.parts_for(self.guild, child, user=member)
+            self.assertEqual(parts[0]["content"], "Нас 42, очков 7, {unknown}")
+            embed = parts[0]["embed"]
+            self.assertEqual(embed.title, f"Привет <@{MEMBER}>")
+            self.assertEqual(embed.color.value, 0xFF0000)  # цвет родителя
+            self.assertEqual(embed.footer.text, "Наш сервер")
+
+        run(check())
+
+    def test_schedule_runs_and_reschedules(self):
+        a = self.automation
+        channel = FakeChannel(self.guild, 9001)
+        bid = database.save_message_build(GUILD, STAFF, "news", "Новости", "[]", "[]")
+        once = database.add_schedule(GUILD, bid, STAFF, channel.id, 100, 0)
+        repeat = database.add_schedule(GUILD, bid, STAFF, channel.id, 100, 60)
+        gone = database.add_schedule(GUILD, bid, 123456, channel.id, 100, 0)  # автора нет на сервере
+
+        async def check():
+            now = 100 + 3 * 3600 + 5
+            for row in database.get_due_schedules(now):
+                if row[2] == bid:
+                    await a.run_schedule(row, now)
+
+        run(check())
+        self.assertEqual(len(channel.sent), 2)
+        self.assertEqual(channel.sent[0]["content"], "Новости")
+        self.assertEqual(database.get_schedule(once)[7], 0)  # разовое выключилось
+        rep = database.get_schedule(repeat)
+        self.assertEqual(rep[7], 1)
+        self.assertGreater(rep[5], 100 + 3 * 3600 + 5)  # пропущенные запуски не досылаются
+        self.assertIsNotNone(database.get_schedule(gone)[9])  # ошибка видна в списке
+        self.assertEqual(len(database.get_sent_instances(bid)), 2)
+
+    def test_keyword_trigger_with_cooldown(self):
+        a = self.automation
+        channel = FakeChannel(self.guild, 9002)
+        bid = database.save_message_build(GUILD, STAFF, "faq", "Привет, {user}! Правила тут.", "[]", "[]")
+        database.add_trigger(GUILD, bid, STAFF, "keyword", pattern="правила, rules", watch_channel_id=channel.id,
+                             cooldown_seconds=60)
+
+        def message(text, author=MEMBER, bot=False):
+            member = self.guild.members[author]
+            member.bot = bot
+            return types.SimpleNamespace(guild=self.guild, author=member, webhook_id=None, channel=channel, content=text)
+
+        async def check():
+            await a.on_message(message("где ПРАВИЛА?"))
+            await a.on_message(message("правила!"))  # пауза
+            await a.on_message(message("ничего"))
+            await a.on_message(message("rules", bot=True))  # боты не запускают триггеры
+
+        run(check())
+        self.assertEqual(len(channel.sent), 1)
+        self.assertEqual(channel.sent[0]["content"], f"Привет, <@{MEMBER}>! Правила тут.")
+        # персональное сообщение не попадает в «обновить отправленные»
+        self.assertEqual(database.get_sent_instances(bid), [])
+
+    def test_counter_variant_and_goto(self):
+        g = self.guild
+        self.assertEqual(actions.parse_counter("Очки"), ("очки", "+", 1))
+        self.assertEqual(actions.parse_counter("очки =0"), ("очки", "=", 0))
+        self.assertIsNone(actions.parse_counter("очки +x"))
+        base = database.save_message_build(GUILD, STAFF, "base", "для всех", "[]", "[]", visibility="public")
+        staff_view = database.save_message_build(GUILD, STAFF, "mod", "для staff", "[]", "[]")
+        database.set_build_settings(base, {"variants": [{"level": "staff", "build_id": staff_view}]})
+
+        async def check():
+            i = FakeInteraction(g, g.members[MEMBER])
+            await actions.dispatch_action(i, "build.trigger", str(base), creator_id=STAFF)
+            self.assertEqual(i.response.sent, ["для всех"])
+            i = FakeInteraction(g, g.members[STAFF])
+            await actions.dispatch_action(i, "build.trigger", str(base), creator_id=STAFF)
+            self.assertEqual(i.response.sent, ["для staff"])
+
+            # шаг мастера: личное сообщение меняется на месте
+            edits = []
+            i = FakeInteraction(g, g.members[MEMBER])
+            i.message = types.SimpleNamespace(flags=types.SimpleNamespace(ephemeral=True))
+
+            async def edit_message(**kwargs):
+                edits.append(kwargs)
+            i.response.edit_message = edit_message
+            await actions.dispatch_action(i, "build.goto", str(base), creator_id=STAFF)
+            self.assertEqual(edits[0]["content"], "для всех")
+
+            i = FakeInteraction(g, g.members[MEMBER])
+            await actions.dispatch_action(i, "counter.change", "звёзды +5", creator_id=STAFF)
+            self.assertIn("5", i.last)
+            self.assertEqual(database.get_counters(GUILD)["звёзды"], 5)
+
+        run(check())
+
+    def test_panels_fit_discord_limits(self):
+        a = self.automation
+        bid = database.save_message_build(GUILD, STAFF, "ui", "x", "[]", "[]")
+        for n in range(3):
+            database.add_schedule(GUILD, bid, STAFF, 1, 10 ** 10, 60 * n)
+            database.add_trigger(GUILD, bid, STAFF, "keyword", pattern="a")
+
+        async def check():
+            back = ("embed", None)
+            a.SchedulesView(bid, back_target=back)
+            a.TriggersView(bid, back_target=back)
+            settings = a.BuildSettingsView(bid, back_target=back)
+            a.VariantConditionView(settings, back_target=back)
+            a.ScheduleItemView(bid, 1, back_target=back)
+            i = FakeInteraction(self.guild, self.guild.members[STAFF])
+            self.assertIn("{member_count}", a.settings_embed(i, bid).description)
+            self.assertIn("#", a.schedules_embed(i, bid).description)
+
+        run(check())
 
 
 class ResyncTests(unittest.TestCase):

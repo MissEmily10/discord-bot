@@ -119,6 +119,9 @@ def init_database():
             ALTER TABLE message_builds
             ADD COLUMN interactive_json TEXT NOT NULL DEFAULT 'null'
         """)
+    if "settings_json" not in mb_columns:
+        # живое обновление, родитель стиля, варианты по ролям
+        cursor.execute("ALTER TABLE message_builds ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'")
 
     # Saved button sets are independent from message builds.
     cursor.execute("""
@@ -588,6 +591,8 @@ def delete_message_build(build_id, owner_id=None):
     if changed:
         cursor.execute("DELETE FROM sent_instances WHERE build_id = ?", (build_id,))
         cursor.execute("DELETE FROM build_versions WHERE build_id = ?", (build_id,))
+        cursor.execute("DELETE FROM build_schedules WHERE build_id = ?", (build_id,))
+        cursor.execute("DELETE FROM build_triggers WHERE build_id = ?", (build_id,))
     connection.commit()
     connection.close()
     return changed
@@ -1008,6 +1013,26 @@ def _ensure_extended_tables():
         snapshot_json TEXT NOT NULL, created_at INTEGER NOT NULL
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_build_versions_build ON build_versions (build_id, id)")
+    # Расписание: build уходит в канал/ветку/форум в заданное время (и повторяется).
+    c.execute("""CREATE TABLE IF NOT EXISTS build_schedules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, build_id INTEGER NOT NULL,
+        owner_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, next_run INTEGER NOT NULL,
+        interval_minutes INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
+        last_run INTEGER, last_error TEXT, created_at INTEGER NOT NULL
+    )""")
+    # Триггеры: событие на сервере -> build уходит туда, где событие случилось (или в заданный канал).
+    c.execute("""CREATE TABLE IF NOT EXISTS build_triggers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, build_id INTEGER NOT NULL,
+        owner_id INTEGER NOT NULL, event TEXT NOT NULL, pattern TEXT,
+        watch_channel_id INTEGER, target_channel_id INTEGER,
+        cooldown_seconds INTEGER NOT NULL DEFAULT 30, enabled INTEGER NOT NULL DEFAULT 1,
+        last_fired INTEGER, last_error TEXT, created_at INTEGER NOT NULL
+    )""")
+    # Счётчики для {counter:имя}: меняются кнопками, обновляют связанные build'ы.
+    c.execute("""CREATE TABLE IF NOT EXISTS counters (
+        guild_id INTEGER NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL, PRIMARY KEY (guild_id, name)
+    )""")
     # Лого-генератор: стили (референсы + промпт + модель/LoRA) и история генераций.
     c.execute("""CREATE TABLE IF NOT EXISTS logo_styles (
         id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,
@@ -1320,3 +1345,237 @@ def count_recent_logo_generations(user_id, since):
     _ensure_extended_tables(); connection = get_connection()
     row = connection.execute("SELECT COUNT(*) FROM logo_generations WHERE user_id=? AND created_at>=?", (user_id, since)).fetchone()
     connection.close(); return row[0]
+
+
+# =========================
+# BUILD SETTINGS
+# =========================
+
+def get_build_settings(build_id):
+    connection = get_connection()
+    row = connection.execute("SELECT settings_json FROM message_builds WHERE id = ?", (build_id,)).fetchone()
+    connection.close()
+    value = _json_value(row[0], {}) if row else {}
+    return value if isinstance(value, dict) else {}
+
+
+def set_build_settings(build_id, settings):
+    connection = get_connection()
+    connection.execute(
+        "UPDATE message_builds SET settings_json = ? WHERE id = ?",
+        (json.dumps(settings, ensure_ascii=False), build_id),
+    )
+    connection.commit()
+    connection.close()
+
+
+def get_builds_with_settings():
+    """-> [(id, guild_id, settings dict)] у кого настройки не пустые."""
+    connection = get_connection()
+    rows = connection.execute(
+        "SELECT id, guild_id, settings_json FROM message_builds WHERE settings_json NOT IN ('{}', '', 'null')"
+    ).fetchall()
+    connection.close()
+    result = []
+    for build_id, guild_id, raw in rows:
+        value = _json_value(raw, {})
+        if isinstance(value, dict) and value:
+            result.append((build_id, guild_id, value))
+    return result
+
+
+def get_child_builds(parent_id):
+    return [bid for bid, _, settings in get_builds_with_settings() if settings.get("parent_id") == parent_id]
+
+
+# =========================
+# SCHEDULES
+# =========================
+
+_SCHEDULE_COLUMNS = "id, guild_id, build_id, owner_id, channel_id, next_run, interval_minutes, enabled, last_run, last_error"
+
+
+def add_schedule(guild_id, build_id, owner_id, channel_id, next_run, interval_minutes=0):
+    _ensure_extended_tables()
+    connection = get_connection()
+    cursor = connection.execute("""
+        INSERT INTO build_schedules (guild_id, build_id, owner_id, channel_id, next_run, interval_minutes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (guild_id, build_id, owner_id, channel_id, next_run, interval_minutes, _now()))
+    schedule_id = cursor.lastrowid
+    connection.commit()
+    connection.close()
+    return schedule_id
+
+
+def get_schedules(build_id=None, guild_id=None):
+    _ensure_extended_tables()
+    connection = get_connection()
+    if build_id is not None:
+        rows = connection.execute(f"SELECT {_SCHEDULE_COLUMNS} FROM build_schedules WHERE build_id = ? ORDER BY next_run", (build_id,)).fetchall()
+    else:
+        rows = connection.execute(f"SELECT {_SCHEDULE_COLUMNS} FROM build_schedules WHERE guild_id = ? ORDER BY next_run", (guild_id,)).fetchall()
+    connection.close()
+    return rows
+
+
+def get_schedule(schedule_id):
+    _ensure_extended_tables()
+    connection = get_connection()
+    row = connection.execute(f"SELECT {_SCHEDULE_COLUMNS} FROM build_schedules WHERE id = ?", (schedule_id,)).fetchone()
+    connection.close()
+    return row
+
+
+def get_due_schedules(now):
+    _ensure_extended_tables()
+    connection = get_connection()
+    rows = connection.execute(
+        f"SELECT {_SCHEDULE_COLUMNS} FROM build_schedules WHERE enabled = 1 AND next_run <= ? ORDER BY next_run", (now,)
+    ).fetchall()
+    connection.close()
+    return rows
+
+
+def update_schedule(schedule_id, **fields):
+    allowed = {"next_run", "interval_minutes", "enabled", "last_run", "last_error", "channel_id"}
+    keys = [key for key in fields if key in allowed]
+    if not keys:
+        return
+    connection = get_connection()
+    connection.execute(
+        f"UPDATE build_schedules SET {', '.join(f'{key} = ?' for key in keys)} WHERE id = ?",
+        (*[fields[key] for key in keys], schedule_id),
+    )
+    connection.commit()
+    connection.close()
+
+
+def delete_schedule(schedule_id):
+    connection = get_connection()
+    connection.execute("DELETE FROM build_schedules WHERE id = ?", (schedule_id,))
+    connection.commit()
+    connection.close()
+
+
+# =========================
+# TRIGGERS
+# =========================
+
+_TRIGGER_COLUMNS = ("id, guild_id, build_id, owner_id, event, pattern, watch_channel_id, target_channel_id, "
+                    "cooldown_seconds, enabled, last_fired, last_error")
+
+
+def add_trigger(guild_id, build_id, owner_id, event, pattern=None, watch_channel_id=None,
+                target_channel_id=None, cooldown_seconds=30):
+    _ensure_extended_tables()
+    connection = get_connection()
+    cursor = connection.execute("""
+        INSERT INTO build_triggers (guild_id, build_id, owner_id, event, pattern, watch_channel_id,
+            target_channel_id, cooldown_seconds, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (guild_id, build_id, owner_id, event, pattern, watch_channel_id, target_channel_id, cooldown_seconds, _now()))
+    trigger_id = cursor.lastrowid
+    connection.commit()
+    connection.close()
+    return trigger_id
+
+
+def get_triggers(build_id=None, guild_id=None, event=None):
+    _ensure_extended_tables()
+    connection = get_connection()
+    if build_id is not None:
+        rows = connection.execute(f"SELECT {_TRIGGER_COLUMNS} FROM build_triggers WHERE build_id = ? ORDER BY id", (build_id,)).fetchall()
+    else:
+        rows = connection.execute(
+            f"SELECT {_TRIGGER_COLUMNS} FROM build_triggers WHERE guild_id = ? AND enabled = 1 AND event = ? ORDER BY id",
+            (guild_id, event),
+        ).fetchall()
+    connection.close()
+    return rows
+
+
+def get_trigger(trigger_id):
+    _ensure_extended_tables()
+    connection = get_connection()
+    row = connection.execute(f"SELECT {_TRIGGER_COLUMNS} FROM build_triggers WHERE id = ?", (trigger_id,)).fetchone()
+    connection.close()
+    return row
+
+
+def update_trigger(trigger_id, **fields):
+    allowed = {"enabled", "last_fired", "last_error"}
+    keys = [key for key in fields if key in allowed]
+    if not keys:
+        return
+    connection = get_connection()
+    connection.execute(
+        f"UPDATE build_triggers SET {', '.join(f'{key} = ?' for key in keys)} WHERE id = ?",
+        (*[fields[key] for key in keys], trigger_id),
+    )
+    connection.commit()
+    connection.close()
+
+
+def delete_trigger(trigger_id):
+    connection = get_connection()
+    connection.execute("DELETE FROM build_triggers WHERE id = ?", (trigger_id,))
+    connection.commit()
+    connection.close()
+
+
+# =========================
+# COUNTERS / STATS
+# =========================
+
+def get_counters(guild_id):
+    _ensure_extended_tables()
+    connection = get_connection()
+    rows = connection.execute("SELECT name, value FROM counters WHERE guild_id = ?", (guild_id,)).fetchall()
+    connection.close()
+    return dict(rows)
+
+
+def change_counter(guild_id, name, delta=0, set_to=None):
+    """Изменить счётчик (создаётся с 0). -> новое значение."""
+    _ensure_extended_tables()
+    connection = get_connection()
+    connection.execute(
+        "INSERT OR IGNORE INTO counters (guild_id, name, value, updated_at) VALUES (?, ?, 0, ?)",
+        (guild_id, name, _now()),
+    )
+    if set_to is not None:
+        connection.execute("UPDATE counters SET value = ?, updated_at = ? WHERE guild_id = ? AND name = ?",
+                           (set_to, _now(), guild_id, name))
+    else:
+        connection.execute("UPDATE counters SET value = value + ?, updated_at = ? WHERE guild_id = ? AND name = ?",
+                           (delta, _now(), guild_id, name))
+    value = connection.execute("SELECT value FROM counters WHERE guild_id = ? AND name = ?", (guild_id, name)).fetchone()[0]
+    connection.commit()
+    connection.close()
+    return value
+
+
+def get_submission_stats(guild_id, form_id=None):
+    """-> {"total", "pending", "approved", "rejected", "last": (form_name, applicant_id, created_at) | None}"""
+    _ensure_extended_tables()
+    connection = get_connection()
+    where, params = "s.guild_id = ?", [guild_id]
+    if form_id is not None:
+        where += " AND s.form_id = ?"
+        params.append(form_id)
+    counts = dict(connection.execute(
+        f"SELECT s.status, COUNT(*) FROM form_submissions s WHERE {where} GROUP BY s.status", params
+    ).fetchall())
+    last = connection.execute(f"""
+        SELECT f.name, s.applicant_id, s.created_at FROM form_submissions s
+        LEFT JOIN forms f ON f.id = s.form_id WHERE {where} ORDER BY s.id DESC LIMIT 1
+    """, params).fetchone()
+    connection.close()
+    return {
+        "total": sum(counts.values()),
+        "pending": counts.get("pending", 0),
+        "approved": counts.get("approved", 0),
+        "rejected": counts.get("rejected", 0),
+        "last": last,
+    }

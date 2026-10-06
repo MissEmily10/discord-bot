@@ -23,7 +23,7 @@ from actions import (
     MAX_EMBEDS, MAX_BUTTONS, BUTTON_STYLES,
     say, normalize_url, valid_emoji, build_discord_embed, render_source, load_source,
     validate_action_value, build_visible, template_visible, form_visible,
-    check_url, embed_has_content, EMBED_TOTAL_LIMIT,
+    check_url, embed_has_content, EMBED_TOTAL_LIMIT, message_parts,
 )
 from database import (
     save_message_build, update_message_build, get_message_build, get_message_builds,
@@ -140,7 +140,7 @@ def buttons_text(state):
     for index, raw in enumerate(state.buttons, start=1):
         label = raw.get("label") or t("common.default_button_label")
         action = raw.get("action_key") or ("link" if raw.get("style") == "link" else raw.get("action", "?"))
-        if action == "build.trigger" and raw.get("value"):
+        if action in ("build.trigger", "build.goto", "build.refresh") and raw.get("value"):
             build = get_message_build(int(raw["value"])) if str(raw["value"]).isdigit() else None
             action = f"{action} → {(build[3] if build else '?')} #{raw['value']}"
         lines.append(t("buttons.builder.line", n=index, emoji=raw.get("emoji") or "", label=label, action=action))
@@ -854,7 +854,7 @@ class ActionPickSelect(discord.ui.Select):
             # значение не нужно — сразу добавляем
             await commit_pending(interaction, self.state, self.pending, self.target, self.builder_view, "")
             return
-        if action_key == "build.trigger":
+        if action_key in ("build.trigger", "build.goto", "build.refresh"):
             # ID никто не помнит — даём выбрать из сохранённых сообщений
             view = PanelView(back_target=builder_screen(interaction, self.builder_view), timeout=300)
             view.add_item(BuildPickSelect(interaction, self.state, self.pending, self.target, self.builder_view))
@@ -1143,58 +1143,28 @@ async def finish_message_build(interaction, state):
     )
 
 
-def message_parts(build_id):
-    """Сообщения для отправки: каждый embed отдельно, текст — с первым, компоненты — с последним."""
-    data = load_source("b", build_id)
-    if not data:
-        return None
-    content, embeds, view = render_source("b", build_id, data)
-    parts = [{"embed": embed} for embed in embeds] or [{}]
-    if content:
-        parts[0]["content"] = content
-    if view is not None:
-        parts[-1]["view"] = view
-    return [] if parts == [{}] else parts
-
-
-def allowed_mentions_for(member, channel):
-    """@everyone/@here и роли — только если у отправителя есть на это право в канале."""
-    can_mass = core.is_owner_id(member.id) or channel.permissions_for(member).mention_everyone
-    return discord.AllowedMentions(everyone=can_mass, roles=can_mass, users=True)
+SEND_CHANNEL_TYPES = [
+    discord.ChannelType.text, discord.ChannelType.news, discord.ChannelType.forum,
+    discord.ChannelType.public_thread, discord.ChannelType.private_thread, discord.ChannelType.news_thread,
+]
 
 
 async def send_build(interaction, build_id, channels):
-    """-> (отправлено в, ошибки) — общая отправка для кнопки и повторной отправки."""
-    parts = message_parts(build_id)
-    if parts is None:
-        return [], [t("embed.build_not_found")]
-    if not parts:
-        return [], [t("embed.build_empty")]
+    """-> (отправлено в, ошибки). Канал, ветка или форум (в форуме — новый пост)."""
+    import live
+
     sent, failed = [], []
     for channel in channels:
-        real_channel = interaction.guild.get_channel(channel.id)
+        real_channel = interaction.guild.get_channel_or_thread(channel.id)
         if real_channel is None:
             failed.append(t("embed.send.channel_missing", channel=f"<#{channel.id}>"))
             continue
-        if not core.can_post_in(interaction.user, real_channel):
-            failed.append(t("embed.send.no_perm_user", channel=real_channel.mention))
-            continue
-        if not core.bot_can_post(real_channel):
-            failed.append(t("embed.send.no_perm_bot", channel=real_channel.mention))
-            continue
-        try:
-            for index, part in enumerate(parts):
-                msg = await real_channel.send(allowed_mentions=allowed_mentions_for(interaction.user, real_channel), **part)
-                # Живой объект: помним, откуда родилось каждое сообщение
-                save_sent_instance(build_id, msg.id, real_channel.id, interaction.guild.id, index)
-        except discord.Forbidden:
-            failed.append(t("embed.send.forbidden", channel=real_channel.mention))
-            continue
-        except discord.HTTPException as error:
-            failed.append(t("embed.send.http_error", channel=real_channel.mention, error=error))
-            continue
-        sent.append(real_channel.mention)
-        core.audit(interaction, "build.sent", "build", build_id, f"channel={real_channel.id}")
+        message, error = await live.deliver(interaction.guild, interaction.user, build_id, real_channel)
+        if error:
+            failed.append(error)
+        if message is not None:
+            sent.append(message.channel.mention)
+            core.audit(interaction, "build.sent", "build", build_id, f"channel={message.channel.id}")
     return sent, failed
 
 
@@ -1220,7 +1190,8 @@ class MessageBuildFinalView(PanelView):
         if not await self._row(interaction):
             return
         # Ровно так, как сообщение уйдёт в канал: каждый embed отдельно.
-        parts = message_parts(self.build_id)
+        import live
+        parts = await live.parts_for(interaction.guild, self.build_id, user=interaction.user)
         if not parts:
             await say(interaction, "embed.build_empty")
             return
@@ -1241,7 +1212,7 @@ class MessageBuildFinalView(PanelView):
         view = PanelView(timeout=300)
         select = discord.ui.ChannelSelect(
             placeholder=t("embed.send.placeholder")[:150],
-            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            channel_types=SEND_CHANNEL_TYPES,
             min_values=1, max_values=5,
         )
 
@@ -1309,6 +1280,33 @@ class MessageBuildFinalView(PanelView):
             view=VersionsView(interaction, self.build_id, back_target=(interaction.message.embeds[0], self)),
         )
 
+    async def _automation(self, interaction, screen, view_factory):
+        import automation
+        row = await self._row(interaction)
+        if not row:
+            return
+        if not automation.can_automate(interaction, row):
+            await say(interaction, "automation.denied")
+            return
+        back = (interaction.message.embeds[0], self)
+        await interaction.response.edit_message(content=None, embed=screen(interaction, self.build_id),
+                                                view=view_factory(self.build_id, back_target=back))
+
+    @discord.ui.button(label="Расписание", emoji="🗓️", style=discord.ButtonStyle.secondary, row=2)
+    async def schedule(self, interaction, button):
+        import automation
+        await self._automation(interaction, automation.schedules_embed, automation.SchedulesView)
+
+    @discord.ui.button(label="Триггеры", emoji="⚡", style=discord.ButtonStyle.secondary, row=2)
+    async def triggers(self, interaction, button):
+        import automation
+        await self._automation(interaction, automation.triggers_embed, automation.TriggersView)
+
+    @discord.ui.button(label="Настройки", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2)
+    async def settings(self, interaction, button):
+        import automation
+        await self._automation(interaction, automation.settings_embed, automation.BuildSettingsView)
+
     @discord.ui.button(label="Удалить", emoji="🗑️", style=discord.ButtonStyle.danger, row=1)
     async def delete(self, interaction, button):
         row = await self._row(interaction, manage=True)
@@ -1322,69 +1320,13 @@ class MessageBuildFinalView(PanelView):
 
 
 def _group_sends(instances):
-    """
-    Разбить отправленные сообщения канала на отдельные отправки.
-    part_index == 0 — начало отправки; у старых записей (NULL) каждая
-    запись считается отдельной отправкой из одного сообщения.
-    """
-    groups = []
-    for message_id, part_index in instances:
-        if part_index is None or part_index == 0 or not groups:
-            groups.append([message_id])
-        else:
-            groups[-1].append(message_id)
-    return groups
+    import live
+    return live._group_sends(instances)
 
 
 async def resync_instances(interaction, build_id):
-    """
-    Привести отправленные сообщения к текущему виду build'а: в каждой отправке
-    сообщения правятся по порядку, лишние удаляются, недостающие досылаются.
-    -> (обновлено, удалено, дослано, пропало)
-    """
-    parts = message_parts(build_id) or []
-    by_channel = {}
-    for message_id, channel_id, guild_id, sent_at, part_index in get_sent_instances(build_id):
-        if guild_id == interaction.guild.id:
-            by_channel.setdefault(channel_id, []).append((message_id, part_index))
-
-    updated = removed = added = missing = 0
-    for channel_id, instances in by_channel.items():
-        channel = interaction.guild.get_channel(channel_id)
-        if channel is None:
-            missing += len(instances)
-            for message_id, _ in instances:
-                delete_sent_instance(message_id)
-            continue
-        for group in _group_sends(instances):
-            for position, message_id in enumerate(group):
-                message = channel.get_partial_message(message_id)
-                try:
-                    if position >= len(parts):
-                        await message.delete()
-                        delete_sent_instance(message_id)
-                        removed += 1
-                        continue
-                    part = parts[position]
-                    await message.edit(
-                        content=part.get("content"), embed=part.get("embed"), view=part.get("view"),
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                    updated += 1
-                except discord.NotFound:
-                    delete_sent_instance(message_id)
-                    missing += 1
-                except discord.HTTPException:
-                    missing += 1
-            for position in range(len(group), len(parts)):
-                try:
-                    msg = await channel.send(allowed_mentions=discord.AllowedMentions.none(), **parts[position])
-                except discord.HTTPException:
-                    missing += 1
-                    continue
-                save_sent_instance(build_id, msg.id, channel.id, interaction.guild.id, position)
-                added += 1
-    return updated, removed, added, missing
+    import live
+    return await live.resync_build(interaction.guild, build_id)
 
 
 class SaveAsTemplateModal(Modal, title="СОХРАНИТЬ КАК ШАБЛОН"):

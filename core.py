@@ -543,6 +543,9 @@ DEFAULT_ACTIONS = [
     ("webhook.send", "admin", True, "Отправить сообщение через webhook", "admin"),
     ("message.edit", "admin", True, "Редактировать сообщение с этой кнопкой", "admin"),
     ("build.trigger", "staff", False, "Показать связанный Message Build", "member"),
+    ("build.goto", "staff", False, "Шаг: заменить сообщение другим Message Build", "member"),
+    ("build.refresh", "staff", False, "Обновить отправленные сообщения другого Message Build", "member"),
+    ("counter.change", "staff", False, "Изменить счётчик {counter:имя} и обновить связанные сообщения", "member"),
 ]
 
 

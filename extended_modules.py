@@ -18,6 +18,7 @@ import json
 import discord
 
 import core
+import live
 from core import PanelView, Modal, t, panel_embed, embed_color, fetch_bytes, get_user_level
 from actions import say, normalize_url, render_source, template_visible, form_visible
 from database import (
@@ -425,6 +426,7 @@ class SubmissionModal(discord.ui.Modal):
             review_submission(sid, i.client.user.id, "failed", "destination unavailable")
             await say(i, "forms.destination_missing")
             return
+        live.submissions_changed(i.guild)  # {submissions}, {last_submission} в отправленных build'ах
         await say(i, "forms.submitted")
 
 
@@ -496,6 +498,7 @@ async def decide(i, sid, status, reason, message):
     if row is None:
         return
     review_submission(sid, i.user.id, status, reason)
+    live.submissions_changed(i.guild)
     role_error = None
     role_id = form[13] or form[14]  # роль после одобрения приоритетнее роли, на которую подавали
     if status == "approved" and form[12] == "role" and role_id:

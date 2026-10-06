@@ -23,6 +23,7 @@ import access_module
 import embed_module
 import extended_modules
 import logo_module
+import automation
 import web_panel
 from extended_modules import register_extended
 
@@ -40,6 +41,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 intents = discord.Intents.default()
 intents.members = True
+# Триггеры «ключевое слово» читают текст сообщений. Это privileged intent:
+# включи Message Content Intent в Developer Portal и MESSAGE_CONTENT_INTENT=1
+# в .env. Без него триггер срабатывает только на сообщения, где упомянут бот.
+intents.message_content = os.getenv("MESSAGE_CONTENT_INTENT", "").strip() in ("1", "true", "yes")
 
 # Бот работает только на slash-командах. Префикс-команд нет, поэтому
 # message content intent не нужен; when_mentioned вместо "!" убирает
@@ -64,6 +69,7 @@ async def setup_hook():
     # кнопки/списки в уже отправленных сообщениях работают после рестарта
     bot.add_dynamic_items(*actions.DYNAMIC_ITEMS, *extended_modules.DYNAMIC_ITEMS, *logo_module.DYNAMIC_ITEMS)
     await web_panel.start(bot)
+    automation.setup(bot)  # расписание, триггеры, живое обновление
 
 bot.setup_hook = setup_hook
 
