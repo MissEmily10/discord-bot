@@ -699,12 +699,12 @@ class TemplateActions(PanelView):
         if row[4] != "message" or not core.has_command_access(i, "embed"):
             await say(i, "templates.editor_unavailable")
             return
-        from embed_module import EmbedState, EmbedEditorView, render_active_preview
+        from embed_module import EmbedState, EmbedEditorView, editor_embeds
 
         state = EmbedState(i.guild.id, i.user.id)
         state.load_payload(j(row[5], {}))
         state.name = row[3]
-        await i.response.edit_message(embed=render_active_preview(state), view=EmbedEditorView(state, back_target=(i.message.embeds[0], self)))
+        await i.response.edit_message(embeds=editor_embeds(state), view=EmbedEditorView(state, back_target=(i.message.embeds[0], self)))
 
     @discord.ui.button(label="Избранное", emoji="⭐", style=discord.ButtonStyle.secondary)
     async def favorite(self, i, b):

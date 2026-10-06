@@ -325,7 +325,7 @@ def parse_export(raw_bytes):
 
 async def open_imported(interaction, payload, name=None, source_key="build_tools.import.done"):
     """Открыть редактор с импортированным содержимым (ещё не сохранено)."""
-    from embed_module import EmbedState, EmbedEditorView, render_active_preview
+    from embed_module import EmbedState, EmbedEditorView, editor_embeds
 
     clean, dropped = sanitize_payload(interaction, payload)
     state = EmbedState(interaction.guild.id, interaction.user.id)
@@ -341,7 +341,7 @@ async def open_imported(interaction, payload, name=None, source_key="build_tools
     if unconfigured:
         note += "\n" + t("build_tools.import.unconfigured", count=unconfigured)
     note += "\n" + t("build_tools.import.save_hint")
-    kwargs = dict(content=note, embed=render_active_preview(state), view=EmbedEditorView(state, back_target=None))
+    kwargs = dict(content=note, embeds=editor_embeds(state), view=EmbedEditorView(state, back_target=None))
     if interaction.response.is_done():
         await interaction.followup.send(ephemeral=True, **kwargs)
     else:

@@ -765,6 +765,47 @@ class LiveAndAutomationTests(unittest.TestCase):
         run(check())
 
 
+class HintsTests(unittest.TestCase):
+    def test_panels_explain_their_buttons(self):
+        g = make_guild()
+        i = FakeInteraction(g, g.members[STAFF])
+        home = core.panel_embed(i, "embed.home")
+        self.assertIn("Конструктор сообщений", home.description)
+        self.assertIn("**Из сообщения** — ", home.description)
+        # карточка build'а показывает пояснения к кнопкам своей панели (embed.final)
+        card = core.panel_embed(i, "embed.build_card", id=1, owner="x", visibility="public", embeds=1, buttons=0, sent=0)
+        self.assertIn("**Расписание** — ", card.description)
+        # переопределённая в веб-панели подпись попадает и в пояснение; пустое пояснение скрывается
+        core.set_setting("embed.home.create", "Новое")
+        core.set_setting("embed.home.saved.hint", "")
+        try:
+            text = core.panel_embed(i, "embed.home").description
+            self.assertIn("**Новое** — ", text)
+            self.assertNotIn("Мои сохранённые", text)
+        finally:
+            core.reset_setting("embed.home.create")
+            core.reset_setting("embed.home.saved.hint")
+        self.assertEqual(core.panel_embed(i, "embed.home", hints=False).description.count("▸"), 0)
+
+    def test_every_hint_has_a_real_button(self):
+        import ast
+        import pathlib
+        from texts import CATALOG
+        buttons = set()
+        for path in ROOT.glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+                prefix = next((st.value.value for st in cls.body if isinstance(st, ast.Assign)
+                               and any(getattr(tg, "id", None) == "texts" for tg in st.targets)
+                               and isinstance(st.value, ast.Constant)), None)
+                for st in cls.body:
+                    if prefix and isinstance(st, (ast.AsyncFunctionDef, ast.FunctionDef)) and any(
+                            isinstance(d, ast.Call) and getattr(d.func, "attr", "") == "button" for d in st.decorator_list):
+                        buttons.add(f"{prefix}.{st.name}")
+        stale = [key for key in CATALOG if key.endswith(".hint") and key[:-5] not in buttons]
+        self.assertEqual(stale, [])
+
+
 class ResyncTests(unittest.TestCase):
     def test_group_sends(self):
         import embed_module

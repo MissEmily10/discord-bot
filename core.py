@@ -383,16 +383,62 @@ def resolve_thumbnail(interaction, context):
     return value if value.startswith(("http://", "https://")) else "https://" + value
 
 
-def panel_embed(interaction, context, description=None, *, title=None, danger=False, **params):
+# Экран (контекст embed'а) -> префикс кнопок его панели, когда они называются по-разному.
+HINTS_FOR = {
+    "forms.home": "forms.start",
+    "forms.saved": "forms.use",
+    "forms.card": "forms.use",
+    "select.menu_card": "select.menu_actions",
+    "logo.style_card": "logo.style_actions",
+    "buttons.saved_set": "buttons.actions",
+    "buttons.card": "buttons.actions",
+    "webhooks.created": "webhooks.card",
+    "embed.saved_build": "embed.final",
+    "embed.build_card": "embed.final",
+}
+_hint_keys = {}
+
+
+def button_hints(prefix):
+    """
+    Пояснения к кнопкам панели: ключи «<prefix>.<кнопка>.hint» в каталоге,
+    в порядке каталога. Подпись берётся из «<prefix>.<кнопка>» — та же,
+    что на самой кнопке. -> текст блока или "".
+    """
+    if prefix not in _hint_keys:
+        from texts import CATALOG
+        start, end = f"{prefix}.", ".hint"
+        _hint_keys[prefix] = [
+            key for key in CATALOG
+            if key.startswith(start) and key.endswith(end) and "." not in key[len(start):-len(end)]
+        ]
+    lines = []
+    for key in _hint_keys[prefix]:
+        hint = t(key)
+        if not hint.strip():
+            continue  # владелец стёр пояснение в веб-панели — не показываем
+        name = key[len(prefix) + 1:-len(".hint")]
+        label = t(f"{prefix}.{name}") if has_text(f"{prefix}.{name}") else name
+        lines.append(t("hints.line", label=label, hint=hint))
+    return (t("hints.header") + "\n" + "\n".join(lines)) if lines else ""
+
+
+def panel_embed(interaction, context, description=None, *, title=None, danger=False, hints=None, **params):
     """
     Единый конструктор служебных embed'ов бота.
     context — ключ экрана, например "forms.home": берутся
     "forms.home.title", "forms.home.text" (если есть) и thumbnail контекста.
+    Под текстом — пояснения к кнопкам (hints — префикс кнопок, если он
+    отличается от context; False — без пояснений).
     """
     if title is None:
         title = t(f"{context}.title", **params)
     if description is None:
         description = t(f"{context}.text", **params) if has_text(f"{context}.text") else ""
+    if hints is not False:
+        legend = button_hints(hints or HINTS_FOR.get(context, context))
+        if legend:
+            description = f"{description}\n\n{legend}" if description else legend
     embed = discord.Embed(
         title=str(title)[:256] or None,
         description=str(description)[:4096] or None,

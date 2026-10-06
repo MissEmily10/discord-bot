@@ -108,6 +108,15 @@ class EmbedState:
         self.interactive = payload.get("interactive")
 
 
+def editor_embeds(state):
+    """Предпросмотр активного embed'а + пояснения к кнопкам редактора отдельным embed'ом."""
+    embeds = [render_active_preview(state)]
+    hints = core.button_hints("embed.editor")
+    if hints:
+        embeds.append(discord.Embed(description=hints[:4096], color=core.embed_color()))
+    return embeds
+
+
 def render_active_preview(state):
     """Предпросмотр активного embed'а. Служебная пометка дописывается к футеру,
     а не заменяет его — иначе свой футер в редакторе не увидеть."""
@@ -197,7 +206,7 @@ class EmbedHomeView(PanelView):
                 state = EmbedState(self.guild_id, i.user.id)
                 state.load_payload(_json(row[5], {}))
                 await i.response.edit_message(
-                    embed=render_active_preview(state),
+                    embeds=editor_embeds(state),
                     view=EmbedEditorView(state, back_target=(i.message.embeds[0], view)),
                 )
 
@@ -335,7 +344,7 @@ async def go_to_editor(interaction, state, back_target):
     back_target = state.editor_back or back_target
     state.editor_back = back_target
     await interaction.response.edit_message(
-        embed=render_active_preview(state),
+        embeds=editor_embeds(state),
         view=EmbedEditorView(state, back_target=back_target)
     )
 
@@ -362,7 +371,7 @@ class EmbedSwitchSelect(discord.ui.Select):
         else:
             self.state.active_index = int(self.values[0])
         await interaction.response.edit_message(
-            embed=render_active_preview(self.state),
+            embeds=editor_embeds(self.state),
             view=EmbedEditorView(self.state, back_target=self.view.back_target)
         )
 
@@ -400,7 +409,7 @@ class EmbedEditorView(PanelView):
 
     async def refresh(self, interaction):
         await interaction.response.edit_message(
-            embed=render_active_preview(self.state),
+            embeds=editor_embeds(self.state),
             view=EmbedEditorView(self.state, back_target=self.back_target),
         )
 
@@ -1238,7 +1247,7 @@ class MessageBuildFinalView(PanelView):
             return
         state = EmbedState.from_build(row)
         await interaction.response.edit_message(
-            embed=render_active_preview(state),
+            embeds=editor_embeds(state),
             view=EmbedEditorView(state, back_target=(interaction.message.embeds[0], self)),
         )
 
