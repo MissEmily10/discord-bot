@@ -484,6 +484,109 @@ class EmbedEditorTests(unittest.TestCase):
         run(check())
 
 
+class BuildToolsTests(unittest.TestCase):
+    def setUp(self):
+        import build_tools
+        self.bt = build_tools
+        self.guild = make_guild()
+
+    def i(self, uid=STAFF):
+        return FakeInteraction(self.guild, self.guild.members[uid])
+
+    def test_parse_message_ref(self):
+        p = self.bt.parse_message_ref
+        self.assertEqual(p("https://discord.com/channels/500/600/700000000000000000"), (500, 600, 700000000000000000))
+        self.assertEqual(p("https://ptb.discordapp.com/channels/500/600/700"), (500, 600, 700))
+        self.assertEqual(p("123456789012345678-223456789012345678"), (None, 123456789012345678, 223456789012345678))
+        self.assertEqual(p("700", default_channel_id=42), (None, 42, 700))
+        self.assertIsNone(p("привет"))
+
+    def test_message_to_payload_and_sanitize(self):
+        bt = self.bt
+        source = database.save_message_build(GUILD, STAFF, "src", "", "[]", json.dumps([
+            {"label": "Роль", "style": "green", "action_key": "role.toggle", "value": str(self.guild.safe.id)},
+        ]))
+        row = discord.components.ActionRow({"type": 1, "components": [
+            {"type": 2, "style": 3, "label": "Роль", "custom_id": f"rb:a:b:{source}:0"},
+            {"type": 2, "style": 1, "label": "Чужая", "custom_id": "other_bot:42"},
+            {"type": 2, "style": 5, "label": "Сайт", "url": "https://example.com"},
+        ]})
+        embed = discord.Embed(title="Заголовок", description="текст", color=0x112233)
+        embed.add_field(name="a", value="b")
+        embed.set_footer(text="низ")
+        message = types.SimpleNamespace(content="привет", embeds=[embed], components=[row])
+        payload = bt.message_to_payload(message)
+        self.assertEqual(payload["embeds"][0]["title"], "Заголовок")
+        self.assertEqual(payload["embeds"][0]["footer_text"], "низ")
+        self.assertEqual(payload["buttons"][0]["action_key"], "role.toggle")  # своё действие скопировано
+        self.assertIsNone(payload["buttons"][1]["action_key"])
+        self.assertEqual(payload["buttons"][2]["style"], "link")
+
+        clean, dropped = bt.sanitize_payload(self.i(), payload)
+        self.assertEqual(dropped, 0)
+        self.assertEqual(bt.unconfigured_count(clean), 1)
+        # роль, которой на сервере нет, и опасная роль — действие сбрасывается
+        payload["buttons"].append({"label": "x", "style": "blue", "action_key": "role.assign", "value": "999"})
+        payload["buttons"].append({"label": "y", "style": "blue", "action_key": "role.assign", "value": str(self.guild.danger.id)})
+        clean, dropped = bt.sanitize_payload(self.i(), payload)
+        self.assertEqual(dropped, 2)
+        # мусорные ссылки в embed'е вычищаются
+        clean, _ = bt.sanitize_payload(self.i(), {"embeds": [{"title": "t", "image": "не ссылка", "color": "red"}]})
+        self.assertIsNone(clean["embeds"][0]["image"])
+
+    def test_export_roundtrip(self):
+        bt = self.bt
+        bid = database.save_message_build(GUILD, STAFF, "Правила сервера", "hi", json.dumps([{"title": "t"}]), "[]")
+        name, data = bt.export_build(database.get_message_build(bid))
+        self.assertTrue(name.endswith(f"_{bid}.json"))
+        payload, error = bt.parse_export(data)
+        self.assertIsNone(error)
+        self.assertEqual(payload["name"], "Правила сервера")
+        self.assertEqual(bt.parse_export(b"{not json")[1], "build_tools.json.bad_json")
+        self.assertEqual(bt.parse_export(b'{"format": "other"}')[1], "build_tools.json.bad_format")
+
+        async def check():
+            i = self.i()
+            i.channel = None
+            await bt.open_imported(i, payload, name=payload["name"])
+            self.assertIn("embed'ов 1", i.response.sent[0])
+
+        run(check())
+
+    def test_versions_and_restore(self):
+        bt = self.bt
+        bid = database.save_message_build(GUILD, STAFF, "v1", "первый", "[]", "[]")
+        bt.remember_version(bid, STAFF)
+        row = database.get_message_build(bid)
+        database.update_message_build(bid, **{**database.build_snapshot(row), "content": "второй"})
+        for _ in range(database.BUILD_VERSIONS_KEPT + 3):
+            bt.remember_version(bid, STAFF)
+        versions = database.get_build_versions(bid)
+        self.assertEqual(len(versions), database.BUILD_VERSIONS_KEPT)
+
+        first = database.save_message_build(GUILD, STAFF, "v", "старое", "[]", "[]")
+        bt.remember_version(first, STAFF)
+        version_id = database.get_build_versions(first)[0][0]
+        row = database.get_message_build(first)
+        database.update_message_build(first, **{**database.build_snapshot(row), "content": "новое"})
+
+        async def check():
+            view = bt.VersionActionsView(first, version_id, back_target=None)
+            # участник без прав откатить не может
+            i = self.i(MEMBER)
+            await view.restore.callback(i)
+            self.assertEqual(database.get_message_build(first)[4], "новое")
+            await view.restore.callback(self.i(STAFF))
+            self.assertEqual(database.get_message_build(first)[4], "старое")
+            # откат тоже в истории: «новое» можно вернуть
+            latest = database.get_build_version(database.get_build_versions(first)[0][0])
+            self.assertEqual(latest[3]["content"], "новое")
+
+        run(check())
+        database.delete_message_build(first)
+        self.assertEqual(database.get_build_versions(first), [])
+
+
 class ResyncTests(unittest.TestCase):
     def test_group_sends(self):
         import embed_module

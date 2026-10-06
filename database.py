@@ -587,9 +587,71 @@ def delete_message_build(build_id, owner_id=None):
     changed = cursor.rowcount > 0
     if changed:
         cursor.execute("DELETE FROM sent_instances WHERE build_id = ?", (build_id,))
+        cursor.execute("DELETE FROM build_versions WHERE build_id = ?", (build_id,))
     connection.commit()
     connection.close()
     return changed
+
+
+# =========================
+# BUILD VERSIONS
+# =========================
+
+BUILD_VERSIONS_KEPT = 25
+# Поля build'а, которые попадают в снимок (в порядке аргументов update_message_build).
+BUILD_SNAPSHOT_FIELDS = (
+    "name", "content", "embeds_json", "buttons_json", "visibility", "category",
+    "allowed_role_ids_json", "visibility_levels_json", "interactive_json",
+)
+
+
+def build_snapshot(row):
+    """Строка get_message_build -> словарь полей для update_message_build."""
+    return dict(zip(BUILD_SNAPSHOT_FIELDS, row[3:12]))
+
+
+def save_build_version(build_id, user_id):
+    """Запомнить текущее состояние build'а (до правки). Хранятся последние BUILD_VERSIONS_KEPT."""
+    row = get_message_build(build_id)
+    if not row:
+        return None
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute("""
+        INSERT INTO build_versions (build_id, user_id, snapshot_json, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (build_id, user_id, json.dumps(build_snapshot(row), ensure_ascii=False), _now()))
+    version_id = cursor.lastrowid
+    cursor.execute("""
+        DELETE FROM build_versions WHERE build_id = ? AND id NOT IN (
+            SELECT id FROM build_versions WHERE build_id = ? ORDER BY id DESC LIMIT ?
+        )
+    """, (build_id, build_id, BUILD_VERSIONS_KEPT))
+    connection.commit()
+    connection.close()
+    return version_id
+
+
+def get_build_versions(build_id):
+    """-> [(id, user_id, created_at)], новые первыми."""
+    connection = get_connection()
+    rows = connection.execute("""
+        SELECT id, user_id, created_at FROM build_versions WHERE build_id = ? ORDER BY id DESC
+    """, (build_id,)).fetchall()
+    connection.close()
+    return rows
+
+
+def get_build_version(version_id):
+    """-> (id, build_id, user_id, snapshot dict, created_at) или None."""
+    connection = get_connection()
+    row = connection.execute("""
+        SELECT id, build_id, user_id, snapshot_json, created_at FROM build_versions WHERE id = ?
+    """, (version_id,)).fetchone()
+    connection.close()
+    if not row:
+        return None
+    return row[0], row[1], row[2], _json_value(row[3], {}), row[4]
 
 
 # =========================
@@ -940,6 +1002,12 @@ def _ensure_extended_tables():
         name TEXT NOT NULL, placeholder TEXT, roles_json TEXT NOT NULL DEFAULT '[]',
         max_values INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     )""")
+    # История Message Build: снимок перед каждым сохранением — можно откатить.
+    c.execute("""CREATE TABLE IF NOT EXISTS build_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, build_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL, created_at INTEGER NOT NULL
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_build_versions_build ON build_versions (build_id, id)")
     # Лого-генератор: стили (референсы + промпт + модель/LoRA) и история генераций.
     c.execute("""CREATE TABLE IF NOT EXISTS logo_styles (
         id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,

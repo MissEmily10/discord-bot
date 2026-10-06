@@ -174,6 +174,11 @@ class EmbedHomeView(PanelView):
             view=SavedBuildsListView(interaction, back_target=(interaction.message.embeds[0], self))
         )
 
+    @discord.ui.button(label="Из сообщения", emoji="📥", style=discord.ButtonStyle.secondary)
+    async def from_message(self, interaction, button):
+        from build_tools import ImportMessageModal
+        await interaction.response.send_modal(ImportMessageModal())
+
     @discord.ui.button(label="Использовать шаблон", emoji="📁", style=discord.ButtonStyle.secondary)
     async def use_template(self, interaction, button):
         rows = [
@@ -1117,6 +1122,8 @@ async def finish_message_build(interaction, state):
         if not row or not can_manage_build(interaction, row):
             await say(interaction, "embed.edit_denied")
             return
+        from build_tools import remember_version
+        remember_version(state.build_id, interaction.user.id)  # прежний вид — в историю
         update_message_build(state.build_id, **fields)
         build_id = state.build_id
         core.audit(interaction, "build.updated", "build", build_id)
@@ -1127,6 +1134,7 @@ async def finish_message_build(interaction, state):
         key = "embed.saved_build.text"
 
     await interaction.response.edit_message(
+        content=None,  # убираем подсказку импорта, если была
         embed=panel_embed(interaction, "embed.saved_build", description=t(
             key, id=build_id, embeds=len(state.embeds), buttons=len(state.buttons),
             sent=len(get_sent_instances(build_id)),
@@ -1283,6 +1291,24 @@ class MessageBuildFinalView(PanelView):
             return
         await interaction.response.send_modal(SaveAsTemplateModal(self.build_id))
 
+    @discord.ui.button(label="Экспорт JSON", emoji="📤", style=discord.ButtonStyle.secondary, row=1)
+    async def export_json(self, interaction, button):
+        from build_tools import send_export
+        row = await self._row(interaction)
+        if row:
+            await send_export(interaction, row)
+
+    @discord.ui.button(label="История", emoji="🕘", style=discord.ButtonStyle.secondary, row=1)
+    async def history(self, interaction, button):
+        from build_tools import VersionsView
+        if not await self._row(interaction):
+            return
+        await interaction.response.edit_message(
+            content=None,
+            embed=panel_embed(interaction, "build_tools.versions"),
+            view=VersionsView(interaction, self.build_id, back_target=(interaction.message.embeds[0], self)),
+        )
+
     @discord.ui.button(label="Удалить", emoji="🗑️", style=discord.ButtonStyle.danger, row=1)
     async def delete(self, interaction, button):
         row = await self._row(interaction, manage=True)
@@ -1404,8 +1430,20 @@ class SaveAsTemplateModal(Modal, title="СОХРАНИТЬ КАК ШАБЛОН")
 def register_embed(bot):
     @bot.tree.command(name="embed", description="Создать Message Build с embed'ами и интерактивом")
     @discord.app_commands.guild_only()
-    async def embed_command(interaction):
+    @discord.app_commands.describe(
+        from_message="Собрать build из готового сообщения: ссылка или ID",
+        file="Импорт build'а из JSON-файла (экспорт этого бота)",
+    )
+    async def embed_command(interaction, from_message: str = None, file: discord.Attachment = None):
         if not await core.require_command_access(interaction, "embed"):
+            return
+        if from_message or file:
+            from build_tools import import_from_message, import_from_file
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            if file:
+                await import_from_file(interaction, file)
+            else:
+                await import_from_message(interaction, from_message)
             return
         await interaction.response.send_message(
             embed=panel_embed(interaction, "embed.home"),

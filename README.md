@@ -58,6 +58,22 @@ Buttons, lists, form apply buttons, review buttons, role menus and `/logo`
 results are persistent: they keep working after a restart and always read the
 current data from the database.
 
+## Message Build tools (`/embed`)
+
+- **From an existing message:** `/embed` → **Из сообщения** (or
+  `/embed from_message:<link>`) — paste a message link (right click → Copy
+  Message Link) or an ID from the current channel. Content, embeds, buttons and
+  lists are turned into a draft build. Buttons made by this bot keep their
+  actions; other bots' buttons keep only their look and need a new action.
+- **Export / import:** a build's card → **Экспорт JSON** gives a file;
+  `/embed file:<json>` on any server opens it as a draft. Role, form, webhook
+  and build references are re-checked for the new server and creator — the ones
+  that don't fit are reset, not trusted.
+- **History:** before every save the previous state is kept (last 25). A build's
+  card → **История** → pick a version → preview or roll back. A rollback is
+  itself saved, so it can be undone. Sent messages follow after
+  **Обновить отправленные**.
+
 ## Logo generator (`/logo`)
 
 Role icons generated in your own style via Hugging Face Inference Providers.
