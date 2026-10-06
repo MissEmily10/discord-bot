@@ -435,17 +435,17 @@ class EmbedEditorTests(unittest.TestCase):
         bid = database.save_message_build(GUILD, STAFF, "t", "привет", json.dumps([em.default_embed_data()]), buttons)
 
         async def check():
-            parts = em.message_parts(bid)
+            parts = actions.message_parts(bid)
             self.assertEqual(len(parts), 1)
             self.assertEqual(parts[0]["content"], "привет")
             self.assertNotIn("embed", parts[0])
             self.assertIn("view", parts[0])
             # только кнопки: Discord не примет сообщение без текста и embed'а — оставляем пустой embed
             only = database.save_message_build(GUILD, STAFF, "b", "", json.dumps([em.default_embed_data()]), buttons)
-            self.assertIn("embed", em.message_parts(only)[0])
+            self.assertIn("embed", actions.message_parts(only)[0])
             # совсем пусто
             empty = database.save_message_build(GUILD, STAFF, "e", "", json.dumps([em.default_embed_data()]), "[]")
-            self.assertEqual(em.message_parts(empty), [])
+            self.assertEqual(actions.message_parts(empty), [])
 
         run(check())
 

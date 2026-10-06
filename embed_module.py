@@ -21,13 +21,13 @@ import core
 from core import PanelView, Modal, t, panel_embed, get_user_level, actions_for_level
 from actions import (
     MAX_EMBEDS, MAX_BUTTONS, BUTTON_STYLES,
-    say, normalize_url, valid_emoji, build_discord_embed, render_source, load_source,
+    say, valid_emoji, build_discord_embed,
     validate_action_value, build_visible, template_visible, form_visible,
-    check_url, embed_has_content, EMBED_TOTAL_LIMIT, message_parts,
+    check_url, embed_has_content, EMBED_TOTAL_LIMIT,
 )
 from database import (
     save_message_build, update_message_build, get_message_build, get_message_builds,
-    delete_message_build, save_sent_instance, get_sent_instances, delete_sent_instance,
+    delete_message_build, get_sent_instances,
     save_template, get_templates, get_template, get_forms, get_form,
 )
 

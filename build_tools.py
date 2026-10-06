@@ -22,7 +22,7 @@ import discord
 import core
 from core import PanelView, Modal, t, panel_embed
 from actions import (
-    MAX_EMBEDS, MAX_BUTTONS, BUTTON_STYLES, NATIVE_SELECT_CLASSES,
+    MAX_EMBEDS, MAX_BUTTONS, NATIVE_SELECT_CLASSES,
     say, reply, normalize_button, validate_action_value, load_source, build_visible,
     render_source, check_url,
 )

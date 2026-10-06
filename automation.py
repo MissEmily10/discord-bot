@@ -20,7 +20,7 @@ import asyncio
 import logging
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import discord
 from discord.ext import tasks
@@ -43,7 +43,6 @@ MIN_LIVE_MINUTES = 5
 MAX_SCHEDULES_PER_BUILD = 10
 MAX_TRIGGERS_PER_BUILD = 10
 THREAD_DELAY = 2  # форум не даёт писать в пост, пока автор не создал первое сообщение
-FAILURES_BEFORE_PAUSE = 3
 
 EVENTS = ("member_join", "thread_create", "keyword")
 
@@ -157,6 +156,15 @@ _live_last = {}  # build_id -> ts последнего обновления по
 
 @tasks.loop(seconds=30)
 async def _tick():
+    # Любая ошибка внутри не должна останавливать цикл: tasks.loop
+    # прекращает работу на первом необработанном исключении.
+    try:
+        await _tick_once()
+    except Exception:
+        _log.exception("automation tick failed")
+
+
+async def _tick_once():
     now = int(time.time())
     for schedule in get_due_schedules(now):
         try:
