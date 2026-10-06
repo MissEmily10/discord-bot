@@ -115,14 +115,23 @@ def can_view(interaction, owner_id, visibility, role_ids=(), levels=()):
     создатель, владелец бота и админы видят всё; public — все;
     иначе — по разрешённым ролям или минимальному уровню.
     """
-    if interaction.user.id == owner_id or core.is_owner(interaction):
+    return member_can_view(interaction.guild, interaction.user, owner_id, visibility, role_ids, levels)
+
+
+def member_can_view(guild, user, owner_id, visibility, role_ids=(), levels=()):
+    """То же правило для любого участника (user — Member или id): нужно, чтобы
+    в момент клика перепроверить СОЗДАТЕЛЯ кнопки, а не только нажавшего."""
+    user_id = user if isinstance(user, int) else user.id
+    if user_id == owner_id or core.is_owner_id(user_id):
         return True
-    level = core.level_value(get_user_level(interaction))
+    level = core.level_value(member_level(guild, user))
     if level >= core.level_value("admin"):
         return True
     if visibility == "public":
         return True
-    member_roles = {role.id for role in getattr(interaction.user, "roles", [])}
+    if isinstance(user, int):
+        user = guild.get_member(user) if guild is not None else None
+    member_roles = {role.id for role in getattr(user, "roles", [])}
     if role_ids and member_roles & set(role_ids):
         return True
     if levels and level >= min(core.level_value(lvl) for lvl in levels):
@@ -671,20 +680,44 @@ async def _webhook_send(interaction, value, **_):
         await interaction.response.send_modal(WebhookSendModal(value or ""))
 
 
-async def _build_trigger(interaction, value, **_):
+def build_attach_allowed(interaction, row, creator_id):
+    """
+    Может ли нажавший открыть build, прикреплённый к кнопке.
+    Прикрепляя build, создатель сам его публикует: private означает лишь
+    «не виден в чужих списках», поэтому нажавшему его показываем. Но только
+    пока создатель сам видит этот build (не потерял доступ), а у restricted
+    ограничение по ролям/уровням действует и для нажавшего.
+    """
+    if creator_id is None:
+        return build_visible(interaction, row)
+    creator_ok = member_can_view(interaction.guild, creator_id, row[2], row[7], _json(row[9], []), _json(row[10], []))
+    if not creator_ok:
+        return False
+    return row[7] != "restricted" or build_visible(interaction, row)
+
+
+async def _build_trigger(interaction, value, creator_id=None, **_):
+    from embed_module import message_parts
+
     build_id = parse_id(value)
     row = get_message_build(build_id) if build_id else None
     if not row or row[1] != interaction.guild.id:
         await reply(interaction, "embed.build_not_found")
         return
-    if not build_visible(interaction, row):
+    if not build_attach_allowed(interaction, row, creator_id):
         await reply(interaction, "actions.build_no_access")
         return
-    content, embeds, view = render_source("b", build_id)
-    if not content and not embeds and view is None:
+    # Как при обычной отправке: каждый embed отдельным сообщением, иначе
+    # большой build упрётся в лимит Discord 6000 символов на сообщение.
+    parts = message_parts(build_id)
+    if not parts:
         await reply(interaction, "embed.build_empty")
         return
-    await interaction.response.send_message(content=content, embeds=embeds, view=view, ephemeral=True)
+    for index, part in enumerate(parts):
+        if index == 0 and not interaction.response.is_done():
+            await interaction.response.send_message(ephemeral=True, **part)
+        else:
+            await interaction.followup.send(ephemeral=True, **part)
 
 
 _HANDLERS = {

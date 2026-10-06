@@ -115,7 +115,7 @@ async def ping(interaction):
 # отправляются постоянными кнопками (actions.ActionButton, источник "s").
 
 # старые слова из модалки -> ключ реестра действий
-LEGACY_ACTION_WORDS = {"message": "message.send", "confirm": "message.confirm"}
+LEGACY_ACTION_WORDS = {"message": "message.send", "confirm": "message.confirm", "build": "build.trigger"}
 STYLE_WORDS = {"primary": "blue", "secondary": "grey", "success": "green", "danger": "red",
                "blue": "blue", "grey": "grey", "green": "green", "red": "red"}
 

@@ -367,10 +367,29 @@ class ButtonTests(unittest.TestCase):
         self.assertFalse(actions.build_visible(FakeInteraction(g, g.members[MEMBER]), row))
         self.assertTrue(actions.build_visible(FakeInteraction(g, g.members[STAFF]), row))
         self.assertTrue(actions.build_visible(FakeInteraction(g, g.members[ADMIN]), row))
-        # build.trigger не раскрывает чужой приватный build
+        # restricted: ограничение действует и через кнопку
         i = FakeInteraction(g, g.members[MEMBER])
         run(actions.dispatch_action(i, "build.trigger", str(bid), creator_id=ADMIN))
         self.assertEqual(i.last, core.t("actions.build_no_access"))
+
+    def test_build_trigger_shows_private_build_to_presser(self):
+        g = self.guild
+        embeds = json.dumps([{"title": "Правила"}, {"title": "FAQ"}])
+        buttons = json.dumps([{"label": "Ок", "style": "blue", "action_key": "message.send", "value": "hi"}])
+        bid = database.save_message_build(GUILD, STAFF, "info", "текст", embeds, buttons)  # private по умолчанию
+        # кнопку собрал сам автор — участник видит build: текст+embed, затем второй embed с кнопками
+        i = FakeInteraction(g, g.members[MEMBER])
+        run(actions.dispatch_action(i, "build.trigger", str(bid), creator_id=STAFF))
+        self.assertEqual(i.response.sent, ["текст"])
+        self.assertEqual(len(i.followups), 1)
+        # чужой приватный build создатель кнопки не видит — и нажавший тоже
+        other = database.save_message_build(GUILD, ADMIN, "secret", "x", "[]", "[]")
+        i = FakeInteraction(g, g.members[MEMBER])
+        run(actions.dispatch_action(i, "build.trigger", str(other), creator_id=STAFF))
+        self.assertEqual(i.last, core.t("actions.build_no_access"))
+        # и при создании такую кнопку не собрать
+        _, error = actions.validate_action_value(FakeInteraction(g, g.members[STAFF]), "build.trigger", str(other))
+        self.assertEqual(error, "actions.build_trigger.bad_value")
 
 
 class ResyncTests(unittest.TestCase):

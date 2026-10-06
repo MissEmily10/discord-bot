@@ -128,6 +128,9 @@ def buttons_text(state):
     for index, raw in enumerate(state.buttons, start=1):
         label = raw.get("label") or t("common.default_button_label")
         action = raw.get("action_key") or ("link" if raw.get("style") == "link" else raw.get("action", "?"))
+        if action == "build.trigger" and raw.get("value"):
+            build = get_message_build(int(raw["value"])) if str(raw["value"]).isdigit() else None
+            action = f"{action} → {(build[3] if build else '?')} #{raw['value']}"
         lines.append(t("buttons.builder.line", n=index, emoji=raw.get("emoji") or "", label=label, action=action))
     return "\n".join(lines) or t("buttons.builder.empty")
 
@@ -705,7 +708,42 @@ class ActionPickSelect(discord.ui.Select):
             # значение не нужно — сразу добавляем
             await commit_pending(interaction, self.state, self.pending, self.target, self.builder_view, "")
             return
+        if action_key == "build.trigger":
+            # ID никто не помнит — даём выбрать из сохранённых сообщений
+            view = PanelView(timeout=300)
+            view.add_item(BuildPickSelect(interaction, self.state, self.pending, self.target, self.builder_view))
+            await interaction.response.edit_message(embed=panel_embed(interaction, "embed.build_pick"), view=view)
+            return
         await interaction.response.send_modal(ActionValueModal(self.state, self.pending, self.target, self.builder_view))
+
+
+class BuildPickSelect(discord.ui.Select):
+    """Выбор сохранённого Message Build, который кнопка будет показывать."""
+
+    def __init__(self, interaction, state, pending, target, builder_view):
+        rows = [
+            row for row in get_message_builds(interaction.guild.id)
+            if row[0] != state.build_id and build_visible(interaction, get_message_build(row[0]))
+        ][:25]
+        options = [
+            discord.SelectOption(
+                label=f"{(name or t('embed.default_name'))[:90]} · #{bid}",
+                description=t("embed.build_pick.option", visibility=vis)[:100],
+                value=str(bid),
+            )
+            for bid, owner, name, vis, cat, updated in rows
+        ] or [discord.SelectOption(label=t("embed.saved.empty")[:100], value="__none__")]
+        super().__init__(placeholder=t("embed.build_pick.placeholder")[:150], options=options, row=0)
+        self.state = state
+        self.pending = pending
+        self.target = target
+        self.builder_view = builder_view
+
+    async def callback(self, interaction):
+        if self.values[0] == "__none__":
+            await say(interaction, "embed.build_pick.none")
+            return
+        await commit_pending(interaction, self.state, self.pending, self.target, self.builder_view, self.values[0])
 
 
 class ActionValueModal(Modal, title="ЗНАЧЕНИЕ"):

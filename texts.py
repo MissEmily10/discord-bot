@@ -175,7 +175,7 @@ CATALOG = {
     "actions.role.forbidden": "Discord запретил изменение роли.",
     "actions.role.assigned": 'Роль {role} выдана.',
     "actions.role.removed": 'Роль {role} снята.',
-    "actions.build_trigger.bad_value": "Для build.trigger укажи ID Message Build.",
+    "actions.build_trigger.bad_value": "Для build.trigger укажи ID сохранённого Message Build этого сервера (ID видно в /messages).",
 
     # ================= /embed (Message Build) =================
     "embed.home.title": "MESSAGE BUILD",
@@ -286,6 +286,14 @@ CATALOG = {
     "embed.button_color.link": "🔗 Ссылка",
     "embed.button_action.title": "ДЕЙСТВИЕ",
     "embed.button_action.text": "Что должна делать кнопка? Список зависит от твоего уровня доступа.",
+    "embed.build_pick.title": "СООБЩЕНИЕ ДЛЯ КНОПКИ",
+    "embed.build_pick.text": (
+        "Выбери сохранённый Message Build. По нажатию участник увидит его (только для себя) "
+        "вместе со всеми кнопками и списками, которые в нём были. Правки build'а подхватываются сразу."
+    ),
+    "embed.build_pick.placeholder": "Выбери сохранённое сообщение",
+    "embed.build_pick.option": "Видимость: {visibility}",
+    "embed.build_pick.none": "Сначала сохрани сообщение в /embed — потом его можно прикрепить к кнопке.",
     "embed.button_value_modal.title": "ЗНАЧЕНИЕ",
     "embed.button_value_modal.value_input": "URL или текст действия",
 
@@ -328,10 +336,10 @@ CATALOG = {
     "buttons.modal.emoji_input": "Emoji",
     "buttons.modal.emoji_input.placeholder": "Например: ✨ или :my_emoji:",
     "buttons.modal.style_input": "Стиль: primary / secondary / success / danger",
-    "buttons.modal.action_input": 'Действие: link / message / confirm / ключ',
-    "buttons.modal.value_input": "URL или текст действия",
+    "buttons.modal.action_input": 'Действие: link / message / confirm / build',
+    "buttons.modal.value_input": "URL, текст или ID build'а из /messages",
     "buttons.modal.bad_style": "Стиль должен быть: primary, secondary, success или danger.",
-    "buttons.modal.bad_action": 'Такого действия нет или оно тебе недоступно. Варианты: link, message, confirm или ключ из реестра действий.',
+    "buttons.modal.bad_action": 'Такого действия нет или оно тебе недоступно. Варианты: link, message, confirm, build (сохранённое сообщение) или ключ из реестра действий.',
     "buttons.modal.need_url": "Для link нужен URL.",
     "buttons.saved_set.title": "BUTTON SET СОХРАНЁН",
     "buttons.saved_set.text": "ID: `{id}`\nКнопок: **{count}**",
@@ -530,7 +538,7 @@ CATALOG = {
     "actions.creator_revoked": 'Создатель этой кнопки больше не имеет права на это действие.',
     "actions.edit_not_bot": 'Редактировать можно только сообщения бота.',
     "actions.webhook_record_missing": 'Вебхук не найден на этом сервере.',
-    "actions.build_no_access": 'У тебя нет доступа к этому Message Build.',
+    "actions.build_no_access": 'Это сообщение тебе недоступно: оно ограничено по ролям/уровню или его автор потерял к нему доступ.',
     "actions.bad_value.link": 'Нужна ссылка вида https://…',
     "embed.value_hint.link": 'https://example.com',
     "embed.value_hint.message.send": 'Текст, который увидит нажавший',
@@ -541,7 +549,7 @@ CATALOG = {
     "embed.value_hint.role.remove": 'ID роли или @упоминание роли',
     "embed.value_hint.role.toggle": 'ID роли или @упоминание роли',
     "embed.value_hint.webhook.send": 'ID вебхука из /webhooks или URL',
-    "embed.value_hint.build.trigger": 'ID Message Build',
+    "embed.value_hint.build.trigger": 'ID Message Build (виден в /messages, например 12)',
     "access.home.audit_button": 'Журнал',
     "access.audit.title": 'ЖУРНАЛ ДЕЙСТВИЙ',
     "access.audit.text": 'Последние действия на сервере:\n\n{entries}',
