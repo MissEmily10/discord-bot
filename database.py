@@ -1,8 +1,11 @@
 import json
+import os
 import sqlite3
 import time
 
-DATABASE_NAME = "bot.db"
+# Путь к БД можно переопределить (например, на volume хостинга); по умолчанию —
+# bot.db в рабочей папке процесса, как и раньше.
+DATABASE_NAME = os.getenv("DATABASE_PATH", "bot.db")
 
 # Строка bot_settings с этим guild_id — общие для всего бота настройки
 # (тексты, цвета, thumbnails). Остальные guild_id — наследие старого /design.
@@ -143,15 +146,30 @@ def init_database():
     """)
 
     # Action registry — granular permissions for what a button/select can do.
+    # min_level — кто может СОЗДАТЬ кнопку с этим действием,
+    # use_level — кто может НАЖАТЬ такую кнопку.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS action_registry (
             action_key TEXT PRIMARY KEY,
             min_level TEXT NOT NULL DEFAULT 'member',
             dangerous INTEGER NOT NULL DEFAULT 0,
             description TEXT,
-            enabled INTEGER NOT NULL DEFAULT 1
+            enabled INTEGER NOT NULL DEFAULT 1,
+            use_level TEXT NOT NULL DEFAULT 'member'
         )
     """)
+    cursor.execute("PRAGMA table_info(action_registry)")
+    if "use_level" not in {row[1] for row in cursor.fetchall()}:
+        cursor.execute("""
+            ALTER TABLE action_registry
+            ADD COLUMN use_level TEXT NOT NULL DEFAULT 'member'
+        """)
+        # раньше уровень проверялся у нажавшего — для этих действий
+        # нажимать по-прежнему могут только админы
+        cursor.execute("""
+            UPDATE action_registry SET use_level = 'admin'
+            WHERE action_key IN ('message.edit', 'webhook.send')
+        """)
 
     # Sent instances — makes Message Build a "living object": every real
     # message the bot sends from a build is remembered here, so it can be
@@ -163,9 +181,15 @@ def init_database():
             message_id INTEGER NOT NULL,
             channel_id INTEGER NOT NULL,
             guild_id INTEGER NOT NULL,
-            sent_at INTEGER NOT NULL
+            sent_at INTEGER NOT NULL,
+            part_index INTEGER
         )
     """)
+    cursor.execute("PRAGMA table_info(sent_instances)")
+    if "part_index" not in {row[1] for row in cursor.fetchall()}:
+        # номер сообщения внутри одной отправки (0 — начало новой отправки);
+        # у старых записей NULL — для них работает запасная логика
+        cursor.execute("ALTER TABLE sent_instances ADD COLUMN part_index INTEGER")
 
     # Старый /design сохранял 5 значений на конкретный сервер. Теперь
     # настройки общие: переносим их в глобальные, не перетирая уже заданные.
@@ -403,7 +427,11 @@ def is_user_denied(guild_id, user_id):
         WHERE guild_id = ? AND user_id = ?
     """, (guild_id, user_id)).fetchone()
     connection.close()
-    return row[0] if row else None
+    # Запрет без причины (reason = NULL) — всё равно запрет: возвращаем "",
+    # чтобы проверки `is not None` его видели.
+    if row is None:
+        return None
+    return row[0] if row[0] is not None else ""
 
 
 def undeny_user(guild_id, user_id):
@@ -514,15 +542,52 @@ def get_message_builds(guild_id, owner_id=None, include_public=True):
     return rows
 
 
-def delete_message_build(build_id, owner_id):
+def update_message_build(
+    build_id,
+    name,
+    content,
+    embeds_json,
+    buttons_json,
+    visibility,
+    category,
+    allowed_role_ids_json,
+    visibility_levels_json,
+    interactive_json,
+):
     connection = get_connection()
     cursor = connection.cursor()
     cursor.execute("""
-        DELETE FROM message_builds
-        WHERE id = ? AND owner_id = ?
-    """, (build_id, owner_id))
+        UPDATE message_builds
+        SET name = ?, content = ?, embeds_json = ?, buttons_json = ?,
+            visibility = ?, category = ?, allowed_role_ids_json = ?,
+            visibility_levels_json = ?, interactive_json = ?, updated_at = ?
+        WHERE id = ?
+    """, (
+        name, content, embeds_json, buttons_json, visibility, category,
+        allowed_role_ids_json, visibility_levels_json, interactive_json,
+        _now(), build_id,
+    ))
     connection.commit()
     changed = cursor.rowcount > 0
+    connection.close()
+    return changed
+
+
+def delete_message_build(build_id, owner_id=None):
+    """owner_id=None — удалить независимо от владельца (проверка прав — в вызывающем коде)."""
+    connection = get_connection()
+    cursor = connection.cursor()
+    if owner_id is None:
+        cursor.execute("DELETE FROM message_builds WHERE id = ?", (build_id,))
+    else:
+        cursor.execute("""
+            DELETE FROM message_builds
+            WHERE id = ? AND owner_id = ?
+        """, (build_id, owner_id))
+    changed = cursor.rowcount > 0
+    if changed:
+        cursor.execute("DELETE FROM sent_instances WHERE build_id = ?", (build_id,))
+    connection.commit()
     connection.close()
     return changed
 
@@ -531,13 +596,13 @@ def delete_message_build(build_id, owner_id):
 # SENT INSTANCES (living Message Build)
 # =========================
 
-def save_sent_instance(build_id, message_id, channel_id, guild_id):
+def save_sent_instance(build_id, message_id, channel_id, guild_id, part_index=None):
     connection = get_connection()
     cursor = connection.cursor()
     cursor.execute("""
-        INSERT INTO sent_instances (build_id, message_id, channel_id, guild_id, sent_at)
-        VALUES (?, ?, ?, ?, ?)
-    """, (build_id, message_id, channel_id, guild_id, _now()))
+        INSERT INTO sent_instances (build_id, message_id, channel_id, guild_id, sent_at, part_index)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (build_id, message_id, channel_id, guild_id, _now(), part_index))
     connection.commit()
     connection.close()
 
@@ -545,13 +610,20 @@ def save_sent_instance(build_id, message_id, channel_id, guild_id):
 def get_sent_instances(build_id):
     connection = get_connection()
     rows = connection.execute("""
-        SELECT message_id, channel_id, guild_id, sent_at
+        SELECT message_id, channel_id, guild_id, sent_at, part_index
         FROM sent_instances
         WHERE build_id = ?
-        ORDER BY sent_at DESC
+        ORDER BY id ASC
     """, (build_id,)).fetchall()
     connection.close()
     return rows
+
+
+def delete_sent_instance(message_id):
+    connection = get_connection()
+    connection.execute("DELETE FROM sent_instances WHERE message_id = ?", (message_id,))
+    connection.commit()
+    connection.close()
 
 
 # =========================
@@ -632,13 +704,16 @@ def get_button_sets(guild_id, owner_id=None, include_public=True):
     return rows
 
 
-def delete_button_set(set_id, owner_id):
+def delete_button_set(set_id, owner_id=None):
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute("""
-        DELETE FROM button_sets
-        WHERE id = ? AND owner_id = ?
-    """, (set_id, owner_id))
+    if owner_id is None:
+        cursor.execute("DELETE FROM button_sets WHERE id = ?", (set_id,))
+    else:
+        cursor.execute("""
+            DELETE FROM button_sets
+            WHERE id = ? AND owner_id = ?
+        """, (set_id, owner_id))
     connection.commit()
     changed = cursor.rowcount > 0
     connection.close()
@@ -695,17 +770,20 @@ def set_setting(guild_id, key, value):
 # ACTION REGISTRY
 # =========================
 
-def upsert_action(action_key, min_level, dangerous, description, enabled=1):
+# строка реестра: (action_key, min_level, dangerous, description, enabled, use_level)
+
+def upsert_action(action_key, min_level, dangerous, description, enabled=1, use_level="member"):
     connection = get_connection()
     connection.execute("""
-        INSERT INTO action_registry (action_key, min_level, dangerous, description, enabled)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO action_registry (action_key, min_level, dangerous, description, enabled, use_level)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(action_key) DO UPDATE SET
             min_level = excluded.min_level,
             dangerous = excluded.dangerous,
             description = excluded.description,
-            enabled = excluded.enabled
-    """, (action_key, min_level, int(dangerous), description, int(enabled)))
+            enabled = excluded.enabled,
+            use_level = excluded.use_level
+    """, (action_key, min_level, int(dangerous), description, int(enabled), use_level))
     connection.commit()
     connection.close()
 
@@ -713,7 +791,7 @@ def upsert_action(action_key, min_level, dangerous, description, enabled=1):
 def get_action(action_key):
     connection = get_connection()
     row = connection.execute("""
-        SELECT action_key, min_level, dangerous, description, enabled
+        SELECT action_key, min_level, dangerous, description, enabled, use_level
         FROM action_registry WHERE action_key = ?
     """, (action_key,)).fetchone()
     connection.close()
@@ -722,16 +800,10 @@ def get_action(action_key):
 
 def get_actions(enabled_only=False):
     connection = get_connection()
-    if enabled_only:
-        rows = connection.execute("""
-            SELECT action_key, min_level, dangerous, description, enabled
-            FROM action_registry WHERE enabled = 1
-        """).fetchall()
-    else:
-        rows = connection.execute("""
-            SELECT action_key, min_level, dangerous, description, enabled
-            FROM action_registry
-        """).fetchall()
+    rows = connection.execute("""
+        SELECT action_key, min_level, dangerous, description, enabled, use_level
+        FROM action_registry
+    """ + (" WHERE enabled = 1" if enabled_only else "") + " ORDER BY action_key").fetchall()
     connection.close()
     return rows
 
@@ -750,6 +822,24 @@ def set_action_min_level(action_key, min_level):
     connection.execute("""
         UPDATE action_registry SET min_level = ? WHERE action_key = ?
     """, (min_level, action_key))
+    connection.commit()
+    connection.close()
+
+
+def set_action_use_level(action_key, use_level):
+    connection = get_connection()
+    connection.execute("""
+        UPDATE action_registry SET use_level = ? WHERE action_key = ?
+    """, (use_level, action_key))
+    connection.commit()
+    connection.close()
+
+
+def set_action_dangerous(action_key, dangerous):
+    connection = get_connection()
+    connection.execute("""
+        UPDATE action_registry SET dangerous = ? WHERE action_key = ?
+    """, (int(dangerous), action_key))
     connection.commit()
     connection.close()
 
@@ -834,6 +924,34 @@ def _ensure_extended_tables():
     c.execute("""CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, actor_id INTEGER NOT NULL,
         action TEXT NOT NULL, target_type TEXT, target_id TEXT, details TEXT, created_at INTEGER NOT NULL
+    )""")
+    # Избранное — у каждого своё. Раньше это был один флаг на шаблон:
+    # любой, кто видел шаблон, переключал "избранное" для всех.
+    c.execute("""CREATE TABLE IF NOT EXISTS template_favorites (
+        user_id INTEGER NOT NULL, template_id INTEGER NOT NULL, created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, template_id)
+    )""")
+    c.execute("""INSERT OR IGNORE INTO template_favorites (user_id, template_id, created_at)
+        SELECT owner_id, id, ? FROM templates WHERE is_favorite = 1""", (_now(),))
+    c.execute("UPDATE templates SET is_favorite = 0 WHERE is_favorite = 1")
+    # Меню ролей (self-roles): участник сам выбирает роли из заданного списка.
+    c.execute("""CREATE TABLE IF NOT EXISTS role_menus (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,
+        name TEXT NOT NULL, placeholder TEXT, roles_json TEXT NOT NULL DEFAULT '[]',
+        max_values INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    )""")
+    # Лого-генератор: стили (референсы + промпт + модель/LoRA) и история генераций.
+    c.execute("""CREATE TABLE IF NOT EXISTS logo_styles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,
+        name TEXT NOT NULL, prompt TEXT NOT NULL DEFAULT '', negative_prompt TEXT NOT NULL DEFAULT '',
+        model TEXT, lora TEXT, strength REAL NOT NULL DEFAULT 0.65,
+        references_json TEXT NOT NULL DEFAULT '[]', is_default INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS logo_generations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        style_id INTEGER, mode TEXT NOT NULL, prompt TEXT, file_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL
     )""")
     connection.commit(); connection.close()
 
@@ -938,11 +1056,11 @@ def get_webhooks(guild_id,owner_id=None):
     connection.close(); return rows
 
 
-def update_webhook_record(record_id,name=None,channel_id=None,url=None,avatar_url=None):
+def update_webhook_record(record_id,name=None,channel_id=None,url=None,avatar_url=None,webhook_id=None):
     row=get_webhook(record_id)
     if not row: return False
-    vals=(name if name is not None else row[5],channel_id if channel_id is not None else row[4],url if url is not None else row[6],avatar_url if avatar_url is not None else row[7],_now(),record_id)
-    connection=get_connection(); connection.execute('UPDATE webhooks SET name=?,channel_id=?,url=?,avatar_url=?,updated_at=? WHERE id=?',vals); connection.commit(); connection.close(); return True
+    vals=(webhook_id if webhook_id is not None else row[3],name if name is not None else row[5],channel_id if channel_id is not None else row[4],url if url is not None else row[6],avatar_url if avatar_url is not None else row[7],_now(),record_id)
+    connection=get_connection(); connection.execute('UPDATE webhooks SET webhook_id=?,name=?,channel_id=?,url=?,avatar_url=?,updated_at=? WHERE id=?',vals); connection.commit(); connection.close(); return True
 
 
 def delete_webhook_record(record_id):
@@ -985,3 +1103,152 @@ def get_audit_logs(guild_id, limit=50):
     """, (guild_id, limit)).fetchall()
     connection.close()
     return rows
+
+
+# =========================
+# FORMS: удаление и защита от дублей
+# =========================
+
+def delete_form(form_id):
+    _ensure_extended_tables(); connection = get_connection(); c = connection.cursor()
+    c.execute("DELETE FROM forms WHERE id=?", (form_id,)); changed = c.rowcount > 0
+    connection.commit(); connection.close(); return changed
+
+
+def get_pending_submission(form_id, applicant_id):
+    _ensure_extended_tables(); connection = get_connection()
+    row = connection.execute(
+        "SELECT id FROM form_submissions WHERE form_id=? AND applicant_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
+        (form_id, applicant_id),
+    ).fetchone()
+    connection.close(); return row[0] if row else None
+
+
+# =========================
+# TEMPLATE FAVORITES (у каждого пользователя свои)
+# =========================
+
+def is_template_favorite(user_id, template_id):
+    _ensure_extended_tables(); connection = get_connection()
+    row = connection.execute("SELECT 1 FROM template_favorites WHERE user_id=? AND template_id=?", (user_id, template_id)).fetchone()
+    connection.close(); return row is not None
+
+
+def set_user_template_favorite(user_id, template_id, is_favorite):
+    _ensure_extended_tables(); connection = get_connection()
+    if is_favorite:
+        connection.execute("INSERT OR IGNORE INTO template_favorites (user_id, template_id, created_at) VALUES (?,?,?)", (user_id, template_id, _now()))
+    else:
+        connection.execute("DELETE FROM template_favorites WHERE user_id=? AND template_id=?", (user_id, template_id))
+    connection.commit(); connection.close()
+
+
+def get_user_favorite_template_ids(user_id):
+    _ensure_extended_tables(); connection = get_connection()
+    rows = connection.execute("SELECT template_id FROM template_favorites WHERE user_id=?", (user_id,)).fetchall()
+    connection.close(); return {row[0] for row in rows}
+
+
+# =========================
+# ROLE MENUS
+# =========================
+
+def save_role_menu(guild_id, owner_id, name, placeholder, roles_json, max_values):
+    _ensure_extended_tables(); now = _now(); connection = get_connection(); c = connection.cursor()
+    c.execute("""INSERT INTO role_menus (guild_id, owner_id, name, placeholder, roles_json, max_values, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?)""", (guild_id, owner_id, name, placeholder, roles_json, max_values, now, now))
+    rid = c.lastrowid; connection.commit(); connection.close(); return rid
+
+
+def get_role_menu(menu_id):
+    _ensure_extended_tables(); connection = get_connection()
+    row = connection.execute("""SELECT id, guild_id, owner_id, name, placeholder, roles_json, max_values, created_at, updated_at
+        FROM role_menus WHERE id=?""", (menu_id,)).fetchone()
+    connection.close(); return row
+
+
+def get_role_menus(guild_id):
+    _ensure_extended_tables(); connection = get_connection()
+    rows = connection.execute("""SELECT id, owner_id, name, roles_json, max_values, updated_at
+        FROM role_menus WHERE guild_id=? ORDER BY updated_at DESC""", (guild_id,)).fetchall()
+    connection.close(); return rows
+
+
+def delete_role_menu(menu_id):
+    _ensure_extended_tables(); connection = get_connection(); c = connection.cursor()
+    c.execute("DELETE FROM role_menus WHERE id=?", (menu_id,)); changed = c.rowcount > 0
+    connection.commit(); connection.close(); return changed
+
+
+# =========================
+# LOGO STYLES / GENERATIONS
+# =========================
+# строка стиля: (id, guild_id, owner_id, name, prompt, negative_prompt, model, lora,
+#                strength, references_json, is_default, created_at, updated_at)
+
+_LOGO_STYLE_COLUMNS = ("id, guild_id, owner_id, name, prompt, negative_prompt, model, lora, "
+                       "strength, references_json, is_default, created_at, updated_at")
+
+
+def save_logo_style(guild_id, owner_id, name, prompt="", negative_prompt="", model=None, lora=None, strength=0.65):
+    _ensure_extended_tables(); now = _now(); connection = get_connection(); c = connection.cursor()
+    c.execute("""INSERT INTO logo_styles (guild_id, owner_id, name, prompt, negative_prompt, model, lora, strength,
+        references_json, is_default, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,'[]',0,?,?)""",
+        (guild_id, owner_id, name, prompt, negative_prompt, model, lora, strength, now, now))
+    rid = c.lastrowid; connection.commit(); connection.close(); return rid
+
+
+def update_logo_style(style_id, **fields):
+    allowed = {"name", "prompt", "negative_prompt", "model", "lora", "strength", "references_json"}
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if not fields:
+        return False
+    _ensure_extended_tables(); connection = get_connection(); c = connection.cursor()
+    assignments = ", ".join(f"{k}=?" for k in fields)
+    c.execute(f"UPDATE logo_styles SET {assignments}, updated_at=? WHERE id=?", (*fields.values(), _now(), style_id))
+    changed = c.rowcount > 0; connection.commit(); connection.close(); return changed
+
+
+def set_default_logo_style(guild_id, style_id):
+    _ensure_extended_tables(); connection = get_connection()
+    connection.execute("UPDATE logo_styles SET is_default = (id = ?) WHERE guild_id = ?", (style_id, guild_id))
+    connection.commit(); connection.close()
+
+
+def get_logo_style(style_id):
+    _ensure_extended_tables(); connection = get_connection()
+    row = connection.execute(f"SELECT {_LOGO_STYLE_COLUMNS} FROM logo_styles WHERE id=?", (style_id,)).fetchone()
+    connection.close(); return row
+
+
+def get_logo_styles(guild_id):
+    _ensure_extended_tables(); connection = get_connection()
+    rows = connection.execute(f"SELECT {_LOGO_STYLE_COLUMNS} FROM logo_styles WHERE guild_id=? ORDER BY is_default DESC, name",
+                              (guild_id,)).fetchall()
+    connection.close(); return rows
+
+
+def delete_logo_style(style_id):
+    _ensure_extended_tables(); connection = get_connection(); c = connection.cursor()
+    c.execute("DELETE FROM logo_styles WHERE id=?", (style_id,)); changed = c.rowcount > 0
+    connection.commit(); connection.close(); return changed
+
+
+def save_logo_generation(guild_id, user_id, style_id, mode, prompt, file_path):
+    _ensure_extended_tables(); connection = get_connection(); c = connection.cursor()
+    c.execute("""INSERT INTO logo_generations (guild_id, user_id, style_id, mode, prompt, file_path, created_at)
+        VALUES (?,?,?,?,?,?,?)""", (guild_id, user_id, style_id, mode, prompt, file_path, _now()))
+    rid = c.lastrowid; connection.commit(); connection.close(); return rid
+
+
+def get_logo_generation(generation_id):
+    _ensure_extended_tables(); connection = get_connection()
+    row = connection.execute("""SELECT id, guild_id, user_id, style_id, mode, prompt, file_path, created_at
+        FROM logo_generations WHERE id=?""", (generation_id,)).fetchone()
+    connection.close(); return row
+
+
+def count_recent_logo_generations(user_id, since):
+    _ensure_extended_tables(); connection = get_connection()
+    row = connection.execute("SELECT COUNT(*) FROM logo_generations WHERE user_id=? AND created_at>=?", (user_id, since)).fetchone()
+    connection.close(); return row[0]

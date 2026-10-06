@@ -1,2 +1,5 @@
-discord.py
+discord.py>=2.4
 python-dotenv
+aiohttp
+huggingface_hub>=1.0
+Pillow

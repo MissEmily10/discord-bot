@@ -1,0 +1,567 @@
+"""
+Тесты без Discord: временная БД + фейковые объекты discord.
+
+Запуск из корня проекта:
+    python3 -m unittest discover tests -v
+"""
+
+import asyncio
+import io
+import json
+import os
+import pathlib
+import sqlite3
+import sys
+import tempfile
+import types
+import unittest
+import warnings
+import zipfile
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+_TMP = tempfile.TemporaryDirectory()
+os.environ["DATABASE_PATH"] = os.path.join(_TMP.name, "test.db")
+os.environ["LOGO_DIR"] = os.path.join(_TMP.name, "logo")
+os.environ["OWNER_ID"] = "1"
+os.environ["DISCORD_TOKEN"] = ""
+for name in ("WEB_PANEL_PORT", "SERVER_PORT", "HF_TOKEN"):
+    os.environ.pop(name, None)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+import discord  # noqa: E402
+
+import database  # noqa: E402
+import core  # noqa: E402
+import actions  # noqa: E402
+
+OWNER, ADMIN, ADMIN2, STAFF, MEMBER = 1, 10, 11, 20, 30
+GUILD = 500
+
+
+# =========================
+# FAKES
+# =========================
+
+class FakeRole:
+    def __init__(self, role_id, position, perms=None, managed=False, default=False, name=None):
+        self.id = role_id
+        self.position = position
+        self.permissions = discord.Permissions(**(perms or {}))
+        self.managed = managed
+        self._default = default
+        self.name = name or f"role{role_id}"
+        self.mention = f"<@&{role_id}>"
+
+    def is_default(self):
+        return self._default
+
+    def __ge__(self, other):
+        return self.position >= other.position
+
+    def __lt__(self, other):
+        return self.position < other.position
+
+    def __eq__(self, other):
+        return isinstance(other, FakeRole) and other.id == self.id
+
+    def __hash__(self):
+        return hash(self.id)
+
+
+class FakeMember:
+    def __init__(self, user_id, roles=(), manage_roles=False):
+        self.id = user_id
+        self.roles = list(roles)
+        self.mention = f"<@{user_id}>"
+        self.name = f"user{user_id}"
+        self.guild_permissions = discord.Permissions(manage_roles=manage_roles)
+        self.added, self.removed = [], []
+        self.display_avatar = types.SimpleNamespace(url="https://cdn/avatar.png")
+
+    @property
+    def top_role(self):
+        return max(self.roles, key=lambda r: r.position) if self.roles else FakeRole(0, 0, default=True)
+
+    async def add_roles(self, role, reason=None):
+        self.added.append(role.id)
+        self.roles.append(role)
+
+    async def remove_roles(self, role, reason=None):
+        self.removed.append(role.id)
+        self.roles = [r for r in self.roles if r.id != role.id]
+
+
+class FakeGuild:
+    def __init__(self):
+        self.id = GUILD
+        self.owner_id = 999
+        self.features = ["ROLE_ICONS"]
+        self.everyone = FakeRole(GUILD, 0, default=True)
+        self.bot_role = FakeRole(2, 50, perms={"manage_roles": True})
+        self.me = FakeMember(777, [self.bot_role], manage_roles=True)
+        self.roles_by_id = {}
+        self.members = {}
+
+    def add_role(self, role):
+        self.roles_by_id[role.id] = role
+        return role
+
+    @property
+    def roles(self):
+        return list(self.roles_by_id.values())
+
+    def get_role(self, role_id):
+        return self.roles_by_id.get(role_id)
+
+    def get_member(self, user_id):
+        return self.members.get(user_id)
+
+    def get_channel(self, channel_id):
+        return None
+
+
+class FakeResponse:
+    def __init__(self):
+        self.sent = []
+        self.modals = []
+        self.done = False
+
+    def is_done(self):
+        return self.done
+
+    async def send_message(self, content=None, **kwargs):
+        self.done = True
+        self.sent.append(content)
+
+    async def send_modal(self, modal):
+        self.done = True
+        self.modals.append(modal)
+
+    async def edit_message(self, **kwargs):
+        self.done = True
+
+    async def defer(self, **kwargs):
+        self.done = True
+
+
+class FakeInteraction:
+    def __init__(self, guild, member):
+        self.guild = guild
+        self.user = member
+        self.response = FakeResponse()
+        self.followup = types.SimpleNamespace(send=self._followup)
+        self.client = types.SimpleNamespace(user=guild.me)
+        self.message = None
+        self.followups = []
+
+    async def _followup(self, content=None, **kwargs):
+        self.followups.append(content)
+
+    @property
+    def last(self):
+        return (self.response.sent + self.followups)[-1]
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+def setUpModule():
+    database.init_database()
+    core.reload_settings()
+    core.ensure_default_actions()
+    database.set_access_level(GUILD, ADMIN, "admin")
+    database.set_access_level(GUILD, ADMIN2, "admin")
+    database.set_access_level(GUILD, STAFF, "staff")
+
+
+def make_guild():
+    guild = FakeGuild()
+    guild.safe = guild.add_role(FakeRole(100, 5, name="Художник"))
+    guild.high = guild.add_role(FakeRole(101, 40, name="Старший"))
+    guild.danger = guild.add_role(FakeRole(102, 6, perms={"administrator": True}, name="Админка"))
+    guild.above_bot = guild.add_role(FakeRole(103, 60, name="Выше бота"))
+    guild.managed = guild.add_role(FakeRole(104, 7, managed=True, name="Интеграция"))
+    staff_role = FakeRole(105, 30, name="Staff")
+    guild.add_role(staff_role)
+    for uid, roles in ((OWNER, []), (ADMIN, [guild.high]), (ADMIN2, [guild.high]), (STAFF, [staff_role]), (MEMBER, [])):
+        guild.members[uid] = FakeMember(uid, roles)
+    return guild
+
+
+# =========================
+# TESTS
+# =========================
+
+class MigrationTests(unittest.TestCase):
+    def test_legacy_database_is_upgraded(self):
+        path = os.path.join(_TMP.name, "legacy.db")
+        con = sqlite3.connect(path)
+        con.executescript("""
+            CREATE TABLE bot_settings (guild_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (guild_id, key));
+            INSERT INTO bot_settings VALUES (123, 'embed_color', '0x112233');
+            CREATE TABLE action_registry (action_key TEXT PRIMARY KEY, min_level TEXT NOT NULL DEFAULT 'member',
+                dangerous INTEGER NOT NULL DEFAULT 0, description TEXT, enabled INTEGER NOT NULL DEFAULT 1);
+            INSERT INTO action_registry VALUES ('message.edit', 'admin', 1, 'x', 1);
+            INSERT INTO action_registry VALUES ('role.assign', 'staff', 1, 'x', 1);
+            CREATE TABLE sent_instances (id INTEGER PRIMARY KEY AUTOINCREMENT, build_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, guild_id INTEGER NOT NULL, sent_at INTEGER NOT NULL);
+        """)
+        con.commit()
+        con.close()
+        old = database.DATABASE_NAME
+        database.DATABASE_NAME = path
+        try:
+            database.init_database()
+            database.init_database()  # повторный старт ничего не ломает
+            con = sqlite3.connect(path)
+            settings = con.execute("SELECT guild_id, key, value FROM bot_settings").fetchall()
+            self.assertEqual(settings, [(0, "embed_color", "0x112233")])
+            self.assertEqual(con.execute("SELECT use_level FROM action_registry WHERE action_key='message.edit'").fetchone()[0], "admin")
+            self.assertEqual(con.execute("SELECT use_level FROM action_registry WHERE action_key='role.assign'").fetchone()[0], "member")
+            columns = {row[1] for row in con.execute("PRAGMA table_info(sent_instances)")}
+            self.assertIn("part_index", columns)
+            con.close()
+        finally:
+            database.DATABASE_NAME = old
+
+    def test_template_favorites_become_per_user(self):
+        tid = database.save_template(GUILD, STAFF, "fav", "message", "{}")
+        con = database.get_connection()
+        con.execute("UPDATE templates SET is_favorite=1 WHERE id=?", (tid,))
+        con.commit()
+        con.close()
+        database._ensure_extended_tables()
+        self.assertTrue(database.is_template_favorite(STAFF, tid))
+        self.assertFalse(database.is_template_favorite(MEMBER, tid))
+        database.set_user_template_favorite(MEMBER, tid, True)
+        self.assertTrue(database.is_template_favorite(MEMBER, tid))
+        database.set_user_template_favorite(STAFF, tid, False)
+        database._ensure_extended_tables()  # флаг не должен "воскреснуть"
+        self.assertFalse(database.is_template_favorite(STAFF, tid))
+
+
+class PermissionTests(unittest.TestCase):
+    def setUp(self):
+        self.guild = make_guild()
+
+    def i(self, uid):
+        return FakeInteraction(self.guild, self.guild.members[uid])
+
+    def test_levels(self):
+        self.assertEqual(core.get_user_level(self.i(OWNER)), "owner")
+        self.assertEqual(core.get_user_level(self.i(ADMIN)), "admin")
+        self.assertEqual(core.member_level(self.guild, STAFF), "staff")
+        self.assertEqual(core.member_level(self.guild, MEMBER), "member")
+
+    def test_manage_only_strictly_lower(self):
+        self.assertFalse(core.can_manage_user(self.i(ADMIN), ADMIN2))  # равный
+        self.assertTrue(core.can_manage_user(self.i(ADMIN), STAFF))
+        self.assertFalse(core.can_manage_user(self.i(ADMIN), ADMIN))   # сам себя
+        self.assertFalse(core.can_manage_user(self.i(ADMIN), OWNER))
+        self.assertFalse(core.can_manage_user(self.i(STAFF), MEMBER))  # staff не управляет
+        self.assertTrue(core.can_manage_user(self.i(OWNER), ADMIN))
+
+    def test_assign_admin_is_owner_only(self):
+        self.assertFalse(core.can_assign_level(self.i(ADMIN), "admin"))
+        self.assertTrue(core.can_assign_level(self.i(ADMIN), "staff"))
+        self.assertTrue(core.can_assign_level(self.i(OWNER), "admin"))
+
+    def test_denied_user_loses_individual_grant(self):
+        database.add_command_access(GUILD, "embed", MEMBER)
+        self.assertTrue(core.has_command_access(self.i(MEMBER), "embed"))
+        database.deny_user(GUILD, MEMBER)
+        try:
+            self.assertFalse(core.has_command_access(self.i(MEMBER), "embed"))
+        finally:
+            database.undeny_user(GUILD, MEMBER)
+            database.remove_command_access(GUILD, "embed", MEMBER)
+
+    def test_role_problem(self):
+        g = self.guild
+        staff = g.members[STAFF]
+        owner = g.members[OWNER]
+        self.assertIsNone(core.role_problem(g, g.safe, staff))
+        self.assertEqual(core.role_problem(g, g.danger, staff), "roles.dangerous")
+        self.assertIsNone(core.role_problem(g, g.danger, owner))
+        self.assertEqual(core.role_problem(g, g.above_bot, owner), "roles.above_bot")
+        self.assertEqual(core.role_problem(g, g.high, staff), "roles.above_actor")
+        self.assertEqual(core.role_problem(g, g.managed, owner), "roles.managed")
+        self.assertEqual(core.role_problem(g, g.everyone, owner), "roles.everyone")
+        self.assertEqual(core.role_problem(g, None, owner), "roles.not_found")
+
+
+class ButtonTests(unittest.TestCase):
+    def setUp(self):
+        self.guild = make_guild()
+
+    def test_normalize_legacy_and_new(self):
+        legacy = actions.normalize_button({"label": "L", "style": "success", "action": "message", "value": "hi"})
+        self.assertEqual((legacy["style"], legacy["action_key"]), ("green", "message.send"))
+        link = actions.normalize_button({"label": "L", "action": "link", "value": "x.com"})
+        self.assertEqual(link["style"], "link")
+        new = actions.normalize_button({"label": "N", "style": "red", "action_key": "role.assign", "value": "5"})
+        self.assertEqual((new["style"], new["action_key"]), ("red", "role.assign"))
+
+    def test_components_are_persistent_and_fit_rows(self):
+        async def build():
+            buttons = [{"label": f"b{n}", "style": "blue", "action_key": "message.send", "value": "x"} for n in range(30)]
+            interactive = {"type": "list", "options": [{"label": "o", "action_key": "message.send"}]}
+            return actions.build_components("b", 7, buttons, interactive)
+
+        view = run(build())
+        ids = [child.custom_id for child in view.children]
+        self.assertEqual(ids[0], "rb:l:b:7")
+        self.assertEqual(ids[1], "rb:a:b:7:0")
+        self.assertEqual(len(view.children), 1 + 20)  # 4 ряда кнопок после списка
+        self.assertTrue(all(c.is_persistent() for c in view.children))
+
+    def test_validate_values(self):
+        i = FakeInteraction(self.guild, self.guild.members[STAFF])
+        self.assertEqual(actions.validate_action_value(i, "role.assign", "<@&100>"), ("100", None))
+        self.assertEqual(actions.validate_action_value(i, "role.assign", "102")[1], "roles.dangerous")
+        self.assertEqual(actions.validate_action_value(i, "role.assign", "999")[1], "actions.role.bad_value")
+        self.assertEqual(actions.validate_action_value(i, "form.trigger", "424242")[1], "actions.form_trigger.bad_value")
+        self.assertEqual(actions.validate_action_value(i, None, "example.com", style="link"), ("https://example.com", None))
+        self.assertEqual(actions.validate_action_value(i, "select.trigger", "nope")[1], "actions.select_trigger.bad_value")
+
+    def test_role_button_respects_creator(self):
+        g = self.guild
+        member = g.members[MEMBER]
+        i = FakeInteraction(g, member)
+        run(actions.dispatch_action(i, "role.toggle", "100", creator_id=STAFF))
+        self.assertEqual(member.added, [100])
+        # повторное нажатие снимает роль
+        i = FakeInteraction(g, member)
+        run(actions.dispatch_action(i, "role.toggle", "100", creator_id=STAFF))
+        self.assertEqual(member.removed, [100])
+        # создатель понижен — кнопка перестаёт работать
+        database.set_access_level(GUILD, STAFF, "member")
+        try:
+            i = FakeInteraction(g, member)
+            run(actions.dispatch_action(i, "role.assign", "100", creator_id=STAFF))
+            self.assertEqual(i.last, core.t("actions.creator_revoked"))
+        finally:
+            database.set_access_level(GUILD, STAFF, "staff")
+
+    def test_role_turned_dangerous_after_creation(self):
+        g = self.guild
+        g.safe.permissions = discord.Permissions(administrator=True)
+        i = FakeInteraction(g, g.members[MEMBER])
+        run(actions.dispatch_action(i, "role.assign", "100", creator_id=STAFF, skip_confirmation=True))
+        self.assertEqual(i.last, core.t("roles.dangerous"))
+        self.assertEqual(g.members[MEMBER].added, [])
+
+    def test_admin_only_action_blocked_for_member(self):
+        i = FakeInteraction(self.guild, self.guild.members[MEMBER])
+        run(actions.dispatch_action(i, "message.edit", "", creator_id=ADMIN))
+        self.assertEqual(i.last, core.t("actions.no_access"))
+
+    def test_build_visibility(self):
+        g = self.guild
+        bid = database.save_message_build(GUILD, STAFF, "secret", "", "[]", "[]", visibility="restricted",
+                                          allowed_role_ids_json="[]", visibility_levels_json='["staff"]')
+        row = database.get_message_build(bid)
+        self.assertFalse(actions.build_visible(FakeInteraction(g, g.members[MEMBER]), row))
+        self.assertTrue(actions.build_visible(FakeInteraction(g, g.members[STAFF]), row))
+        self.assertTrue(actions.build_visible(FakeInteraction(g, g.members[ADMIN]), row))
+        # build.trigger не раскрывает чужой приватный build
+        i = FakeInteraction(g, g.members[MEMBER])
+        run(actions.dispatch_action(i, "build.trigger", str(bid), creator_id=ADMIN))
+        self.assertEqual(i.last, core.t("actions.build_no_access"))
+
+
+class ResyncTests(unittest.TestCase):
+    def test_group_sends(self):
+        import embed_module
+
+        groups = embed_module._group_sends([(1, 0), (2, 1), (3, 0), (4, 1), (5, None), (6, None)])
+        self.assertEqual(groups, [[1, 2], [3, 4], [5], [6]])
+
+
+class TextTests(unittest.TestCase):
+    def test_t_and_overrides(self):
+        self.assertIn("5", core.t("embed.buttons.text", count=1, max=5, buttons=""))
+        core.set_setting("common.cancelled", "Отмена {oops} {")
+        self.assertEqual(core.t("common.cancelled", x=1), "Отмена {oops} {")
+        core.reset_setting("common.cancelled")
+        self.assertEqual(core.t("common.cancelled"), "Отменено.")
+
+    def test_catalog_complete(self):
+        import subprocess
+
+        result = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_texts.py")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+
+class WebPanelTests(unittest.TestCase):
+    def test_validate(self):
+        import web_panel
+
+        self.assertEqual(web_panel.validate("embed_color", "#ff8800"), ("0xFF8800", None))
+        self.assertIsNotNone(web_panel.validate("embed_color", "#12345")[1])
+        self.assertIsNotNone(web_panel.validate("access.home.text", "Уровень {oops}")[1])
+        self.assertEqual(web_panel.validate("access.home.text", "Уровень {level}"), ("Уровень {level}", None))
+        self.assertEqual(web_panel.validate("forms.home.thumbnail", "none"), ("none", None))
+        self.assertIn("logo.prompt.base", web_panel.editable_keys())
+
+
+class LogoTests(unittest.TestCase):
+    def setUp(self):
+        from PIL import Image
+
+        self.Image = Image
+        buffer = io.BytesIO()
+        Image.new("RGB", (300, 200), (200, 20, 20)).save(buffer, format="PNG")
+        self.png = buffer.getvalue()
+
+    def test_icon_processing(self):
+        import logo_module
+
+        icon = logo_module.to_icon_png(logo_module.open_image(self.png))
+        self.assertEqual(self.Image.open(io.BytesIO(icon)).size, (512, 512))
+        noisy = self.Image.effect_noise((900, 900), 100).convert("RGB")
+        buffer = io.BytesIO()
+        noisy.save(buffer, format="PNG")
+        small = logo_module.role_icon_bytes(buffer.getvalue())
+        self.assertIsNotNone(small)
+        self.assertLessEqual(len(small), logo_module.ROLE_ICON_MAX_BYTES)
+
+    def test_style_references_dataset_and_zip_limits(self):
+        import logo_module
+
+        style_id = database.save_logo_style(GUILD, ADMIN, "Мой стиль", "neon outline")
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("a.png", self.png)
+            z.writestr("notes.txt", "x")
+            z.writestr("broken.png", b"not an image")
+        added, skipped = logo_module.import_zip(database.get_logo_style(style_id), archive.getvalue())
+        self.assertEqual((added, skipped), (1, 2))
+        row = database.get_logo_style(style_id)
+        self.assertEqual(len(logo_module.references_of(row)), 1)
+        buffer, trigger = logo_module.build_dataset_zip(row)
+        names = zipfile.ZipFile(buffer).namelist()
+        self.assertIn("001.png", names)
+        self.assertIn("001.txt", names)
+        self.assertTrue(trigger.startswith("rbstyle"))
+
+    def test_generation_uses_style_and_lora(self):
+        import logo_module
+
+        calls = {}
+
+        class FakeClient:
+            async def text_to_image(self, prompt, **kwargs):
+                calls["prompt"], calls["model"] = prompt, kwargs["model"]
+                return self_image()
+
+        def self_image():
+            return self.Image.new("RGB", (1024, 1024), (0, 0, 0))
+
+        style_id = database.save_logo_style(GUILD, ADMIN, "LoRA", "pastel glass", lora="me/my-icons-lora")
+        original = logo_module._client
+        logo_module._client = lambda: FakeClient()
+        try:
+            png = run(logo_module.generate_image("generate", database.get_logo_style(style_id), "кот-волшебник"))
+        finally:
+            logo_module._client = original
+        self.assertEqual(calls["model"], "me/my-icons-lora")
+        self.assertIn("pastel glass", calls["prompt"])
+        self.assertIn("кот-волшебник", calls["prompt"])
+        self.assertTrue(png.startswith(b"\x89PNG"))
+
+    def test_role_icon_rules_and_suggestions(self):
+        import logo_module
+
+        g = make_guild()
+        admin = g.members[ADMIN]
+        admin.guild_permissions = discord.Permissions(manage_roles=True)
+        self.assertIsNone(logo_module.role_icon_problem(g, g.safe, admin))
+        self.assertEqual(logo_module.role_icon_problem(g, g.safe, g.members[MEMBER]), "logo.need_manage_roles")
+        g.features = []
+        self.assertEqual(logo_module.role_icon_problem(g, g.safe, admin), "logo.no_role_icons")
+        g.features = ["ROLE_ICONS"]
+        suggested = logo_module.suggest_roles(g, "иконка для художник", admin)
+        self.assertEqual([r.id for r in suggested][:1], [100])
+
+    def test_backend_problem_without_token(self):
+        import logo_module
+
+        self.assertEqual(logo_module.backend_problem(), "logo.no_token")
+
+
+class ViewSmokeTests(unittest.TestCase):
+    """Все панели и модалки собираются, подписи укладываются в лимиты Discord."""
+
+    def test_views_and_modals(self):
+        import bot
+        import access_module as am
+        import embed_module as em
+        import extended_modules as ex
+        import logo_module as lm
+
+        async def build():
+            st = em.EmbedState(GUILD, STAFF)
+            fs = ex.FormState(GUILD, STAFF)
+            bs = bot.ButtonSetState()
+            back = (discord.Embed(title="x"), None)
+            hub = em.InteractiveHubView(st, back)
+            views = [
+                am.AccessHomeView(bot.bot), am.UserLevelView(1, "@u", back), am.LevelDurationView(1, "@u", "staff", back),
+                am.CommandAccessView("ping", "d", back), am.RoleLevelAccessView(1, "@r", back), am.SettingsView(bot.bot, back),
+                am.DesignView(), am.ActionEditView("message.send", back),
+                em.EmbedHomeView(GUILD, STAFF), em.VisibilityView(st, back), em.EmbedEditorView(st, back), hub,
+                em.CustomListBuilderView(st, hub, back), em.NativeSelectTypeView(st, hub, back),
+                em.ButtonBuilderView(st, hub, back), em.MessageBuildFinalView(1, back),
+                actions.DangerousActionView("message.edit", None),
+                ex.FormView(fs), ex.FormUseView(1), ex.FormStartView(GUILD, STAFF), ex.TemplateActions(1),
+                ex.WebhookActions(1), ex.WebhookDeleteView(1), ex.WebhookRegenerateView(1), ex.WebhookHome(),
+                ex.SelectHome(), ex.TemplateHome(), ex.RoleMenuActions(1),
+                bot.StandaloneButtonStartView(GUILD, STAFF), bot.InlineButtonBuilderView(bs, back), bot.ButtonSetActions(1),
+                lm.StyleActions(1),
+            ]
+            modals = [
+                am.LevelDurationCustomModal(1, "@u", "staff"), am.DesignModal(),
+                actions.MessageEditModal(types.SimpleNamespace(content="hi", embeds=[])), actions.WebhookSendModal(""),
+                actions.WebhookSendModal(record_id=1),
+                em.EmbedBasicModal(st, None), em.EmbedMediaModal(st, None), em.EmbedAuthorFooterModal(st, None),
+                em.EmbedFieldModal(st, None), em.BuildMetaModal(st, None), em.ListOptionModal(st, None),
+                em.ButtonLabelModal(st, None), em.ActionValueModal(st, {"action_key": "role.assign"}, "buttons", None),
+                em.SaveAsTemplateModal(1),
+                ex.FormBasicModal(fs, None), ex.FormQuestionModal(fs, None), ex.FormRoutingModal(fs, None),
+                ex.TemplateModal(), ex.WebhookCreateModal(), ex.WebhookMessageModal(1), ex.RejectReasonModal(1, None),
+                ex.RoleMenuModal([1, 2]), bot.InlineButtonModal(bs, back), bot.ButtonSetNameModal(bs, back),
+                lm.StyleModal(),
+            ]
+            for view in views:
+                for item in view.children:
+                    label = getattr(item, "label", None)
+                    if label is not None:
+                        self.assertLessEqual(len(label), 80, (view, label))
+                self.assertLessEqual(len(view.children), 25, view)
+            for modal in modals:
+                self.assertTrue(modal.title and len(modal.title) <= 45, modal)
+                self.assertLessEqual(len(modal.children), 5, modal)
+                for child in modal.children:
+                    self.assertLessEqual(len(child.label), 45, (modal, child.label))
+            # URL сохранённого вебхука не показывается нажавшему
+            self.assertEqual(len(actions.WebhookSendModal(record_id=1).children), 1)
+            return len(views), len(modals)
+
+        n_views, n_modals = run(build())
+        self.assertGreater(n_views, 30)
+        self.assertGreater(n_modals, 20)
+
+    def test_commands_registered(self):
+        import bot
+
+        names = sorted(c.name for c in bot.bot.tree.get_commands())
+        self.assertEqual(names, sorted(["access", "buttons", "design", "embed", "forms", "logo", "messages",
+                                        "panel", "ping", "select", "templates", "webhooks"]))
+
+
+if __name__ == "__main__":
+    unittest.main()

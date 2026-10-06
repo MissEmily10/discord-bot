@@ -28,15 +28,17 @@ import core
 from core import (
     PanelView, Modal, t, panel_embed, level_label,
     is_owner, get_user_level, can_manage_access, can_view_access,
-    can_assign_level, get_setting, set_setting, reset_setting,
-    ensure_default_actions, get_actions,
+    can_assign_level, can_manage_user, get_setting, set_setting, reset_setting,
+    ensure_default_actions, get_actions, audit,
 )
+import database
 from database import (
     add_command_access, get_command_access_details,
     remove_command_access, set_access_level,
     get_member_info, set_role_access, remove_role_access,
     deny_user, is_user_denied, undeny_user, get_denied_users,
-    set_action_enabled, set_action_min_level,
+    set_action_enabled, set_action_min_level, set_action_use_level, set_action_dangerous,
+    get_audit_logs,
 )
 
 
@@ -109,6 +111,16 @@ class AccessHomeView(PanelView):
             view=DenialAccessView(interaction, back_target=(interaction.message.embeds[0], self))
         )
 
+    @discord.ui.button(label="Журнал", emoji="📜", style=discord.ButtonStyle.secondary, row=1)
+    async def audit_button(self, interaction, button):
+        if not can_manage_access(interaction):
+            await deny(interaction, "common.need_admin")
+            return
+        await interaction.response.edit_message(
+            embed=audit_embed(interaction),
+            view=PanelView(back_target=(interaction.message.embeds[0], self)),
+        )
+
     @discord.ui.button(label="⚙️ Настройки", style=discord.ButtonStyle.secondary, row=1)
     async def settings_button(self, interaction, button):
         if not is_owner(interaction):
@@ -157,7 +169,7 @@ class UserLevelView(PanelView):
         self.user_mention = user_mention
 
     async def go_duration(self, interaction, level):
-        if not can_assign_level(interaction, level):
+        if not can_assign_level(interaction, level) or not can_manage_user(interaction, self.user_id):
             await deny(interaction, "access.user.cannot_assign")
             return
         await interaction.response.edit_message(
@@ -203,8 +215,12 @@ class LevelDurationCustomModal(Modal, title="СВОЙ СРОК"):
             await deny(interaction, "access.duration_modal.bad_hours")
             return
 
+        if not can_assign_level(interaction, self.level) or not can_manage_user(interaction, self.user_id):
+            await deny(interaction, "access.user.cannot_assign")
+            return
         expires_at = int(time.time() + hours * 3600)
         set_access_level(interaction.guild.id, self.user_id, self.level, expires_at)
+        audit(interaction, "access.level_set", "user", self.user_id, f"{self.level} for {hours}h")
         await interaction.response.send_message(
             t("access.duration.done_hours", user=self.user_mention, level=level_label(self.level), hours=hours),
             ephemeral=True
@@ -222,8 +238,12 @@ class LevelDurationView(PanelView):
         self.level = level
 
     async def apply(self, interaction, seconds):
+        if not can_assign_level(interaction, self.level) or not can_manage_user(interaction, self.user_id):
+            await deny(interaction, "access.user.cannot_assign")
+            return
         expires_at = int(time.time() + seconds) if seconds else None
         set_access_level(interaction.guild.id, self.user_id, self.level, expires_at)
+        audit(interaction, "access.level_set", "user", self.user_id, f"{self.level} until {expires_at or 'forever'}")
         until = t("access.duration.forever_word") if seconds is None else format_expiration(expires_at)
         await interaction.response.send_message(
             t("access.duration.done", user=self.user_mention, level=level_label(self.level), until=until),
@@ -336,8 +356,12 @@ class CommandUserPickView(PanelView):
     async def user_selected(self, interaction):
         user = self.user_select.values[0]
 
+        if not can_manage_access(interaction):
+            await deny(interaction, "common.need_admin")
+            return
         if self.mode == "remove":
             remove_command_access(interaction.guild.id, self.command_name, user.id)
+            audit(interaction, "access.command_revoked", "user", user.id, self.command_name)
             await interaction.response.edit_message(
                 embed=command_access_embed(interaction, self.command_name, self.description),
                 view=CommandAccessView(self.command_name, self.description, back_target=self.back_target)
@@ -363,8 +387,12 @@ class CommandDurationView(PanelView):
         self.user_mention = user_mention
 
     async def apply(self, interaction, seconds):
+        if not can_manage_access(interaction):
+            await deny(interaction, "common.need_admin")
+            return
         expires_at = int(time.time() + seconds) if seconds else None
         add_command_access(interaction.guild.id, self.command_name, self.user_id, expires_at)
+        audit(interaction, "access.command_granted", "user", self.user_id, self.command_name)
         await interaction.response.edit_message(
             embed=command_access_embed(interaction, self.command_name, self.description),
             view=CommandAccessView(self.command_name, self.description, back_target=self.back_target)
@@ -419,10 +447,13 @@ class RoleLevelAccessView(PanelView):
         return panel_embed(interaction, "access.role", role=self.mention)
 
     async def apply(self, interaction, level):
-        if not can_manage_access(interaction):
-            await deny(interaction, "common.not_enough_rights")
+        # уровень роли получают ВСЕ её обладатели — назначать можно только то,
+        # что ты вправе назначить человеку (admin — только владелец)
+        if not can_manage_access(interaction) or not can_assign_level(interaction, level):
+            await deny(interaction, "access.user.cannot_assign")
             return
         set_role_access(interaction.guild.id, self.role_id, level, None)
+        audit(interaction, "access.role_level_set", "role", self.role_id, level)
         await interaction.response.edit_message(
             embed=self.embed(interaction),
             view=self,
@@ -450,6 +481,7 @@ class RoleLevelAccessView(PanelView):
             await deny(interaction, "common.not_enough_rights")
             return
         remove_role_access(interaction.guild.id, self.role_id)
+        audit(interaction, "access.role_level_removed", "role", self.role_id)
         await interaction.response.edit_message(
             embed=self.embed(interaction),
             view=self,
@@ -481,11 +513,15 @@ class DenialAccessView(PanelView):
             await deny(interaction, "common.need_admin")
             return
         user = self.children[0].values[0]
+        if not can_manage_user(interaction, user.id):
+            await deny(interaction, "access.user.cannot_assign")
+            return
         reason = is_user_denied(interaction.guild.id, user.id)
 
         if reason is not None:
             # уже забанен — снимаем сразу, это не опасное действие
             undeny_user(interaction.guild.id, user.id)
+            audit(interaction, "access.undenied", "user", user.id)
             await interaction.response.edit_message(
                 embed=denial_list_embed(interaction),
                 view=DenialAccessView(interaction, back_target=self.back_target)
@@ -510,7 +546,11 @@ class DenyConfirmView(PanelView):
 
     @discord.ui.button(label="Подтвердить запрет", emoji="🚫", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction, button):
+        if not can_manage_user(interaction, self.user_id):
+            await deny(interaction, "access.user.cannot_assign")
+            return
         deny_user(interaction.guild.id, self.user_id, t("access.denials.default_reason"))
+        audit(interaction, "access.denied", "user", self.user_id)
         await interaction.response.edit_message(
             embed=denial_list_embed(interaction),
             view=DenialAccessView(interaction, back_target=self.back_target)
@@ -547,11 +587,14 @@ class SettingsView(PanelView):
             return
         try:
             await interaction.response.send_message(
-                file=discord.File("bot.db", filename=f"bot_backup_{int(time.time())}.db"),
+                file=discord.File(database.DATABASE_NAME, filename=f"bot_backup_{int(time.time())}.db"),
                 ephemeral=True
             )
         except FileNotFoundError:
             await deny(interaction, "access.settings.no_db")
+        except discord.HTTPException:
+            # файл больше лимита загрузки Discord
+            await deny(interaction, "access.settings.backup_too_large")
 
     @discord.ui.button(label="Денаи", emoji="🚫", style=discord.ButtonStyle.secondary)
     async def denials(self, interaction, button):
@@ -676,13 +719,23 @@ class DesignView(PanelView):
 # ACTION REGISTRY
 # ============================================================
 
+def audit_embed(interaction):
+    rows = get_audit_logs(interaction.guild.id, limit=20)
+    lines = [
+        t("access.audit.line", time=f"<t:{created_at}:R>", actor=f"<@{actor_id}>", action=action,
+          target=f"{target_type or ''} {target_id or ''}".strip(), details=details or "")
+        for actor_id, action, target_type, target_id, details, created_at in rows
+    ]
+    return panel_embed(interaction, "access.audit", entries=("\n".join(lines) or t("access.audit.empty"))[:3900])
+
+
 def action_registry_embed(interaction):
     rows = get_actions()
     lines = []
-    for key, min_level, dangerous, description, enabled in rows:
+    for key, min_level, dangerous, description, enabled, use_level in rows:
         status = "🟢" if enabled else "🔴"
         danger = "⚠️" if dangerous else ""
-        lines.append(f"{status} `{key}` — {level_label(min_level)} {danger}")
+        lines.append(t("access.registry.line", status=status, key=key, create=level_label(min_level), use=level_label(use_level), danger=danger))
     text = "\n".join(lines) or t("access.registry.empty")
     return panel_embed(interaction, "access.registry", actions=text)
 
@@ -693,7 +746,7 @@ class ActionRegistryView(PanelView):
     def __init__(self, back_target):
         super().__init__(back_target=back_target)
         rows = get_actions()
-        for key, min_level, dangerous, description, enabled in rows[:23]:
+        for key, min_level, dangerous, description, enabled, use_level in rows[:20]:
             button = discord.ui.Button(label=key, style=discord.ButtonStyle.secondary)
 
             async def callback(interaction, key=key):
@@ -718,6 +771,7 @@ class ActionEditView(PanelView):
         if not await ensure_owner(interaction):
             return
         set_action_min_level(self.action_key, level)
+        audit(interaction, "registry.min_level", "action", self.action_key, level)
         await interaction.response.edit_message(
             embed=action_registry_embed(interaction),
             view=self.back_target[1],
@@ -755,6 +809,33 @@ class ActionEditView(PanelView):
             view=self.back_target[1],
         )
 
+    @discord.ui.button(label="Подтверждение вкл/выкл", emoji="⚠️", row=1, style=discord.ButtonStyle.secondary)
+    async def toggle_dangerous(self, interaction, button):
+        if not await ensure_owner(interaction):
+            return
+        row = core.get_action(self.action_key)
+        set_action_dangerous(self.action_key, not (row and row[2]))
+        await interaction.response.edit_message(embed=action_registry_embed(interaction), view=self.back_target[1])
+
+    async def set_use_level(self, interaction, level):
+        if not await ensure_owner(interaction):
+            return
+        set_action_use_level(self.action_key, level)
+        audit(interaction, "registry.use_level", "action", self.action_key, level)
+        await interaction.response.edit_message(embed=action_registry_embed(interaction), view=self.back_target[1])
+
+    @discord.ui.button(label="Жмёт: Member", row=2, style=discord.ButtonStyle.secondary)
+    async def use_member(self, interaction, button):
+        await self.set_use_level(interaction, "member")
+
+    @discord.ui.button(label="Жмёт: Staff", row=2, style=discord.ButtonStyle.secondary)
+    async def use_staff(self, interaction, button):
+        await self.set_use_level(interaction, "staff")
+
+    @discord.ui.button(label="Жмёт: Admin", row=2, style=discord.ButtonStyle.secondary)
+    async def use_admin(self, interaction, button):
+        await self.set_use_level(interaction, "admin")
+
 
 # ============================================================
 # КОМАНДЫ /access и /design
@@ -769,7 +850,11 @@ def register_access(bot):
         await interaction.response.send_message(embed=design_embed(interaction), view=DesignView(), ephemeral=True)
 
     @bot.tree.command(name="access", description="Управление доступом к функциям бота")
+    @discord.app_commands.guild_only()
     async def access(interaction):
+        if interaction.guild is None:
+            await deny(interaction, "common.only_in_guild")
+            return
         if not can_view_access(interaction):
             await deny(interaction, "text_access_denied")
             return

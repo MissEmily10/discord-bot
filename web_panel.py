@@ -179,6 +179,31 @@ def _session_ok(request):
     return bool(sid) and sid in _sessions
 
 
+_SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    # картинки превью — внешние ссылки, поэтому img-src шире остального
+    "Content-Security-Policy": (
+        "default-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+    ),
+}
+
+
+@web.middleware
+async def security_headers(request, handler):
+    try:
+        response = await handler(request)
+    except web.HTTPException as error:
+        response = error
+    for name, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    if isinstance(response, web.HTTPException) and response.status >= 300:
+        raise response
+    return response
+
+
 @web.middleware
 async def auth_middleware(request, handler):
     if request.path.startswith("/api/"):
@@ -252,11 +277,12 @@ async def put_setting(request):
         core.reset_setting(key)
     else:
         core.set_setting(key, value)
+    _log.info("web panel: %s %s", "reset" if value is None else "set", key)
     return web.json_response(entry(key))
 
 
 def build_app():
-    app = web.Application(middlewares=[auth_middleware])
+    app = web.Application(middlewares=[security_headers, auth_middleware])
     app.router.add_get("/", index)
     app.router.add_get("/login", login)
     app.router.add_post("/api/logout", logout)
