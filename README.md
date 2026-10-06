@@ -32,6 +32,12 @@ overrides them from a web panel that runs inside the bot process.
 2. Restart the bot and run `/panel` in Discord (owner only). It replies with a
    one-time login link valid for 10 minutes; the browser session lasts 7 days.
 
+Panel images: each command has its own icon and banner
+(`thumbnail.<command>`, `banner.<command>` in the **Оформление** section; every
+screen of the command picks them up). Use **Загрузить** next to an image field
+to upload a PNG/JPG straight from the browser — sizes and the full list are in
+[docs/DESIGN_ASSETS.md](docs/DESIGN_ASSETS.md).
+
 After editing texts in code, run `python3 scripts/check_texts.py` to make sure
 every key used in the code exists in the catalog.
 

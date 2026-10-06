@@ -72,6 +72,9 @@
   .embed .e-title { font-weight: 700; margin-bottom: 4px; word-break: break-word; }
   .embed .e-text { white-space: normal; word-break: break-word; }
   .embed img { width: 72px; height: 72px; border-radius: 4px; object-fit: cover; }
+  .embed img.e-banner { grid-column: 1 / -1; width: 100%; height: auto; max-height: 220px; }
+  .upload { cursor: pointer; white-space: nowrap; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  .upload:hover { background: var(--panel-2); }
   .embed code { font-size: 13px; background: var(--panel-2); padding: 0 3px; border-radius: 3px; }
   .ph { background: var(--chip); color: var(--chip-text); border-radius: 3px; padding: 0 3px; font-size: 13px; }
   .empty { color: var(--muted); padding: 40px 0; text-align: center; }
@@ -113,11 +116,11 @@ const GROUP_NAMES = {
 };
 const GROUP_ORDER = Object.keys(GROUP_NAMES);
 const KIND_HINT = {
-  image: "Прямая ссылка на картинку. Пусто — общая картинка из «Оформления», none — без картинки, {bot_avatar} — аватар бота.",
+  image: "Загрузи файл или вставь ссылку. Пусто — берётся картинка команды, а если её нет — общая (*.default). none — без картинки, {bot_avatar} — аватар бота. Размеры — в docs/DESIGN_ASSETS.md.",
   color: "HEX-цвет, например #5865F2.",
 };
 
-let entries = new Map(), contexts = new Set(), bot = {}, activeGroup = "style";
+let entries = new Map(), contexts = new Set(), commandOf = {}, uploads = false, bot = {}, activeGroup = "style";
 const $ = (sel) => document.querySelector(sel);
 
 function esc(s) {
@@ -148,20 +151,30 @@ function hexColor(raw) {
   const m = String(raw || "").replace("#", "").replace(/^0x/i, "");
   return /^[0-9a-f]{6}$/i.test(m) ? "#" + m.toUpperCase() : "#5865F2";
 }
-function resolveThumb(context) {
-  let v = (live(context + ".thumbnail") || "").trim();
-  if (!v) v = (live("thumbnail.default") || "").trim();
+function imageUrl(v) {
+  v = (v || "").trim();
   if (!v || v.toLowerCase() === "none") return null;
   if (v === "{bot_avatar}") return bot.avatar;
   return /^https?:\/\//.test(v) ? v : "https://" + v;
 }
+// как в боте: <экран>.<kind> -> <kind>.<команда> -> <kind>.default
+function resolveImage(context, kind) {
+  const chain = context ? [context + "." + kind, kind + "." + (commandOf[context] || context.split(".")[0])] : [];
+  chain.push(kind + ".default");
+  for (const key of chain) {
+    const v = (live(key) || "").trim();
+    if (v) return imageUrl(v);
+  }
+  return null;
+}
+function resolveThumb(context) { return resolveImage(context, "thumbnail"); }
 
 function sectionOf(key) {
-  if (!key.includes(".") || key.startsWith("thumbnail.")) return "style";
+  if (!key.includes(".") || /^(thumbnail|banner)\./.test(key)) return "style";
   return key.slice(0, key.lastIndexOf("."));
 }
 function fieldName(key) {
-  return key.startsWith("thumbnail.") || !key.includes(".") ? key : key.slice(key.lastIndexOf(".") + 1);
+  return /^(thumbnail|banner)\./.test(key) || !key.includes(".") ? key : key.slice(key.lastIndexOf(".") + 1);
 }
 
 function visibleEntries() {
@@ -196,9 +209,11 @@ function previewHtml(context) {
   const title = live(context + ".title");
   const text = entries.has(context + ".text") ? live(context + ".text") : "";
   const thumb = resolveThumb(context);
+  const banner = resolveImage(context, "banner");
   return `<div class="embed" data-preview="${esc(context)}" style="border-left-color:${hexColor(live("embed_color"))}">
     <div><div class="e-title">${discordMarkdown(title)}</div><div class="e-text">${discordMarkdown(text)}</div></div>
     ${thumb ? `<img src="${esc(thumb)}" alt="" referrerpolicy="no-referrer">` : ""}
+    ${banner ? `<img class="e-banner" src="${esc(banner)}" alt="" referrerpolicy="no-referrer">` : ""}
   </div>`;
 }
 
@@ -210,9 +225,10 @@ function fieldHtml(e) {
     input = `<div class="row"><input type="color" value="${hexColor(val)}" data-color-for="${esc(e.key)}" aria-label="Цвет">
              <input type="text" id="f-${esc(e.key)}" data-key="${esc(e.key)}" value="${esc(hexColor(val))}"></div>`;
   } else if (e.kind === "image") {
-    const src = e.key === "thumbnail.default" ? resolveThumb("") : resolveThumb(e.key.replace(/\.thumbnail$/, ""));
+    const src = imageUrl(val);
+    const upload = uploads ? `<label class="upload">Загрузить<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" data-upload="${esc(e.key)}" hidden></label>` : "";
     input = `<div class="row"><input type="text" id="f-${esc(e.key)}" data-key="${esc(e.key)}" value="${esc(val)}" placeholder="https://…">
-             ${src && val ? `<img class="thumb-preview" src="${esc(src)}" alt="" referrerpolicy="no-referrer">` : ""}</div>`;
+             ${upload}${src ? `<img class="thumb-preview" src="${esc(src)}" alt="" referrerpolicy="no-referrer">` : ""}</div>`;
   } else {
     input = `<textarea id="f-${esc(e.key)}" data-key="${esc(e.key)}" rows="1">${esc(val)}</textarea>`;
   }
@@ -319,7 +335,7 @@ document.addEventListener("input", (ev) => {
   if (st) st.textContent = "";
   if (t.tagName === "TEXTAREA") autosize(t);
   const section = sectionOf(key);
-  if (key === "embed_color" || key === "thumbnail.default") contexts.forEach(refreshPreview);
+  if (key === "embed_color" || /^(thumbnail|banner)\./.test(key)) contexts.forEach(refreshPreview);
   else if (contexts.has(section)) refreshPreview(section);
 });
 
@@ -352,6 +368,31 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 
+// загрузка картинки: файл -> /api/assets -> ссылка сразу сохраняется в поле
+document.addEventListener("change", async (ev) => {
+  const t = ev.target;
+  if (!t.dataset || !t.dataset.upload || !t.files.length) return;
+  const key = t.dataset.upload, file = t.files[0];
+  const status = document.querySelector(`[data-status="${CSS.escape(key)}"]`);
+  if (file.size > 8 * 1024 * 1024) { status.className = "status err"; status.textContent = "Файл больше 8 МБ."; return; }
+  status.className = "status"; status.textContent = "Загружаю…";
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(",", 2)[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const res = await fetch("/api/assets", {method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({data})});
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || "Ошибка загрузки");
+    await save(key, body.url);
+  } catch (err) {
+    status.className = "status err"; status.textContent = err.message;
+  }
+});
+
 $("#search").addEventListener("input", render);
 $("#onlyChanged").addEventListener("change", render);
 $("#logout").addEventListener("click", async () => {
@@ -364,6 +405,8 @@ $("#logout").addEventListener("click", async () => {
     const data = await api("GET");
     data.entries.forEach(e => entries.set(e.key, e));
     contexts = new Set(data.contexts);
+    commandOf = data.command_of || {};
+    uploads = !!data.uploads;
     bot = data.bot;
     $("#botname").textContent = `${bot.name} · настройки`;
     if (bot.avatar) { $("#avatar").src = bot.avatar; $("#avatar").hidden = false; }

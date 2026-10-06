@@ -840,6 +840,44 @@ class WebPanelTests(unittest.TestCase):
         self.assertEqual(web_panel.validate("forms.home.thumbnail", "none"), ("none", None))
         self.assertIn("logo.prompt.base", web_panel.editable_keys())
 
+    def test_command_images_chain(self):
+        g = make_guild()
+        i = FakeInteraction(g, g.members[STAFF])
+        try:
+            core.set_setting("thumbnail.default", "https://cdn/default.png")
+            core.set_setting("thumbnail.embed", "https://cdn/embed.png")
+            core.set_setting("banner.embed", "https://cdn/embed-banner.png")
+            # экран команды без своей картинки -> картинка команды; automation относится к /embed
+            self.assertEqual(core.panel_embed(i, "embed.home").thumbnail.url, "https://cdn/embed.png")
+            self.assertEqual(core.panel_embed(i, "automation.schedules", list="", tz="").thumbnail.url, "https://cdn/embed.png")
+            self.assertEqual(core.panel_embed(i, "embed.home").image.url, "https://cdn/embed-banner.png")
+            # другая команда -> общая картинка, баннера нет
+            self.assertEqual(core.panel_embed(i, "forms.home").thumbnail.url, "https://cdn/default.png")
+            self.assertIsNone(core.panel_embed(i, "forms.home").image.url)
+            # своя картинка экрана и явное none
+            core.set_setting("embed.home.thumbnail", "none")
+            self.assertIsNone(core.panel_embed(i, "embed.home").thumbnail.url)
+        finally:
+            for key in ("thumbnail.default", "thumbnail.embed", "banner.embed", "embed.home.thumbnail"):
+                core.reset_setting(key)
+
+    def test_asset_upload(self):
+        import web_panel
+        from PIL import Image
+
+        web_panel.ASSETS_DIR = pathlib.Path(_TMP.name) / "assets"
+        buffer = io.BytesIO()
+        Image.new("RGBA", (256, 256), (10, 20, 30, 0)).save(buffer, format="PNG")
+        name, error = web_panel.save_asset(buffer.getvalue())
+        self.assertIsNone(error)
+        self.assertRegex(name, r"^[0-9a-f]{20}\.png$")
+        self.assertEqual(web_panel.save_asset(buffer.getvalue())[0], name)  # тот же файл — то же имя
+        self.assertIsNotNone(web_panel.save_asset(b"<svg onload=alert(1)>")[1])
+        self.assertIsNotNone(web_panel.save_asset(b"x" * (web_panel.MAX_ASSET_BYTES + 1))[1])
+        self.assertEqual(web_panel.validate("banner.embed", "none"), ("none", None))
+        self.assertIn("banner.embed", web_panel.editable_keys())
+        self.assertEqual(web_panel.group_of("banner.embed"), "style")
+
 
 class LogoTests(unittest.TestCase):
     def setUp(self):

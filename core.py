@@ -367,20 +367,50 @@ def danger_color(guild_id=None):
     return _parse_color(get_setting("danger_color"), discord.Color.red())
 
 
-def resolve_thumbnail(interaction, context):
+# Экраны, которые относятся к другой команде: картинка берётся у неё.
+COMMAND_OF = {
+    "automation": "embed", "build_tools": "embed", "messages": "embed", "live": "embed",
+    "design": "access", "actions": "embed",
+}
+# Команды, у которых есть своя общая картинка (thumbnail.<команда> / banner.<команда>).
+BRANDED_COMMANDS = ("embed", "forms", "access", "buttons", "templates", "webhooks", "select", "logo")
+
+
+def command_of(context):
+    head = (context or "").split(".", 1)[0]
+    return COMMAND_OF.get(head, head)
+
+
+def _resolve_image(interaction, context, kind):
     """
-    Thumbnail контекста: <context>.thumbnail -> thumbnail.default.
-    "none" — явно без картинки; {bot_avatar} — аватар бота.
+    Картинка экрана по цепочке: <экран>.<kind> -> <kind>.<команда> -> <kind>.default.
+    "none" на любом шаге — явно без картинки; {bot_avatar} — аватар бота.
     """
-    value = (get_setting(f"{context}.thumbnail") or "").strip() if context else ""
-    if not value:
-        value = (get_setting("thumbnail.default") or "").strip()
+    candidates = []
+    if context:
+        candidates += [f"{context}.{kind}", f"{kind}.{command_of(context)}"]
+    candidates.append(f"{kind}.default")
+    value = ""
+    for key in candidates:
+        value = (get_setting(key) or "").strip()
+        if value:
+            break
     if not value or value.lower() == "none":
         return None
     if value == "{bot_avatar}":
         user = interaction.client.user if interaction is not None else None
         return user.display_avatar.url if user else None
     return value if value.startswith(("http://", "https://")) else "https://" + value
+
+
+def resolve_thumbnail(interaction, context):
+    """Маленькая картинка справа сверху."""
+    return _resolve_image(interaction, context, "thumbnail")
+
+
+def resolve_banner(interaction, context):
+    """Широкий баннер внизу панели (embed image)."""
+    return _resolve_image(interaction, context, "banner")
 
 
 # Экран (контекст embed'а) -> префикс кнопок его панели, когда они называются по-разному.
@@ -447,6 +477,9 @@ def panel_embed(interaction, context, description=None, *, title=None, danger=Fa
     thumbnail = resolve_thumbnail(interaction, context)
     if thumbnail:
         embed.set_thumbnail(url=thumbnail)
+    banner = resolve_banner(interaction, context)
+    if banner:
+        embed.set_image(url=banner)
     return embed
 
 

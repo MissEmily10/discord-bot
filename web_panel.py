@@ -16,8 +16,12 @@ bot_settings через core.set_setting — изменения применяю
 Без порта панель не запускается, без URL /panel объяснит, что добавить.
 """
 
+import base64
+import hashlib
+import io
 import logging
 import os
+import re
 import pathlib
 import secrets
 import string
@@ -35,6 +39,12 @@ LOGIN_TTL = 10 * 60
 SESSION_TTL = 7 * 24 * 3600
 COOKIE = "panel_session"
 INDEX_HTML = pathlib.Path(__file__).with_name("web_panel.html")
+# Картинки, загруженные через панель (макеты из Figma): отдаются по /assets/<имя>
+# без входа — Discord должен их скачать, чтобы показать в embed'е.
+ASSETS_DIR = pathlib.Path(os.getenv("WEB_PANEL_ASSETS") or "panel_assets")
+MAX_ASSET_BYTES = 8 * 1024 * 1024
+ASSET_FORMATS = {"PNG": "png", "JPEG": "jpg", "GIF": "gif", "WEBP": "webp"}
+_ASSET_NAME = re.compile(r"^[0-9a-f]{20}\.(png|jpg|gif|webp)$")
 
 _login_tokens = {}  # token -> expires_at
 _sessions = {}      # session_id -> expires_at
@@ -103,7 +113,7 @@ def editable_keys():
 
 
 def group_of(key):
-    if "." not in key or key.startswith("thumbnail."):
+    if "." not in key or key.startswith(("thumbnail.", "banner.")):
         return "style"
     return key.split(".", 1)[0]
 
@@ -255,6 +265,8 @@ async def get_settings(request):
     return web.json_response({
         "entries": [entry(key) for key in editable_keys()],
         "contexts": screen_contexts(),
+        "command_of": {context: core.command_of(context) for context in screen_contexts()},
+        "uploads": bool(panel_url()),
         "bot": {
             "name": user.name if user else "Bot",
             "avatar": user.display_avatar.url if user else None,
@@ -281,13 +293,62 @@ async def put_setting(request):
     return web.json_response(entry(key))
 
 
+def save_asset(raw):
+    """Байты картинки -> (имя файла, None) или (None, ошибка). Одинаковые файлы не дублируются."""
+    if len(raw) > MAX_ASSET_BYTES:
+        return None, "Файл больше 8 МБ."
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(raw)) as image:
+            fmt = image.format
+            image.verify()
+    except Exception:
+        return None, "Это не картинка (нужен PNG, JPG, GIF или WebP)."
+    ext = ASSET_FORMATS.get(fmt)
+    if ext is None:
+        return None, "Формат не поддерживается: нужен PNG, JPG, GIF или WebP."
+    name = f"{hashlib.sha256(raw).hexdigest()[:20]}.{ext}"
+    ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    path = ASSETS_DIR / name
+    if not path.exists():
+        path.write_bytes(raw)
+    return name, None
+
+
+async def upload_asset(request):
+    if not panel_url():
+        return web.json_response({"error": "Загрузка работает, когда в .env задан WEB_PANEL_URL."}, status=409)
+    try:
+        body = await request.json()
+        raw = base64.b64decode(body.get("data") or "", validate=True)
+    except (ValueError, TypeError):
+        return web.json_response({"error": "Файл не прочитался, попробуй ещё раз."}, status=400)
+    name, error = save_asset(raw)
+    if error:
+        return web.json_response({"error": error}, status=422)
+    _log.info("web panel: uploaded asset %s (%d bytes)", name, len(raw))
+    return web.json_response({"url": f"{panel_url()}/assets/{name}"})
+
+
+async def get_asset(request):
+    name = request.match_info["name"]
+    path = ASSETS_DIR / name
+    if not _ASSET_NAME.match(name) or not path.is_file():
+        raise web.HTTPNotFound()
+    # имя = хэш содержимого, поэтому файл по этому адресу никогда не меняется
+    return web.FileResponse(path, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
 def build_app():
-    app = web.Application(middlewares=[security_headers, auth_middleware])
+    # base64 картинки до 8 МБ занимает ~11 МБ
+    app = web.Application(middlewares=[security_headers, auth_middleware], client_max_size=12 * 1024 * 1024)
     app.router.add_get("/", index)
     app.router.add_get("/login", login)
     app.router.add_post("/api/logout", logout)
     app.router.add_get("/api/settings", get_settings)
     app.router.add_put("/api/settings", put_setting)
+    app.router.add_post("/api/assets", upload_asset)
+    app.router.add_get("/assets/{name}", get_asset)
     return app
 
 

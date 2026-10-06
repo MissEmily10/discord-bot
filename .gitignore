@@ -4,3 +4,4 @@ __pycache__/
 *.py[cod]
 .DS_Store
 logo_files/
+panel_assets/

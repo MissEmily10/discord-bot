@@ -23,6 +23,25 @@ CATALOG = {
     "embed_color": "0x5865F2",
     "danger_color": "0xED4245",
     "thumbnail.default": "",
+    # Картинки команд: экран без своей картинки берёт картинку своей команды,
+    # а та — общую (*.default). "none" — без картинки. Размеры — docs/DESIGN_ASSETS.md.
+    "thumbnail.embed": "",
+    "thumbnail.forms": "",
+    "thumbnail.access": "",
+    "thumbnail.buttons": "",
+    "thumbnail.templates": "",
+    "thumbnail.webhooks": "",
+    "thumbnail.select": "",
+    "thumbnail.logo": "",
+    "banner.default": "",
+    "banner.embed": "",
+    "banner.forms": "",
+    "banner.access": "",
+    "banner.buttons": "",
+    "banner.templates": "",
+    "banner.webhooks": "",
+    "banner.select": "",
+    "banner.logo": "",
     "text_access_denied": "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
     "nav_back": "◀️ Назад",
     "nav_next": "▶️ Далее",
@@ -1051,6 +1070,6 @@ def kind(key):
     """Тип значения для редактора: color / image / text."""
     if key.endswith("color"):
         return "color"
-    if key.endswith("thumbnail"):
+    if key.endswith("thumbnail") or key.startswith(("thumbnail.", "banner.")):
         return "image"
     return "text"
