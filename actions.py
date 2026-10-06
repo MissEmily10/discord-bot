@@ -70,6 +70,28 @@ def normalize_url(url):
     return url if url.startswith(("http://", "https://")) else "https://" + url
 
 
+_URL = re.compile(r"^https?://[^\s/<>\"']+\.[^\s<>\"']+$", re.IGNORECASE)
+# Лимит Discord на сумму всех текстов одного embed'а.
+EMBED_TOTAL_LIMIT = 6000
+
+
+def check_url(value):
+    """-> (url или None, ok). Пустое — ok; мусор вроде «abc def» — не ok:
+    иначе Discord отклонит весь embed и редактор «зависнет» на ошибке."""
+    url = normalize_url(value)
+    if url is None:
+        return None, True
+    return (url, True) if _URL.match(url) else (None, False)
+
+
+def embed_has_content(data):
+    """Есть ли в embed'е хоть что-то видимое (пустые не отправляем)."""
+    return any(
+        str(data.get(key) or "").strip()
+        for key in ("title", "description", "image", "thumbnail", "author_name", "footer_text")
+    ) or bool(data.get("fields"))
+
+
 def valid_emoji(value):
     """Пустое, кастомное <:name:id> или короткая unicode-строка без латиницы/цифр."""
     value = (value or "").strip()
@@ -288,8 +310,15 @@ def render_source(src, source_id, data=None):
     data = data or load_source(src, source_id)
     if not data:
         return None, [], None
-    embeds = [build_discord_embed(item) for item in data["embeds"][:MAX_EMBEDS] if isinstance(item, dict)]
+    items = [item for item in data["embeds"][:MAX_EMBEDS] if isinstance(item, dict)]
     view = build_components(src, source_id, data["buttons"], data["interactive"])
+    # Пустые embed'ы не отправляем — так можно собрать сообщение из одного
+    # текста с кнопками. Но сообщение только из кнопок Discord не примет:
+    # тогда оставляем один (пустой) embed как основу.
+    visible = [item for item in items if embed_has_content(item)]
+    if not visible and not data["content"] and view is not None and items:
+        visible = items[:1]
+    embeds = [build_discord_embed(item) for item in visible]
     return (data["content"] or None), embeds, view
 
 

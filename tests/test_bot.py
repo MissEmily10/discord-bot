@@ -392,6 +392,98 @@ class ButtonTests(unittest.TestCase):
         self.assertEqual(error, "actions.build_trigger.bad_value")
 
 
+class EmbedEditorTests(unittest.TestCase):
+    def setUp(self):
+        import embed_module
+        self.em = embed_module
+        self.guild = make_guild()
+
+    def i(self):
+        return FakeInteraction(self.guild, self.guild.members[STAFF])
+
+    def test_empty_embeds_are_not_sent(self):
+        em = self.em
+        buttons = json.dumps([{"label": "Ок", "style": "blue", "action_key": "message.send", "value": "hi"}])
+        # текст + кнопки, embed пустой -> одно сообщение без embed'а
+        bid = database.save_message_build(GUILD, STAFF, "t", "привет", json.dumps([em.default_embed_data()]), buttons)
+
+        async def check():
+            parts = em.message_parts(bid)
+            self.assertEqual(len(parts), 1)
+            self.assertEqual(parts[0]["content"], "привет")
+            self.assertNotIn("embed", parts[0])
+            self.assertIn("view", parts[0])
+            # только кнопки: Discord не примет сообщение без текста и embed'а — оставляем пустой embed
+            only = database.save_message_build(GUILD, STAFF, "b", "", json.dumps([em.default_embed_data()]), buttons)
+            self.assertIn("embed", em.message_parts(only)[0])
+            # совсем пусто
+            empty = database.save_message_build(GUILD, STAFF, "e", "", json.dumps([em.default_embed_data()]), "[]")
+            self.assertEqual(em.message_parts(empty), [])
+
+        run(check())
+
+    def test_bad_url_and_too_long_keep_state(self):
+        em = self.em
+
+        async def check():
+            state = em.EmbedState(GUILD, STAFF)
+            editor = em.EmbedEditorView(state, back_target=None)
+            modal = em.EmbedMediaModal(state, editor)
+            modal.image_input._value = "не ссылка"
+            i = self.i()
+            await modal.on_submit(i)
+            self.assertIn("не похоже на ссылку", i.last)
+            self.assertFalse(state.active_embed.get("image"))
+            modal.image_input._value = "cdn.example.com/a.png"
+            await modal.on_submit(self.i())
+            self.assertEqual(state.active_embed["image"], "https://cdn.example.com/a.png")
+
+            state.active_embed["fields"] = [{"name": "n", "value": "x" * 1024}] * 5
+            modal = em.EmbedBasicModal(state, editor)
+            modal.description_input._value = "y" * 1500
+            i = self.i()
+            await modal.on_submit(i)
+            self.assertIn("максимум 6000", i.last)
+            self.assertFalse(state.active_embed.get("description"))
+
+        run(check())
+
+    def test_field_edit_and_delete(self):
+        em = self.em
+
+        async def check():
+            state = em.EmbedState(GUILD, STAFF)
+            state.active_embed["fields"] = [{"name": f"f{n}", "value": "v"} for n in range(25)]
+            editor = em.EmbedEditorView(state, back_target=None)  # 25 полей влезают в select
+            modal = em.EmbedFieldModal(state, editor, index=3)
+            self.assertEqual(modal.name_input.default, "f3")
+            modal.name_input._value, modal.value_input._value = "новое", "знач"
+            await modal.on_submit(self.i())
+            self.assertEqual(state.active_embed["fields"][3]["name"], "новое")
+            modal = em.EmbedFieldModal(state, editor, index=0)
+            modal.name_input._value, modal.value_input._value = "", ""
+            await modal.on_submit(self.i())
+            self.assertEqual(len(state.active_embed["fields"]), 24)
+
+        run(check())
+
+    def test_builder_views_fit_and_remove_any(self):
+        em = self.em
+
+        async def check():
+            state = em.EmbedState(GUILD, STAFF)
+            state.buttons = [{"label": f"b{n}", "style": "blue", "action_key": "message.send", "value": ""} for n in range(20)]
+            view = em.ButtonBuilderView(state, hub=None, back_target=("embed", None))
+            select = next(c for c in view.children if isinstance(c, em.RemoveItemSelect))
+            select._values = ["4"]
+            await select.callback(self.i())
+            self.assertEqual(len(state.buttons), 19)
+            self.assertNotIn("b4", [b["label"] for b in state.buttons])
+            em.ButtonColorView(state, {}, view, back_target=("embed", None))
+
+        run(check())
+
+
 class ResyncTests(unittest.TestCase):
     def test_group_sends(self):
         import embed_module

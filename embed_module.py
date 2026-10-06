@@ -23,6 +23,7 @@ from actions import (
     MAX_EMBEDS, MAX_BUTTONS, BUTTON_STYLES,
     say, normalize_url, valid_emoji, build_discord_embed, render_source, load_source,
     validate_action_value, build_visible, template_visible, form_visible,
+    check_url, embed_has_content, EMBED_TOTAL_LIMIT,
 )
 from database import (
     save_message_build, update_message_build, get_message_build, get_message_builds,
@@ -71,6 +72,7 @@ class EmbedState:
         self.visibility_roles = []
         self.visibility_levels = []
         self.category = "general"
+        self.editor_back = None  # куда ведёт «Назад» из редактора
 
     @property
     def active_embed(self):
@@ -107,8 +109,18 @@ class EmbedState:
 
 
 def render_active_preview(state):
-    embed = build_discord_embed(state.active_embed)
-    embed.set_footer(text=t("embed.preview_footer", n=state.active_index + 1, total=len(state.embeds), visibility=state.visibility))
+    """Предпросмотр активного embed'а. Служебная пометка дописывается к футеру,
+    а не заменяет его — иначе свой футер в редакторе не увидеть."""
+    data = state.active_embed
+    embed = build_discord_embed(data)
+    marker = t("embed.preview_footer", n=state.active_index + 1, total=len(state.embeds), visibility=state.visibility)
+    if not embed_has_content(data):
+        marker = f"{marker} · {t('embed.preview_empty')}"
+    footer = data.get("footer_text")
+    embed.set_footer(
+        text=(f"{footer} · {marker}" if footer else marker)[:2048],
+        icon_url=embed.footer.icon_url if footer else None,
+    )
     return embed
 
 
@@ -170,7 +182,7 @@ class EmbedHomeView(PanelView):
         ]
         view = PanelView(back_target=(interaction.message.embeds[0], self))
         for tid, owner, name, *_ in rows[:20]:
-            btn = discord.ui.Button(label=name[:70], style=discord.ButtonStyle.secondary)
+            btn = discord.ui.Button(label=f"{(name or t('embed.default_name'))[:60]} · #{tid}", style=discord.ButtonStyle.secondary)
 
             async def cb(i, tid=tid):
                 row = get_template(tid)
@@ -201,7 +213,7 @@ class SavedBuildsListView(PanelView):
             if build_visible(interaction, get_message_build(row[0]))
         ]
         for bid, owner, name, vis, cat, updated in rows[:20]:
-            btn = discord.ui.Button(label=f"{(name or '')[:60]} · #{bid}", style=discord.ButtonStyle.secondary)
+            btn = discord.ui.Button(label=f"{(name or t('embed.default_name'))[:60]} · #{bid}", style=discord.ButtonStyle.secondary)
 
             async def cb(i, bid=bid):
                 row = get_message_build(bid)
@@ -313,6 +325,10 @@ class LevelRestrictionView(PanelView):
 
 
 async def go_to_editor(interaction, state, back_target):
+    # Видимость можно сменить и из редактора: тогда «Назад» в редакторе
+    # ведёт туда же, куда вёл изначально, а не обратно в выбор видимости.
+    back_target = state.editor_back or back_target
+    state.editor_back = back_target
     await interaction.response.edit_message(
         embed=render_active_preview(state),
         view=EmbedEditorView(state, back_target=back_target)
@@ -346,13 +362,36 @@ class EmbedSwitchSelect(discord.ui.Select):
         )
 
 
+class EmbedFieldSelect(discord.ui.Select):
+    """Правка или удаление любого поля активного embed'а."""
+
+    def __init__(self, state):
+        self.state = state
+        fields = state.active_embed.get("fields") or []
+        options = [
+            discord.SelectOption(
+                label=t("embed.editor.field_option", n=n, name=str(field.get("name") or "—"))[:100],
+                description=str(field.get("value") or "")[:100] or None,
+                value=str(n - 1),
+            )
+            for n, field in enumerate(fields[:25], 1)
+        ]
+        super().__init__(placeholder=t("embed.editor.fields_placeholder")[:150], options=options, row=3)
+
+    async def callback(self, interaction):
+        await interaction.response.send_modal(EmbedFieldModal(self.state, self.view, index=int(self.values[0])))
+
+
 class EmbedEditorView(PanelView):
     texts = "embed.editor"
 
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
+        state.editor_back = state.editor_back or back_target
         self.add_item(EmbedSwitchSelect(state))
+        if state.active_embed.get("fields"):
+            self.add_item(EmbedFieldSelect(state))
 
     async def refresh(self, interaction):
         await interaction.response.edit_message(
@@ -379,14 +418,12 @@ class EmbedEditorView(PanelView):
             return
         await interaction.response.send_modal(EmbedFieldModal(self.state, self))
 
-    @discord.ui.button(label="Убрать поле", emoji="➖", style=discord.ButtonStyle.secondary, row=1)
-    async def remove_field(self, interaction, button):
-        fields = self.state.active_embed.get("fields") or []
-        if not fields:
-            await say(interaction, "embed.editor.no_fields")
-            return
-        fields.pop()
-        await self.refresh(interaction)
+    @discord.ui.button(label="Видимость", emoji="👁️", style=discord.ButtonStyle.secondary, row=1)
+    async def visibility(self, interaction, button):
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "embed.visibility"),
+            view=VisibilityView(self.state, back_target=(interaction.message.embeds[0], self)),
+        )
 
     @discord.ui.button(label="Название и текст", emoji="📝", style=discord.ButtonStyle.primary, row=2)
     async def meta(self, interaction, button):
@@ -428,6 +465,33 @@ def _parse_color(text):
         return None
 
 
+async def apply_embed_changes(interaction, state, editor_view, changes):
+    """
+    Применить правку активного embed'а, только если Discord её примет.
+    При ошибке состояние не меняется — иначе каждое обновление редактора
+    падало бы на том же embed'е.
+    """
+    candidate = {**state.active_embed, **changes}
+    length = len(build_discord_embed(candidate))
+    if length > EMBED_TOTAL_LIMIT:
+        await say(interaction, "embed.too_long", length=length, max=EMBED_TOTAL_LIMIT)
+        return
+    state.embeds[state.active_index] = candidate
+    await editor_view.refresh(interaction)
+
+
+async def parse_urls(interaction, inputs):
+    """inputs: {ключ: TextInput} -> {ключ: url} или None (ошибка уже показана)."""
+    result = {}
+    for key, text_input in inputs.items():
+        url, ok = check_url(text_input.value)
+        if not ok:
+            await say(interaction, "embed.bad_url", field=text_input.label, value=text_input.value.strip()[:100])
+            return None
+        result[key] = url
+    return result
+
+
 class EmbedBasicModal(Modal, title="ОСНОВНОЕ"):
     texts = "embed.basic_modal"
 
@@ -454,12 +518,15 @@ class EmbedBasicModal(Modal, title="ОСНОВНОЕ"):
         if color_value is None:
             await say(interaction, "embed.basic_modal.bad_color")
             return
-        data = self.state.active_embed
-        data["title"] = self.title_input.value.strip()
-        data["description"] = self.description_input.value.strip()
-        data["url"] = normalize_url(self.url_input.value)
-        data["color"] = color_value
-        await self.editor_view.refresh(interaction)
+        urls = await parse_urls(interaction, {"url": self.url_input})
+        if urls is None:
+            return
+        await apply_embed_changes(interaction, self.state, self.editor_view, {
+            "title": self.title_input.value.strip(),
+            "description": self.description_input.value.strip(),
+            "color": color_value,
+            **urls,
+        })
 
 
 class EmbedMediaModal(Modal, title="ИЗОБРАЖЕНИЯ"):
@@ -477,10 +544,10 @@ class EmbedMediaModal(Modal, title="ИЗОБРАЖЕНИЯ"):
         self.image_input.default = data.get("image") or ""
 
     async def on_submit(self, interaction):
-        data = self.state.active_embed
-        data["thumbnail"] = normalize_url(self.thumbnail_input.value)
-        data["image"] = normalize_url(self.image_input.value)
-        await self.editor_view.refresh(interaction)
+        urls = await parse_urls(interaction, {"thumbnail": self.thumbnail_input, "image": self.image_input})
+        if urls is None:
+            return
+        await apply_embed_changes(interaction, self.state, self.editor_view, urls)
 
 
 class EmbedAuthorFooterModal(Modal, title="AUTHOR / FOOTER"):
@@ -504,33 +571,60 @@ class EmbedAuthorFooterModal(Modal, title="AUTHOR / FOOTER"):
         self.footer_icon_input.default = data.get("footer_icon") or ""
 
     async def on_submit(self, interaction):
-        data = self.state.active_embed
-        data["author_name"] = self.author_input.value.strip()
-        data["author_url"] = normalize_url(self.author_url_input.value)
-        data["author_icon"] = normalize_url(self.author_icon_input.value)
-        data["footer_text"] = self.footer_input.value.strip()
-        data["footer_icon"] = normalize_url(self.footer_icon_input.value)
-        await self.editor_view.refresh(interaction)
+        urls = await parse_urls(interaction, {
+            "author_url": self.author_url_input,
+            "author_icon": self.author_icon_input,
+            "footer_icon": self.footer_icon_input,
+        })
+        if urls is None:
+            return
+        await apply_embed_changes(interaction, self.state, self.editor_view, {
+            "author_name": self.author_input.value.strip(),
+            "footer_text": self.footer_input.value.strip(),
+            **urls,
+        })
 
 
 class EmbedFieldModal(Modal, title="ПОЛЕ"):
+    """Новое поле или правка существующего (index). Пустые название и значение
+    при правке — удалить поле."""
+
     texts = "embed.field_modal"
 
-    name_input = discord.ui.TextInput(label="Название", max_length=256)
-    value_input = discord.ui.TextInput(label="Значение", style=discord.TextStyle.paragraph, max_length=1024)
+    name_input = discord.ui.TextInput(label="Название", required=False, max_length=256)
+    value_input = discord.ui.TextInput(label="Значение", required=False, style=discord.TextStyle.paragraph, max_length=1024)
     inline_input = discord.ui.TextInput(label="Inline? yes/no", required=False, max_length=3)
 
-    def __init__(self, state, editor_view):
+    def __init__(self, state, editor_view, index=None):
         super().__init__()
         self.state = state
         self.editor_view = editor_view
+        self.index = index
+        if index is not None:
+            field = (state.active_embed.get("fields") or [])[index]
+            self.name_input.default = field.get("name") or ""
+            self.value_input.default = field.get("value") or ""
+            self.inline_input.default = "yes" if field.get("inline") else "no"
+            self.name_input.placeholder = t("embed.field_modal.delete_hint")[:100]
 
     async def on_submit(self, interaction):
-        inline = self.inline_input.value.strip().lower() in {"yes", "y", "да", "д"}
-        self.state.active_embed.setdefault("fields", []).append({
-            "name": self.name_input.value, "value": self.value_input.value, "inline": inline
-        })
-        await self.editor_view.refresh(interaction)
+        name = self.name_input.value.strip()
+        value = self.value_input.value.strip()
+        fields = list(self.state.active_embed.get("fields") or [])
+        editing = self.index is not None and self.index < len(fields)
+        if not name and not value:
+            if not editing:
+                await say(interaction, "embed.field_modal.empty")
+                return
+            fields.pop(self.index)
+        else:
+            inline = self.inline_input.value.strip().lower() in {"yes", "y", "да", "д"}
+            field = {"name": name or "\u200b", "value": value or "\u200b", "inline": inline}
+            if editing:
+                fields[self.index] = field
+            else:
+                fields.append(field)
+        await apply_embed_changes(interaction, self.state, self.editor_view, {"fields": fields})
 
 
 class BuildMetaModal(Modal, title="НАЗВАНИЕ И ТЕКСТ"):
@@ -618,6 +712,39 @@ async def back_to_hub(interaction, hub):
     )
 
 
+# ---------- общий выбор «убрать любой элемент» ----------
+
+class RemoveItemSelect(discord.ui.Select):
+    """Убрать конкретную кнопку/опцию, а не только последнюю."""
+
+    def __init__(self, items, placeholder_key):
+        self.items = items
+        options = [
+            discord.SelectOption(label=f"{n}. {str(item.get('label') or '—')}"[:100], value=str(n - 1))
+            for n, item in enumerate(items[:25], 1)
+        ]
+        super().__init__(placeholder=t(placeholder_key)[:150], options=options, row=1)
+
+    async def callback(self, interaction):
+        index = int(self.values[0])
+        if index < len(self.items):
+            self.items.pop(index)
+        await self.view.show(interaction)
+
+
+def builder_screen(interaction, builder_view):
+    """(embed, свежий view) экрана, где собираются кнопки или опции списка."""
+    fresh = builder_view.rebuilt()
+    return fresh.screen_embed(interaction), fresh
+
+
+def action_pick_view(interaction, state, pending, target, builder_view):
+    """Экран выбора действия с «Назад» к списку кнопок/опций."""
+    view = PanelView(back_target=builder_screen(interaction, builder_view), timeout=300)
+    view.add_item(ActionPickSelect(interaction, state, pending, target=target, builder_view=builder_view))
+    return view
+
+
 # ---------- список ----------
 
 def list_embed(interaction, state):
@@ -636,6 +763,19 @@ class CustomListBuilderView(PanelView):
         super().__init__(back_target=back_target)
         self.state = state
         self.hub = hub
+        options = (state.interactive or {}).get("options") if (state.interactive or {}).get("type") == "list" else None
+        if options:
+            self.add_item(RemoveItemSelect(options, "embed.list.remove_placeholder"))
+
+    def rebuilt(self):
+        return CustomListBuilderView(self.state, self.hub, self.back_target)
+
+    def screen_embed(self, interaction):
+        return list_embed(interaction, self.state)
+
+    async def show(self, interaction):
+        embed, view = builder_screen(interaction, self)
+        await interaction.response.edit_message(embed=embed, view=view)
 
     @discord.ui.button(label="Добавить опцию", emoji="➕", style=discord.ButtonStyle.success)
     async def add_option(self, interaction, button):
@@ -648,7 +788,7 @@ class CustomListBuilderView(PanelView):
     async def remove_last(self, interaction, button):
         if self.state.list_options:
             self.state.list_options.pop()
-        await interaction.response.edit_message(embed=list_embed(interaction, self.state), view=self)
+        await self.show(interaction)
 
     @discord.ui.button(label="Готово", emoji="✅", style=discord.ButtonStyle.primary)
     async def done(self, interaction, button):
@@ -678,9 +818,10 @@ class ListOptionModal(Modal, title="ОПЦИЯ СПИСКА"):
             "description": self.description_input.value,
             "emoji": self.emoji_input.value.strip() or None,
         }
-        view = PanelView(timeout=300)
-        view.add_item(ActionPickSelect(interaction, self.state, pending, target="list", builder_view=self.list_view))
-        await interaction.response.edit_message(embed=panel_embed(interaction, "embed.button_action"), view=view)
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "embed.button_action"),
+            view=action_pick_view(interaction, self.state, pending, "list", self.list_view),
+        )
 
 
 # ---------- выбор действия (общий для кнопок и опций списка) ----------
@@ -710,7 +851,7 @@ class ActionPickSelect(discord.ui.Select):
             return
         if action_key == "build.trigger":
             # ID никто не помнит — даём выбрать из сохранённых сообщений
-            view = PanelView(timeout=300)
+            view = PanelView(back_target=builder_screen(interaction, self.builder_view), timeout=300)
             view.add_item(BuildPickSelect(interaction, self.state, self.pending, self.target, self.builder_view))
             await interaction.response.edit_message(embed=panel_embed(interaction, "embed.build_pick"), view=view)
             return
@@ -772,11 +913,16 @@ async def commit_pending(interaction, state, pending, target, builder_view, raw_
         return
     pending["value"] = value
     if target == "list":
+        if len(state.list_options) >= 25:
+            await say(interaction, "embed.list.too_many")
+            return
         state.list_options.append(pending)
-        await interaction.response.edit_message(embed=list_embed(interaction, state), view=builder_view)
     else:
+        if len(state.buttons) >= MAX_BUTTONS:
+            await say(interaction, "embed.buttons.too_many", max=MAX_BUTTONS)
+            return
         state.buttons.append(pending)
-        await interaction.response.edit_message(embed=buttons_embed(interaction, state), view=builder_view)
+    await builder_view.show(interaction)
 
 
 # ---------- нативный выбор ----------
@@ -855,6 +1001,18 @@ class ButtonBuilderView(PanelView):
         super().__init__(back_target=back_target)
         self.state = state
         self.hub = hub
+        if state.buttons:
+            self.add_item(RemoveItemSelect(state.buttons, "embed.buttons.remove_placeholder"))
+
+    def rebuilt(self):
+        return ButtonBuilderView(self.state, self.hub, self.back_target)
+
+    def screen_embed(self, interaction):
+        return buttons_embed(interaction, self.state)
+
+    async def show(self, interaction):
+        embed, view = builder_screen(interaction, self)
+        await interaction.response.edit_message(embed=embed, view=view)
 
     @discord.ui.button(label="Добавить кнопку", emoji="➕", style=discord.ButtonStyle.success)
     async def add(self, interaction, button):
@@ -867,7 +1025,7 @@ class ButtonBuilderView(PanelView):
     async def remove_last(self, interaction, button):
         if self.state.buttons:
             self.state.buttons.pop()
-        await interaction.response.edit_message(embed=buttons_embed(interaction, self.state), view=self)
+        await self.show(interaction)
 
     @discord.ui.button(label="Готово", emoji="✅", style=discord.ButtonStyle.primary)
     async def done(self, interaction, button):
@@ -892,13 +1050,14 @@ class ButtonLabelModal(Modal, title="ТЕКСТ КНОПКИ"):
         pending = {"label": self.label_input.value, "emoji": self.emoji_input.value.strip() or None}
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "embed.button_color"),
-            view=ButtonColorView(self.state, pending, self.builder_view)
+            view=ButtonColorView(self.state, pending, self.builder_view,
+                                 back_target=builder_screen(interaction, self.builder_view)),
         )
 
 
 class ButtonColorView(PanelView):
-    def __init__(self, state, pending, builder_view):
-        super().__init__(back_target=None)
+    def __init__(self, state, pending, builder_view, back_target=None):
+        super().__init__(back_target=back_target)
         self.state = state
         self.pending = pending
         self.builder_view = builder_view
@@ -915,9 +1074,10 @@ class ButtonColorView(PanelView):
                     self.pending["action_key"] = None
                     await interaction.response.send_modal(ActionValueModal(self.state, self.pending, "buttons", self.builder_view))
                     return
-                view = PanelView(timeout=300)
-                view.add_item(ActionPickSelect(interaction, self.state, self.pending, target="buttons", builder_view=self.builder_view))
-                await interaction.response.edit_message(embed=panel_embed(interaction, "embed.button_action"), view=view)
+                await interaction.response.edit_message(
+                    embed=panel_embed(interaction, "embed.button_action"),
+                    view=action_pick_view(interaction, self.state, self.pending, "buttons", self.builder_view),
+                )
 
             btn.callback = cb
             self.add_item(btn)
@@ -931,6 +1091,15 @@ async def finish_message_build(interaction, state):
     if interaction.guild is None:
         await say(interaction, "common.only_in_guild")
         return
+    if not state.content.strip() and not state.buttons and not state.interactive \
+            and not any(embed_has_content(e) for e in state.embeds):
+        await say(interaction, "embed.save_empty")
+        return
+    for n, data in enumerate(state.embeds, 1):
+        length = len(build_discord_embed(data))
+        if length > EMBED_TOTAL_LIMIT:
+            await say(interaction, "embed.too_long_n", n=n, length=length, max=EMBED_TOTAL_LIMIT)
+            return
 
     fields = dict(
         name=state.name,
@@ -1042,17 +1211,20 @@ class MessageBuildFinalView(PanelView):
     async def preview(self, interaction, button):
         if not await self._row(interaction):
             return
-        content, embeds, view = render_source("b", self.build_id)
-        if not content and not embeds and view is None:
+        # Ровно так, как сообщение уйдёт в канал: каждый embed отдельно.
+        parts = message_parts(self.build_id)
+        if not parts:
             await say(interaction, "embed.build_empty")
             return
         try:
-            await interaction.response.send_message(
-                content=content, embeds=embeds, view=view, ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            for index, part in enumerate(parts):
+                send = interaction.response.send_message if index == 0 else interaction.followup.send
+                await send(ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), **part)
         except discord.HTTPException as error:
-            await say(interaction, "embed.preview_error", error=error)
+            if interaction.response.is_done():
+                await interaction.followup.send(t("embed.preview_error", error=error), ephemeral=True)
+            else:
+                await say(interaction, "embed.preview_error", error=error)
 
     @discord.ui.button(label="Отправить", emoji="📤", style=discord.ButtonStyle.success)
     async def send(self, interaction, button):
