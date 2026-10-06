@@ -8,12 +8,13 @@ core.py
 - уровни доступа и их подписи
 - PanelView — базовый класс с автоматической кнопкой "Назад"
 - EmbedPaginator — переиспользуемая пагинация списков
-- get_setting/set_setting — рантайм-настройки без хардкода (бэкенд под /design)
+- t()/panel_embed() — тексты, цвета и thumbnails из каталога texts.py
+  (значения владельца хранятся в bot_settings и перекрывают дефолты)
 - action_registry — реестр действий для кнопок/select с проверкой по уровню
 - fetch_bytes — асинхронная загрузка файлов (замена блокирующего urllib)
 """
 
-import json
+import logging
 import os
 import time
 
@@ -21,8 +22,10 @@ import aiohttp
 import discord
 
 from database import (
-    get_setting as _db_get_setting,
+    GLOBAL_SETTINGS_ID,
+    get_all_settings as _db_get_all_settings,
     set_setting as _db_set_setting,
+    delete_setting as _db_delete_setting,
     get_action,
     get_actions,
     upsert_action,
@@ -33,6 +36,9 @@ from database import (
     get_all_role_access,
     is_user_denied,
 )
+from texts import CATALOG
+
+_log = logging.getLogger(__name__)
 
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
@@ -63,13 +69,9 @@ ACCESS_LEVELS = {
     "owner": 4,
 }
 
-ACCESS_LABELS = {
-    "limited": "◽ Ограниченный пользователь",
-    "member": "👤 Пользователь",
-    "staff": "🔧 Staff",
-    "admin": "🛡️ Администратор бота",
-    "owner": "👑 Владелец",
-}
+def level_label(level):
+    """Подпись уровня доступа из каталога (level.<уровень>)."""
+    return t(f"level.{level}") if has_text(f"level.{level}") else str(level)
 
 
 def level_value(level):
@@ -154,58 +156,170 @@ def has_command_access(interaction, command_name):
 async def require_command_access(interaction, command_name):
     if has_command_access(interaction, command_name):
         return True
-    await interaction.response.send_message(
-        get_setting(interaction.guild.id if interaction.guild else None, "text_access_denied"),
-        ephemeral=True,
-    )
+    await interaction.response.send_message(t("text_access_denied"), ephemeral=True)
     return False
 
 
 # =========================
-# RUNTIME SETTINGS (бэкенд под /design, наполнение UI — в самом конце проекта)
+# ТЕКСТЫ, ЦВЕТА, THUMBNAILS (каталог — texts.py)
 # =========================
+# Настройки общие для всего бота (guild_id = 0 в bot_settings): один владелец,
+# один бренд, одна веб-панель. Значение из БД перекрывает дефолт из каталога.
 
-# Фразы/цвета по умолчанию, пока UI настроек ещё не собран.
-_DEFAULTS = {
-    "embed_color": "0x5865F2",
-    "danger_color": "0xED4245",
-    "text_access_denied": "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
-    "nav_back": "◀️ Назад",
-    "nav_next": "▶️ Далее",
-    "nav_cancel": "❌ Отмена",
-}
+_settings_cache = None
 
 
-def get_setting(guild_id, key, default=None):
-    """
-    Синхронная обёртка над БД. Всегда используем эту функцию вместо
-    хардкода констант — когда появится UI /design, менять нужно будет
-    только сами значения в БД, а не код.
-    """
-    value = _db_get_setting(guild_id, key)
+def _settings():
+    global _settings_cache
+    if _settings_cache is None:
+        _settings_cache = _db_get_all_settings(GLOBAL_SETTINGS_ID)
+    return _settings_cache
+
+
+def overrides():
+    """Значения, заданные владельцем поверх каталога (копия)."""
+    return dict(_settings())
+
+
+def reload_settings():
+    global _settings_cache
+    _settings_cache = None
+
+
+def get_setting(key, default=None):
+    value = _settings().get(key)
     if value is not None:
         return value
-    return _DEFAULTS.get(key, default)
+    return CATALOG.get(key, default)
 
 
-def set_setting(guild_id, key, value):
-    _db_set_setting(guild_id, key, value)
+def set_setting(key, value):
+    _db_set_setting(GLOBAL_SETTINGS_ID, key, value)
+    _settings()[key] = str(value)
+
+
+def reset_setting(key):
+    _db_delete_setting(GLOBAL_SETTINGS_ID, key)
+    _settings().pop(key, None)
+
+
+class _KeepMissing(dict):
+    def __missing__(self, key):
+        return "{" + key + "}"
+
+
+def t(key, **params):
+    """
+    Текст из каталога. Подстановки — {name}. Если владелец сломал фигурные
+    скобки в своей фразе, показываем фразу как есть, а не роняем бота.
+    """
+    template = get_setting(key)
+    if template is None:
+        _log.warning("Нет ключа в texts.CATALOG: %s", key)
+        return key
+    if not params:
+        return template
+    try:
+        return template.format_map(_KeepMissing(params))
+    except (ValueError, IndexError, AttributeError):
+        return template
+
+
+def has_text(key):
+    return key in CATALOG or key in _settings()
+
+
+def _parse_color(raw, fallback):
+    try:
+        return discord.Color(int(raw, 16) if isinstance(raw, str) else int(raw))
+    except (TypeError, ValueError):
+        return fallback
 
 
 def embed_color(guild_id=None):
-    raw = get_setting(guild_id, "embed_color")
-    try:
-        return discord.Color(int(raw, 16) if isinstance(raw, str) else int(raw))
-    except (TypeError, ValueError):
-        return discord.Color.blurple()
+    return _parse_color(get_setting("embed_color"), discord.Color.blurple())
 
 
 def danger_color(guild_id=None):
-    raw = get_setting(guild_id, "danger_color")
-    try:
-        return discord.Color(int(raw, 16) if isinstance(raw, str) else int(raw))
-    except (TypeError, ValueError):
-        return discord.Color.red()
+    return _parse_color(get_setting("danger_color"), discord.Color.red())
+
+
+def resolve_thumbnail(interaction, context):
+    """
+    Thumbnail контекста: <context>.thumbnail -> thumbnail.default.
+    "none" — явно без картинки; {bot_avatar} — аватар бота.
+    """
+    value = (get_setting(f"{context}.thumbnail") or "").strip() if context else ""
+    if not value:
+        value = (get_setting("thumbnail.default") or "").strip()
+    if not value or value.lower() == "none":
+        return None
+    if value == "{bot_avatar}":
+        user = interaction.client.user if interaction is not None else None
+        return user.display_avatar.url if user else None
+    return value if value.startswith(("http://", "https://")) else "https://" + value
+
+
+def panel_embed(interaction, context, description=None, *, title=None, danger=False, **params):
+    """
+    Единый конструктор служебных embed'ов бота.
+    context — ключ экрана, например "forms.home": берутся
+    "forms.home.title", "forms.home.text" (если есть) и thumbnail контекста.
+    """
+    if title is None:
+        title = t(f"{context}.title", **params)
+    if description is None:
+        description = t(f"{context}.text", **params) if has_text(f"{context}.text") else ""
+    embed = discord.Embed(
+        title=str(title)[:256] or None,
+        description=str(description)[:4096] or None,
+        color=danger_color() if danger else embed_color(),
+    )
+    thumbnail = resolve_thumbnail(interaction, context)
+    if thumbnail:
+        embed.set_thumbnail(url=thumbnail)
+    return embed
+
+
+def apply_texts(component, prefix):
+    """
+    Подписи декорированных кнопок/полей из каталога: ключ <prefix>.<имя метода
+    или атрибута>. Если ключа нет — остаётся подпись из кода. Кнопка-метод
+    cancel без своего ключа получает общую подпись nav_cancel.
+    """
+    if isinstance(component, discord.ui.Modal):
+        if not prefix:
+            return
+        if has_text(f"{prefix}.title"):
+            component.title = t(f"{prefix}.title")[:45]
+        for name in component.__modal_children_items__:
+            item = getattr(component, name, None)
+            if not isinstance(item, discord.ui.TextInput):
+                continue
+            if has_text(f"{prefix}.{name}"):
+                item.label = t(f"{prefix}.{name}")[:45]
+            if has_text(f"{prefix}.{name}.placeholder"):
+                item.placeholder = t(f"{prefix}.{name}.placeholder")[:100]
+        return
+    for name, raw in component.__view_children_items__.items():
+        attr = getattr(raw, "__name__", name)
+        item = getattr(component, attr, None)
+        if not isinstance(item, discord.ui.Button):
+            continue
+        if prefix and has_text(f"{prefix}.{attr}"):
+            item.label = t(f"{prefix}.{attr}")[:80]
+        elif attr == "cancel":
+            item.label = t("nav_cancel")[:80]
+
+
+class Modal(discord.ui.Modal):
+    """Базовая модалка: texts = "forms.basic_modal" — заголовок и поля из каталога."""
+
+    texts = None
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        apply_texts(self, self.texts)
 
 
 # =========================
@@ -219,23 +333,25 @@ class PanelView(discord.ui.View):
     back_target: кортеж (embed, view) — куда вернуться. Если передан,
     кнопка "Назад" добавляется автоматически, первой в ряду.
 
+    texts: префикс каталога для подписей кнопок, например "access.home" —
+    кнопка-метод users_button получит подпись "access.home.users_button".
+
     Использование:
         view = SomePanel(..., back_target=(previous_embed, previous_view))
-
-    Кнопки самой панели добавляй через @discord.ui.button как обычно —
-    PanelView не мешает декораторам, "Назад" просто довешивается поверх.
     """
+
+    texts = None
 
     def __init__(self, back_target=None, timeout=900):
         super().__init__(timeout=timeout)
         self.back_target = back_target
+        apply_texts(self, self.texts)
         if back_target is not None:
             self._insert_back_button()
 
     def _insert_back_button(self):
         button = discord.ui.Button(
-            label="Назад",
-            emoji="◀️",
+            label=t("nav_back")[:80],
             style=discord.ButtonStyle.secondary,
             row=4,
         )
@@ -285,7 +401,7 @@ class EmbedPaginator(discord.ui.View):
 
         if back_target is not None:
             embed_back, view_back = back_target
-            back = discord.ui.Button(label="Назад", emoji="◀️", style=discord.ButtonStyle.secondary, row=4)
+            back = discord.ui.Button(label=t("nav_back")[:80], style=discord.ButtonStyle.secondary, row=4)
 
             async def back_callback(interaction):
                 await interaction.response.edit_message(embed=embed_back, view=view_back)

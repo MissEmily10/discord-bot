@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Панель бота</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --panel-2: #f0f1f4; --border: #dfe1e6;
+    --text: #1f2328; --muted: #5f6672; --accent: #5865f2; --accent-text: #ffffff;
+    --danger: #d83c3e; --ok: #23a55a; --warn-bg: #fff4d6;
+    --embed-bg: #f2f3f5; --chip: #e7e9fd; --chip-text: #3c45a5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1f22; --panel: #2b2d31; --panel-2: #232428; --border: #3a3c42;
+      --text: #e3e5e8; --muted: #a1a6b0; --accent: #5865f2; --accent-text: #ffffff;
+      --danger: #f0575a; --ok: #3ccf7a; --warn-bg: #4a3b12;
+      --embed-bg: #232428; --chip: #353a6b; --chip-text: #c9cdfb;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center;
+           padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  header img { width: 32px; height: 32px; border-radius: 50%; }
+  header h1 { font-size: 16px; margin: 0; white-space: nowrap; }
+  header .grow { flex: 1; }
+  input[type=search] { width: min(360px, 100%); }
+  input, textarea, select { font: inherit; color: var(--text); background: var(--panel-2);
+                            border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
+  textarea { width: 100%; resize: vertical; min-height: 38px; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { font: inherit; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+           border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: .45; cursor: default; }
+  button[data-save]:disabled { display: none; }
+  .actions:not(:has(button:not(:disabled))):not(:has(.status:not(:empty))) { display: none; }
+  .layout { display: grid; grid-template-columns: 220px 1fr; gap: 16px; padding: 16px; max-width: 1200px; margin: 0 auto; }
+  nav { position: sticky; top: 70px; align-self: start; display: flex; flex-direction: column; gap: 2px; }
+  nav button { text-align: left; border: 0; background: transparent; display: flex; justify-content: space-between; }
+  nav button.active { background: var(--panel); font-weight: 600; }
+  nav .count { color: var(--muted); font-size: 13px; }
+  nav .count b { color: var(--accent); }
+  .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; color: var(--muted); font-size: 14px; }
+  section.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+                 padding: 14px; margin-bottom: 14px; }
+  section.card > h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 10px;
+                      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .card-body { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .card-body.with-preview { grid-template-columns: minmax(0, 1fr) 320px; }
+  .fields { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .field label { display: flex; gap: 8px; align-items: baseline; font-weight: 600; margin-bottom: 4px; }
+  .field label code { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .badge { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: var(--chip); color: var(--chip-text); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > input[type=text] { flex: 1; min-width: 0; }
+  input[type=color] { width: 44px; height: 36px; padding: 2px; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .chip { font: 12px ui-monospace, Menlo, monospace; padding: 1px 6px; border-radius: 4px;
+          background: var(--chip); color: var(--chip-text); border: 0; cursor: pointer; }
+  .actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .status { font-size: 13px; }
+  .status.err { color: var(--danger); } .status.ok { color: var(--ok); }
+  .default { font-size: 13px; color: var(--muted); margin-top: 4px; white-space: pre-wrap; }
+  .thumb-preview { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; background: var(--panel-2); border: 1px solid var(--border); }
+  .embed { position: sticky; top: 80px; align-self: start; background: var(--embed-bg); border-radius: 4px;
+           border-left: 4px solid var(--accent); padding: 10px 12px; display: grid;
+           grid-template-columns: 1fr auto; gap: 8px; font-size: 14px; }
+  .embed .e-title { font-weight: 700; margin-bottom: 4px; word-break: break-word; }
+  .embed .e-text { white-space: normal; word-break: break-word; }
+  .embed img { width: 72px; height: 72px; border-radius: 4px; object-fit: cover; }
+  .embed code { font-size: 13px; background: var(--panel-2); padding: 0 3px; border-radius: 3px; }
+  .ph { background: var(--chip); color: var(--chip-text); border-radius: 3px; padding: 0 3px; font-size: 13px; }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+  .note { background: var(--warn-bg); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: 14px; }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; padding: 12px 16px; }
+    nav { position: static; flex-direction: row; overflow-x: auto; gap: 4px; padding-bottom: 4px; }
+    nav button { white-space: nowrap; flex: none; gap: 6px; }
+    .card-body.with-preview { grid-template-columns: 1fr; }
+    .embed { position: static; order: -1; }
+    header h1 { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <img id="avatar" alt="" hidden>
+  <h1 id="botname">Панель бота</h1>
+  <div class="grow"></div>
+  <input type="search" id="search" placeholder="Поиск по тексту или ключу…" aria-label="Поиск">
+  <button id="logout" title="Выйти">Выйти</button>
+</header>
+<div class="layout">
+  <nav id="groups" aria-label="Разделы"></nav>
+  <main>
+    <div class="toolbar">
+      <label><input type="checkbox" id="onlyChanged"> только изменённые</label>
+      <span id="summary"></span>
+    </div>
+    <div id="content"><div class="empty">Загрузка…</div></div>
+  </main>
+</div>
+<script>
+const GROUP_NAMES = {
+  style: "Оформление", common: "Общие фразы", level: "Уровни доступа", panel: "/panel",
+  access: "/access", design: "/design", actions: "Действия кнопок", embed: "/embed",
+  buttons: "/buttons", forms: "/forms", templates: "/templates", webhooks: "/webhooks",
+  select: "/select", messages: "/messages", ping: "/ping",
+};
+const GROUP_ORDER = Object.keys(GROUP_NAMES);
+const KIND_HINT = {
+  image: "Прямая ссылка на картинку. Пусто — общая картинка из «Оформления», none — без картинки, {bot_avatar} — аватар бота.",
+  color: "HEX-цвет, например #5865F2.",
+};
+
+let entries = new Map(), contexts = new Set(), bot = {}, activeGroup = "style";
+const $ = (sel) => document.querySelector(sel);
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function current(key) {
+  const e = entries.get(key);
+  if (!e) return "";
+  return e.value ?? e.default;
+}
+// для превью: несохранённый черновик из поля, если оно на странице
+function live(key) {
+  const el = document.querySelector(`[data-key="${CSS.escape(key)}"]`);
+  return el ? el.value : current(key);
+}
+function discordMarkdown(text) {
+  return esc(text)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\{(\w+)\}/g, '<span class="ph">{$1}</span>')
+    .replace(/\n/g, "<br>");
+}
+function strictHex(raw) {
+  const m = String(raw || "").trim().replace("#", "").replace(/^0x/i, "");
+  return /^[0-9a-f]{6}$/i.test(m) ? m.toUpperCase() : null;
+}
+function hexColor(raw) {
+  const m = String(raw || "").replace("#", "").replace(/^0x/i, "");
+  return /^[0-9a-f]{6}$/i.test(m) ? "#" + m.toUpperCase() : "#5865F2";
+}
+function resolveThumb(context) {
+  let v = (live(context + ".thumbnail") || "").trim();
+  if (!v) v = (live("thumbnail.default") || "").trim();
+  if (!v || v.toLowerCase() === "none") return null;
+  if (v === "{bot_avatar}") return bot.avatar;
+  return /^https?:\/\//.test(v) ? v : "https://" + v;
+}
+
+function sectionOf(key) {
+  if (!key.includes(".") || key.startsWith("thumbnail.")) return "style";
+  return key.slice(0, key.lastIndexOf("."));
+}
+function fieldName(key) {
+  return key.startsWith("thumbnail.") || !key.includes(".") ? key : key.slice(key.lastIndexOf(".") + 1);
+}
+
+function visibleEntries() {
+  const q = $("#search").value.trim().toLowerCase();
+  const onlyChanged = $("#onlyChanged").checked;
+  return [...entries.values()].filter(e => {
+    if (onlyChanged && e.value == null) return false;
+    if (q) return e.key.toLowerCase().includes(q) || current(e.key).toLowerCase().includes(q);
+    return e.group === activeGroup;
+  });
+}
+
+function renderNav() {
+  const counts = {};
+  for (const e of entries.values()) {
+    counts[e.group] ??= {all: 0, changed: 0};
+    counts[e.group].all++;
+    if (e.value != null) counts[e.group].changed++;
+  }
+  const groups = Object.keys(counts).sort((a, b) =>
+    (GROUP_ORDER.indexOf(a) + 1 || 99) - (GROUP_ORDER.indexOf(b) + 1 || 99));
+  $("#groups").innerHTML = groups.map(g => `
+    <button data-group="${esc(g)}" class="${g === activeGroup && !$("#search").value ? "active" : ""}">
+      <span>${esc(GROUP_NAMES[g] || g)}</span>
+      <span class="count">${counts[g].changed ? `<b>${counts[g].changed}</b> / ` : ""}${counts[g].all}</span>
+    </button>`).join("");
+  const changed = [...entries.values()].filter(e => e.value != null).length;
+  $("#summary").textContent = `Изменено: ${changed} из ${entries.size}`;
+}
+
+function previewHtml(context) {
+  const title = live(context + ".title");
+  const text = entries.has(context + ".text") ? live(context + ".text") : "";
+  const thumb = resolveThumb(context);
+  return `<div class="embed" data-preview="${esc(context)}" style="border-left-color:${hexColor(live("embed_color"))}">
+    <div><div class="e-title">${discordMarkdown(title)}</div><div class="e-text">${discordMarkdown(text)}</div></div>
+    ${thumb ? `<img src="${esc(thumb)}" alt="" referrerpolicy="no-referrer">` : ""}
+  </div>`;
+}
+
+function fieldHtml(e) {
+  const val = current(e.key);
+  const changed = e.value != null;
+  let input;
+  if (e.kind === "color") {
+    input = `<div class="row"><input type="color" value="${hexColor(val)}" data-color-for="${esc(e.key)}" aria-label="Цвет">
+             <input type="text" id="f-${esc(e.key)}" data-key="${esc(e.key)}" value="${esc(hexColor(val))}"></div>`;
+  } else if (e.kind === "image") {
+    const src = e.key === "thumbnail.default" ? resolveThumb("") : resolveThumb(e.key.replace(/\.thumbnail$/, ""));
+    input = `<div class="row"><input type="text" id="f-${esc(e.key)}" data-key="${esc(e.key)}" value="${esc(val)}" placeholder="https://…">
+             ${src && val ? `<img class="thumb-preview" src="${esc(src)}" alt="" referrerpolicy="no-referrer">` : ""}</div>`;
+  } else {
+    input = `<textarea id="f-${esc(e.key)}" data-key="${esc(e.key)}" rows="1">${esc(val)}</textarea>`;
+  }
+  const chips = e.placeholders.map(p => `<button class="chip" data-insert="{${esc(p)}}" data-for="${esc(e.key)}">{${esc(p)}}</button>`).join("");
+  return `<div class="field" data-field="${esc(e.key)}">
+    <label for="f-${esc(e.key)}">${esc(fieldName(e.key))} <code>${esc(e.key)}</code>${changed ? '<span class="badge">изменено</span>' : ""}</label>
+    ${input}
+    ${chips ? `<div class="hint">Подстановки: ${chips}</div>` : ""}
+    ${KIND_HINT[e.kind] ? `<div class="hint">${esc(KIND_HINT[e.kind])}</div>` : ""}
+    ${changed ? `<div class="default">По умолчанию: ${esc(e.default || "—")}</div>` : ""}
+    <div class="actions">
+      <button class="primary" data-save="${esc(e.key)}" disabled>Сохранить</button>
+      ${changed ? `<button data-reset="${esc(e.key)}">Сбросить</button>` : ""}
+      <span class="status" data-status="${esc(e.key)}"></span>
+    </div>
+  </div>`;
+}
+
+function render() {
+  renderNav();
+  const list = visibleEntries();
+  if (!list.length) {
+    $("#content").innerHTML = `<div class="empty">Ничего не найдено.</div>`;
+    return;
+  }
+  const sections = new Map();
+  for (const e of list) {
+    const s = sectionOf(e.key);
+    if (!sections.has(s)) sections.set(s, []);
+    sections.get(s).push(e);
+  }
+  let html = "";
+  if (activeGroup === "style" && !$("#search").value) {
+    html += `<div class="note">Изменения применяются сразу. Уже открытые в Discord панели обновятся при следующем действии.</div>`;
+  }
+  for (const [section, items] of sections) {
+    const isScreen = contexts.has(section);
+    html += `<section class="card"><h2>${esc(section === "style" ? "Оформление" : section)}</h2>
+      <div class="card-body ${isScreen ? "with-preview" : ""}">
+        <div class="fields">${items.map(fieldHtml).join("")}</div>
+        ${isScreen ? previewHtml(section) : ""}
+      </div></section>`;
+  }
+  $("#content").innerHTML = html;
+  document.querySelectorAll("#content textarea").forEach(autosize);
+}
+function autosize(t) { t.style.height = "auto"; t.style.height = t.scrollHeight + 2 + "px"; }
+
+function refreshPreview(context) {
+  const node = document.querySelector(`[data-preview="${CSS.escape(context)}"]`);
+  if (node) node.outerHTML = previewHtml(context);
+}
+
+async function api(method, body) {
+  const res = await fetch("/api/settings", {
+    method, headers: body ? {"Content-Type": "application/json"} : {},
+    body: body ? JSON.stringify(body) : undefined, credentials: "same-origin",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    $("#content").innerHTML = `<div class="empty">${esc(data.error || "Сессия истекла.")}</div>`;
+    throw new Error("unauthorized");
+  }
+  if (!res.ok) throw new Error(data.error || "Ошибка сервера");
+  return data;
+}
+
+async function save(key, value) {
+  const status = document.querySelector(`[data-status="${CSS.escape(key)}"]`);
+  try {
+    const updated = await api("PUT", {key, value});
+    // черновики в других полях не должны пропасть при перерисовке
+    const drafts = [...document.querySelectorAll("[data-key]")]
+      .filter(el => el.dataset.key !== key && el.value !== current(el.dataset.key))
+      .map(el => [el.dataset.key, el.value]);
+    entries.set(key, updated);
+    const scroll = window.scrollY;
+    render();
+    for (const [k, v] of drafts) {
+      const el = document.querySelector(`[data-key="${CSS.escape(k)}"]`);
+      if (el) { el.value = v; el.dispatchEvent(new Event("input", {bubbles: true})); }
+    }
+    window.scrollTo(0, scroll);
+    const st = document.querySelector(`[data-status="${CSS.escape(key)}"]`);
+    if (st) { st.className = "status ok"; st.textContent = "Сохранено"; setTimeout(() => st.textContent = "", 2000); }
+  } catch (err) {
+    if (status && err.message !== "unauthorized") { status.className = "status err"; status.textContent = err.message; }
+  }
+}
+
+document.addEventListener("input", (ev) => {
+  const t = ev.target;
+  if (t.dataset.colorFor) {
+    const text = document.querySelector(`[data-key="${CSS.escape(t.dataset.colorFor)}"]`);
+    text.value = t.value.toUpperCase();
+    text.dispatchEvent(new Event("input", {bubbles: true}));
+    return;
+  }
+  const key = t.dataset.key;
+  if (!key) return;
+  const btn = document.querySelector(`[data-save="${CSS.escape(key)}"]`);
+  if (btn) btn.disabled = t.value === current(key) || (entries.get(key).kind === "color" && strictHex(t.value) === strictHex(current(key)));
+  const st = document.querySelector(`[data-status="${CSS.escape(key)}"]`);
+  if (st) st.textContent = "";
+  if (t.tagName === "TEXTAREA") autosize(t);
+  const section = sectionOf(key);
+  if (key === "embed_color" || key === "thumbnail.default") contexts.forEach(refreshPreview);
+  else if (contexts.has(section)) refreshPreview(section);
+});
+
+document.addEventListener("click", (ev) => {
+  const t = ev.target.closest("button");
+  if (!t) return;
+  if (t.dataset.group) {
+    activeGroup = t.dataset.group;
+    $("#search").value = "";
+    render();
+    window.scrollTo(0, 0);
+  } else if (t.dataset.save) {
+    save(t.dataset.save, document.querySelector(`[data-key="${CSS.escape(t.dataset.save)}"]`).value);
+  } else if (t.dataset.reset) {
+    save(t.dataset.reset, "");
+  } else if (t.dataset.insert) {
+    const field = document.querySelector(`[data-key="${CSS.escape(t.dataset.for)}"]`);
+    const pos = field.selectionStart ?? field.value.length;
+    field.value = field.value.slice(0, pos) + t.dataset.insert + field.value.slice(field.selectionEnd ?? pos);
+    field.focus();
+    field.selectionStart = field.selectionEnd = pos + t.dataset.insert.length;
+    field.dispatchEvent(new Event("input", {bubbles: true}));
+  }
+});
+
+document.addEventListener("keydown", (ev) => {
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter" && ev.target.dataset.key) {
+    const btn = document.querySelector(`[data-save="${CSS.escape(ev.target.dataset.key)}"]`);
+    if (btn && !btn.disabled) btn.click();
+  }
+});
+
+$("#search").addEventListener("input", render);
+$("#onlyChanged").addEventListener("change", render);
+$("#logout").addEventListener("click", async () => {
+  await fetch("/api/logout", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+  $("#content").innerHTML = `<div class="empty">Вы вышли. Новая ссылка — через /panel в Discord.</div>`;
+});
+
+(async () => {
+  try {
+    const data = await api("GET");
+    data.entries.forEach(e => entries.set(e.key, e));
+    contexts = new Set(data.contexts);
+    bot = data.bot;
+    $("#botname").textContent = `${bot.name} · настройки`;
+    if (bot.avatar) { $("#avatar").src = bot.avatar; $("#avatar").hidden = false; }
+    render();
+  } catch (err) {
+    if (err.message !== "unauthorized") $("#content").innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+})();
+</script>
+</body>
+</html>

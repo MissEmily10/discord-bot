@@ -4,6 +4,10 @@ import time
 
 DATABASE_NAME = "bot.db"
 
+# Строка bot_settings с этим guild_id — общие для всего бота настройки
+# (тексты, цвета, thumbnails). Остальные guild_id — наследие старого /design.
+GLOBAL_SETTINGS_ID = 0
+
 
 def _now():
     return int(time.time())
@@ -162,6 +166,16 @@ def init_database():
             sent_at INTEGER NOT NULL
         )
     """)
+
+    # Старый /design сохранял 5 значений на конкретный сервер. Теперь
+    # настройки общие: переносим их в глобальные, не перетирая уже заданные.
+    cursor.execute("""
+        INSERT OR IGNORE INTO bot_settings (guild_id, key, value)
+        SELECT ?, key, value FROM bot_settings WHERE guild_id != ?
+    """, (GLOBAL_SETTINGS_ID, GLOBAL_SETTINGS_ID))
+    cursor.execute("""
+        DELETE FROM bot_settings WHERE guild_id != ?
+    """, (GLOBAL_SETTINGS_ID,))
 
     connection.commit()
     connection.close()
@@ -642,6 +656,28 @@ def get_setting(guild_id, key):
     """, (guild_id or 0, key)).fetchone()
     connection.close()
     return row[0] if row else None
+
+
+def get_all_settings(guild_id):
+    connection = get_connection()
+    try:
+        rows = connection.execute("""
+            SELECT key, value FROM bot_settings WHERE guild_id = ?
+        """, (guild_id or 0,)).fetchall()
+    except sqlite3.OperationalError:
+        # таблицы ещё нет — init_database() не успел отработать
+        rows = []
+    connection.close()
+    return {key: value for key, value in rows if value is not None}
+
+
+def delete_setting(guild_id, key):
+    connection = get_connection()
+    connection.execute("""
+        DELETE FROM bot_settings WHERE guild_id = ? AND key = ?
+    """, (guild_id or 0, key))
+    connection.commit()
+    connection.close()
 
 
 def set_setting(guild_id, key, value):

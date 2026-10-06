@@ -30,8 +30,8 @@ import discord
 
 import core
 from core import (
-    PanelView, EmbedPaginator, embed_color, ACCESS_LABELS, ACCESS_LEVELS,
-    get_user_level, level_value, actions_for_level, is_action_allowed,
+    PanelView, Modal, t, panel_embed,
+    get_user_level, actions_for_level,
 )
 from database import (
     save_message_build, get_message_build, get_message_builds,
@@ -41,20 +41,18 @@ from database import (
 MAX_EMBEDS = 10
 MAX_BUTTONS = 5
 
+# Подписи стилей — в каталоге: embed.button_color.<ключ>
 BUTTON_STYLES = {
-    "blue": ("🔵 Синяя", discord.ButtonStyle.primary),
-    "grey": ("⚪ Серая", discord.ButtonStyle.secondary),
-    "green": ("🟢 Зелёная", discord.ButtonStyle.success),
-    "red": ("🔴 Красная", discord.ButtonStyle.danger),
-    "link": ("🔗 Ссылка", discord.ButtonStyle.link),
+    "blue": discord.ButtonStyle.primary,
+    "grey": discord.ButtonStyle.secondary,
+    "green": discord.ButtonStyle.success,
+    "red": discord.ButtonStyle.danger,
+    "link": discord.ButtonStyle.link,
 }
 
 
-def E(interaction, title, description=""):
-    return discord.Embed(
-        title=title, description=description,
-        color=embed_color(interaction.guild.id if interaction.guild else None)
-    )
+def say(interaction, key, **params):
+    return interaction.response.send_message(t(key, **params), ephemeral=True)
 
 
 def normalize_url(url):
@@ -103,23 +101,24 @@ def build_custom_list_view(options):
     if not options:
         return None
     view = discord.ui.View(timeout=None)
+    default_label = t("embed.list.default_option")
     select = discord.ui.Select(
-        placeholder="Выбери опцию",
+        placeholder=t("embed.list.placeholder")[:150],
         options=[
             discord.SelectOption(
-                label=str(o.get("label", "Опция"))[:100],
+                label=str(o.get("label") or default_label)[:100],
                 description=(o.get("description") or None),
                 emoji=o.get("emoji") or None,
             )
             for o in options[:25]
         ],
     )
-    by_label = {str(o.get("label", "Опция"))[:100]: o for o in options}
+    by_label = {str(o.get("label") or default_label)[:100]: o for o in options}
 
     async def callback(interaction):
         chosen = by_label.get(select.values[0])
         if not chosen:
-            await interaction.response.send_message("Опция не найдена.", ephemeral=True)
+            await say(interaction, "embed.list.option_missing")
             return
         action_key = chosen.get("action_key")
         value = chosen.get("value")
@@ -138,7 +137,9 @@ NATIVE_SELECT_CLASSES = {
 }
 
 
-class MessageEditModal(discord.ui.Modal, title="РЕДАКТИРОВАТЬ СООБЩЕНИЕ"):
+class MessageEditModal(Modal, title="РЕДАКТИРОВАТЬ СООБЩЕНИЕ"):
+    texts = "actions.edit_modal"
+
     content_input = discord.ui.TextInput(
         label="Новый текст сообщения",
         required=False,
@@ -155,34 +156,24 @@ class MessageEditModal(discord.ui.Modal, title="РЕДАКТИРОВАТЬ СО�
         content = self.content_input.value.strip() or None
         embeds = list(self.target_message.embeds)
         if content is None and not embeds:
-            await interaction.response.send_message(
-                "Нельзя сохранить пустое сообщение: добавь текст.",
-                ephemeral=True,
-            )
+            await say(interaction, "actions.edit_modal.empty")
             return
 
         try:
             await self.target_message.edit(content=content)
         except discord.NotFound:
-            await interaction.response.send_message(
-                "Сообщение уже удалено и недоступно для редактирования.",
-                ephemeral=True,
-            )
+            await say(interaction, "actions.edit_modal.gone")
             return
         except discord.Forbidden:
-            await interaction.response.send_message(
-                "У бота нет права редактировать это сообщение.",
-                ephemeral=True,
-            )
+            await say(interaction, "actions.edit_modal.forbidden")
             return
 
-        await interaction.response.send_message(
-            "Сообщение обновлено.",
-            ephemeral=True,
-        )
+        await say(interaction, "actions.edit_modal.done")
 
 
-class WebhookSendModal(discord.ui.Modal, title="ОТПРАВИТЬ ЧЕРЕЗ WEBHOOK"):
+class WebhookSendModal(Modal, title="ОТПРАВИТЬ ЧЕРЕЗ WEBHOOK"):
+    texts = "actions.webhook_modal"
+
     url_input = discord.ui.TextInput(label="Webhook URL", max_length=1000)
     content_input = discord.ui.TextInput(
         label="Текст сообщения",
@@ -197,28 +188,27 @@ class WebhookSendModal(discord.ui.Modal, title="ОТПРАВИТЬ ЧЕРЕЗ WE
     async def on_submit(self, interaction):
         webhook_url = normalize_url(self.url_input.value)
         if not webhook_url:
-            await interaction.response.send_message("Укажи URL webhook.", ephemeral=True)
+            await say(interaction, "actions.webhook_modal.no_url")
             return
         try:
             webhook = discord.Webhook.from_url(webhook_url, client=interaction.client)
             await webhook.send(self.content_input.value, username=interaction.client.user.name)
-        except (discord.HTTPException, discord.InvalidArgument):
-            await interaction.response.send_message("Не удалось отправить сообщение через webhook.", ephemeral=True)
+        except (discord.HTTPException, ValueError):
+            await say(interaction, "actions.webhook_modal.failed")
             return
-        await interaction.response.send_message("Сообщение через webhook отправлено.", ephemeral=True)
+        await say(interaction, "actions.webhook_modal.sent")
 
 
 async def open_message_edit_modal(interaction):
     if not core.is_action_allowed(core.get_user_level(interaction), "message.edit"):
-        await interaction.response.send_message(
-            "Редактировать сообщения могут только администратор и владелец.",
-            ephemeral=True,
-        )
+        await say(interaction, "actions.edit_denied")
         return
     await interaction.response.send_modal(MessageEditModal(interaction.message))
 
 
-class DangerousActionView(discord.ui.View):
+class DangerousActionView(PanelView):
+    texts = "actions.dangerous"
+
     def __init__(self, action_key, value, target_message=None):
         super().__init__(timeout=300)
         self.action_key = action_key
@@ -237,36 +227,36 @@ class DangerousActionView(discord.ui.View):
 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction, button):
-        await interaction.response.edit_message(content="Действие отменено.", view=None)
+        await interaction.response.edit_message(content=t("actions.cancelled"), view=None)
 
 
 async def dispatch_action(interaction, action_key, value, skip_confirmation=False, target_message=None):
     """Единая маршрутизация действий кнопок и пользовательских списков."""
     if not action_key:
-        await interaction.response.send_message("Действие не настроено.", ephemeral=True)
+        await say(interaction, "actions.not_configured")
         return
     if not core.is_action_allowed(core.get_user_level(interaction), action_key):
-        await interaction.response.send_message("У тебя нет доступа к этому действию.", ephemeral=True)
+        await say(interaction, "actions.no_access")
         return
 
     action_row = core.get_action(action_key)
     if action_row and action_row[2] and not skip_confirmation:
         await interaction.response.send_message(
-            f"⚠️ Действие `{action_key}` может изменить данные или отправить сообщение. Продолжить?",
+            t("actions.dangerous.text", action=action_key),
             view=DangerousActionView(action_key, value, target_message=interaction.message),
             ephemeral=True,
         )
         return
 
     if action_key == "message.send":
-        await interaction.response.send_message(value or "РЕПЛИКА ОС — действие выполнено.", ephemeral=True)
+        await interaction.response.send_message(value or t("actions.default.message"), ephemeral=True)
     elif action_key == "message.confirm":
-        await interaction.response.send_message(value or "РЕПЛИКА ОС — подтверждение получено.", ephemeral=True)
+        await interaction.response.send_message(value or t("actions.default.confirm"), ephemeral=True)
     elif action_key == "message.edit":
         if target_message is None:
             target_message = interaction.message
         if target_message is None:
-            await interaction.response.send_message("Исходное сообщение недоступно для редактирования.", ephemeral=True)
+            await say(interaction, "actions.edit_no_message")
             return
         await interaction.response.send_modal(MessageEditModal(target_message))
     elif action_key == "form.trigger":
@@ -276,20 +266,20 @@ async def dispatch_action(interaction, action_key, value, skip_confirmation=Fals
         try:
             form_id = int((value or "").strip())
         except ValueError:
-            await interaction.response.send_message("Для form.trigger укажи ID формы.", ephemeral=True)
+            await say(interaction, "actions.form_trigger.bad_value")
             return
         row = get_form(form_id)
         if not row:
-            await interaction.response.send_message("Форма не найдена.", ephemeral=True)
+            await say(interaction, "forms.not_found")
             return
         await interaction.response.send_modal(SubmissionModal(row))
     elif action_key == "select.trigger":
         kind = (value or "role").strip().lower()
         if kind not in NATIVE_SELECT_CLASSES:
-            await interaction.response.send_message("Для select.trigger укажи: role, user, channel или mentionable.", ephemeral=True)
+            await say(interaction, "actions.select_trigger.bad_value")
             return
         await interaction.response.send_message(
-            "Выбери значение:",
+            t("actions.select_trigger.prompt"),
             view=build_native_select_view(kind),
             ephemeral=True,
         )
@@ -297,26 +287,26 @@ async def dispatch_action(interaction, action_key, value, skip_confirmation=Fals
         try:
             role_id = int((value or "").strip())
         except ValueError:
-            await interaction.response.send_message("Для действия с ролью укажи ID роли.", ephemeral=True)
+            await say(interaction, "actions.role.bad_value")
             return
         if interaction.guild is None or not interaction.guild.me.guild_permissions.manage_roles:
-            await interaction.response.send_message("У бота нет права Manage Roles.", ephemeral=True)
+            await say(interaction, "actions.role.no_manage_roles")
             return
         role = interaction.guild.get_role(role_id)
         member = interaction.guild.get_member(interaction.user.id)
         bot_member = interaction.guild.me
         if not role or not member or role >= bot_member.top_role:
-            await interaction.response.send_message("Роль не найдена или находится выше роли бота.", ephemeral=True)
+            await say(interaction, "actions.role.unreachable")
             return
         try:
             if action_key == "role.assign":
                 await member.add_roles(role, reason="Message action role.assign")
-                result = "Роль выдана."
+                result = t("actions.role.assigned")
             else:
                 await member.remove_roles(role, reason="Message action role.remove")
-                result = "Роль снята."
+                result = t("actions.role.removed")
         except discord.Forbidden:
-            await interaction.response.send_message("Discord запретил изменение роли.", ephemeral=True)
+            await say(interaction, "actions.role.forbidden")
             return
         await interaction.response.send_message(result, ephemeral=True)
     elif action_key == "webhook.send":
@@ -325,11 +315,11 @@ async def dispatch_action(interaction, action_key, value, skip_confirmation=Fals
         try:
             build_id = int((value or "").strip())
         except ValueError:
-            await interaction.response.send_message("Для build.trigger укажи ID Message Build.", ephemeral=True)
+            await say(interaction, "actions.build_trigger.bad_value")
             return
         row = get_message_build(build_id)
         if not row:
-            await interaction.response.send_message("Message Build не найден.", ephemeral=True)
+            await say(interaction, "embed.build_not_found")
             return
         embeds_data = json.loads(row[5])
         buttons_data = json.loads(row[6])
@@ -338,23 +328,23 @@ async def dispatch_action(interaction, action_key, value, skip_confirmation=Fals
         embeds = [build_discord_embed(item) for item in embeds_data[:MAX_EMBEDS]]
         view = build_final_view(buttons_data, interactive_data)
         if not content and not embeds and view is None:
-            await interaction.response.send_message("Этот Message Build пустой.", ephemeral=True)
+            await say(interaction, "embed.build_empty")
             return
         await interaction.response.send_message(content=content, embeds=embeds, view=view, ephemeral=True)
     else:
-        await interaction.response.send_message(f"РЕПЛИКА ОС — действие `{action_key}` пока в разработке.", ephemeral=True)
+        await interaction.response.send_message(t("actions.wip", action=action_key), ephemeral=True)
 
 
 def build_native_select_view(kind):
     """Discord-нативный select (роль/участник/канал/mentionable)."""
     view = discord.ui.View(timeout=None)
     select_cls = NATIVE_SELECT_CLASSES.get(kind, discord.ui.RoleSelect)
-    select = select_cls(placeholder="Выбери...")
+    select = select_cls(placeholder=t("embed.native_select.placeholder")[:150])
 
     async def callback(interaction):
         chosen = select.values[0]
         label = getattr(chosen, "mention", str(chosen))
-        await interaction.response.send_message(f"Выбрано: {label}", ephemeral=True)
+        await say(interaction, "select.picked", value=label)
 
     select.callback = callback
     view.add_item(select)
@@ -368,10 +358,10 @@ def build_button_view(buttons):
 
     view = discord.ui.View(timeout=None)
     for item in buttons[:MAX_BUTTONS]:
-        label = str(item.get("label", "Кнопка"))[:80]
+        label = str(item.get("label") or t("common.default_button_label"))[:80]
         emoji = item.get("emoji") or None
         style_key = item.get("style", "blue")
-        style = BUTTON_STYLES.get(style_key, ("", discord.ButtonStyle.primary))[1]
+        style = BUTTON_STYLES.get(style_key, discord.ButtonStyle.primary)
         action_key = item.get("action_key")
         value = item.get("value")
 
@@ -416,7 +406,7 @@ class EmbedState:
     def __init__(self, guild_id, owner_id):
         self.guild_id = guild_id
         self.owner_id = owner_id
-        self.name = "Новый Message Build"
+        self.name = t("embed.default_name")
         self.content = ""
         self.embeds = [default_embed_data()]
         self.active_index = 0
@@ -434,7 +424,7 @@ class EmbedState:
 
 def render_active_preview(state):
     embed = build_discord_embed(state.active_embed)
-    embed.set_footer(text=f"Embed {state.active_index + 1}/{len(state.embeds)} · видимость: {state.visibility}")
+    embed.set_footer(text=t("embed.preview_footer", n=state.active_index + 1, total=len(state.embeds), visibility=state.visibility))
     return embed
 
 
@@ -443,6 +433,8 @@ def render_active_preview(state):
 # ============================================================
 
 class EmbedHomeView(PanelView):
+    texts = "embed.home"
+
 
     def __init__(self, guild_id, owner_id):
         super().__init__(back_target=None)
@@ -453,14 +445,14 @@ class EmbedHomeView(PanelView):
     async def create(self, interaction, button):
         state = EmbedState(self.guild_id, self.owner_id)
         await interaction.response.edit_message(
-            embed=E(interaction, "ВИДИМОСТЬ", "Кто сможет видеть и использовать это сообщение?"),
+            embed=panel_embed(interaction, "embed.visibility"),
             view=VisibilityView(state, back_target=(interaction.message.embeds[0], self))
         )
 
     @discord.ui.button(label="Мои сохранённые", emoji="📦", style=discord.ButtonStyle.secondary)
     async def saved(self, interaction, button):
         await interaction.response.edit_message(
-            embed=E(interaction, "СОХРАНЁННЫЕ MESSAGE BUILD", "Выбери, чтобы открыть предпросмотр и действия."),
+            embed=panel_embed(interaction, "embed.saved"),
             view=SavedBuildsListView(self.guild_id, self.owner_id, back_target=(interaction.message.embeds[0], self))
         )
 
@@ -484,8 +476,8 @@ class EmbedHomeView(PanelView):
             btn.callback = cb
             view.add_item(btn)
         if not rows:
-            view.add_item(discord.ui.Button(label="Шаблонов ещё нет", disabled=True))
-        await interaction.response.edit_message(embed=E(interaction, "ШАБЛОНЫ", "Выбери message-шаблон."), view=view)
+            view.add_item(discord.ui.Button(label=t("embed.templates.empty")[:80], disabled=True))
+        await interaction.response.edit_message(embed=panel_embed(interaction, "embed.templates"), view=view)
 
 
 class SavedBuildsListView(PanelView):
@@ -498,17 +490,17 @@ class SavedBuildsListView(PanelView):
             async def cb(interaction, bid=bid):
                 row = get_message_build(bid)
                 if not row:
-                    await interaction.response.send_message("Build не найден.", ephemeral=True)
+                    await say(interaction, "messages.not_found")
                     return
                 await interaction.response.edit_message(
-                    embed=E(interaction, row[3], f"Видимость: `{row[7]}`"),
+                    embed=panel_embed(interaction, "embed.build_card", title=row[3], visibility=row[7]),
                     view=MessageBuildFinalView(bid, back_target=(interaction.message.embeds[0], self))
                 )
 
             btn.callback = cb
             self.add_item(btn)
         if not rows:
-            self.add_item(discord.ui.Button(label="Сохранённых Message Build нет", disabled=True))
+            self.add_item(discord.ui.Button(label=t("embed.saved.empty")[:80], disabled=True))
 
 
 # ============================================================
@@ -516,6 +508,8 @@ class SavedBuildsListView(PanelView):
 # ============================================================
 
 class VisibilityView(PanelView):
+    texts = "embed.visibility"
+
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
@@ -535,12 +529,14 @@ class VisibilityView(PanelView):
         self.state.visibility = "restricted"
         await interaction.response.defer()
         await interaction.edit_original_response(
-            embed=E(interaction, "ОГРАНИЧЕННЫЙ ДОСТУП", "По уровню доступа или по конкретной роли?"),
+            embed=panel_embed(interaction, "embed.restriction"),
             view=RestrictionModeView(self.state, back_target=(interaction.message.embeds[0], self))
         )
 
 
 class RestrictionModeView(PanelView):
+    texts = "embed.restriction"
+
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
@@ -549,14 +545,14 @@ class RestrictionModeView(PanelView):
     async def by_level(self, interaction, button):
         await interaction.response.defer()
         await interaction.edit_original_response(
-            embed=E(interaction, "УРОВЕНЬ", "Кто минимум сможет видеть это сообщение?"),
+            embed=panel_embed(interaction, "embed.restriction_level"),
             view=LevelRestrictionView(self.state, back_target=(interaction.message.embeds[0], self))
         )
 
     @discord.ui.button(label="По роли(ям)", emoji="🎭", style=discord.ButtonStyle.secondary)
     async def by_role(self, interaction, button):
         view = PanelView(back_target=(interaction.message.embeds[0], self))
-        select = discord.ui.RoleSelect(placeholder="Выбери роль(и)", min_values=1, max_values=5)
+        select = discord.ui.RoleSelect(placeholder=t("embed.restriction_roles.placeholder")[:150], min_values=1, max_values=5)
 
         async def selected(i):
             self.state.visibility_roles = [r.id for r in select.values]
@@ -565,10 +561,12 @@ class RestrictionModeView(PanelView):
         select.callback = selected
         view.add_item(select)
         await interaction.response.defer()
-        await interaction.edit_original_response(embed=E(interaction, "РОЛИ", "Выбери до 5 ролей."), view=view)
+        await interaction.edit_original_response(embed=panel_embed(interaction, "embed.restriction_roles"), view=view)
 
 
 class LevelRestrictionView(PanelView):
+    texts = "embed.restriction_level"
+
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
@@ -602,12 +600,12 @@ class EmbedSwitchSelect(discord.ui.Select):
     def __init__(self, state):
         self.state = state
         options = [
-            discord.SelectOption(label=f"Embed {i + 1}", value=str(i), default=(i == state.active_index))
+            discord.SelectOption(label=t("embed.switch.option", n=i + 1)[:100], value=str(i), default=(i == state.active_index))
             for i in range(len(state.embeds))
         ]
         if len(state.embeds) < MAX_EMBEDS:
-            options.append(discord.SelectOption(label="➕ Добавить embed", value="__add__"))
-        super().__init__(placeholder="Переключить embed", options=options, row=0)
+            options.append(discord.SelectOption(label=t("embed.switch.add")[:100], value="__add__"))
+        super().__init__(placeholder=t("embed.switch.placeholder")[:150], options=options, row=0)
 
     async def callback(self, interaction):
         if self.values[0] == "__add__":
@@ -622,6 +620,8 @@ class EmbedSwitchSelect(discord.ui.Select):
 
 
 class EmbedEditorView(PanelView):
+    texts = "embed.editor"
+
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
@@ -642,23 +642,25 @@ class EmbedEditorView(PanelView):
     @discord.ui.button(label="Добавить поле", emoji="➕", style=discord.ButtonStyle.secondary, row=1)
     async def add_field(self, interaction, button):
         if len(self.state.active_embed.get("fields", [])) >= 25:
-            await interaction.response.send_message("В одном embed максимум 25 полей.", ephemeral=True)
+            await say(interaction, "embed.editor.too_many_fields")
             return
         await interaction.response.send_modal(EmbedFieldModal(self.state, self))
 
     @discord.ui.button(label="Библиотека изображений", emoji="🖼️", style=discord.ButtonStyle.secondary, row=2, disabled=True)
     async def image_library(self, interaction, button):
-        await interaction.response.send_message("Библиотека изображений в разработке.", ephemeral=True)
+        await say(interaction, "embed.editor.library_wip")
 
     @discord.ui.button(label="Подтвердить дизайн", emoji="✅", style=discord.ButtonStyle.success, row=2)
     async def confirm(self, interaction, button):
         await interaction.response.edit_message(
-            embed=E(interaction, "ИНТЕРАКТИВ", "Нужны кнопки, форма или выбор? Выбери из списка или сразу жми «Далее», если не нужно ничего."),
+            embed=panel_embed(interaction, "embed.interactive"),
             view=InteractiveMenuView(self.state, back_target=(interaction.message.embeds[0], self))
         )
 
 
-class EmbedBasicModal(discord.ui.Modal, title="ОСНОВНОЕ"):
+class EmbedBasicModal(Modal, title="ОСНОВНОЕ"):
+    texts = "embed.basic_modal"
+
     title_input = discord.ui.TextInput(label="Title", required=False, max_length=256)
     description_input = discord.ui.TextInput(label="Description", required=False, style=discord.TextStyle.paragraph, max_length=4000)
     color_input = discord.ui.TextInput(label="Цвет HEX", required=False, max_length=7, placeholder="#5865F2")
@@ -677,7 +679,7 @@ class EmbedBasicModal(discord.ui.Modal, title="ОСНОВНОЕ"):
         try:
             color_value = int(color_text, 16) if color_text else 0x5865F2
         except ValueError:
-            await interaction.response.send_message("Некорректный HEX-цвет.", ephemeral=True)
+            await say(interaction, "embed.basic_modal.bad_color")
             return
         data = self.state.active_embed
         data["title"] = self.title_input.value.strip()
@@ -686,7 +688,9 @@ class EmbedBasicModal(discord.ui.Modal, title="ОСНОВНОЕ"):
         await interaction.response.edit_message(embed=render_active_preview(self.state), view=self.editor_view)
 
 
-class EmbedMediaModal(discord.ui.Modal, title="ИЗОБРАЖЕНИЯ"):
+class EmbedMediaModal(Modal, title="ИЗОБРАЖЕНИЯ"):
+    texts = "embed.media_modal"
+
     thumbnail_input = discord.ui.TextInput(label="Thumbnail URL", required=False, max_length=1000)
     image_input = discord.ui.TextInput(label="Image URL", required=False, max_length=1000)
 
@@ -705,7 +709,9 @@ class EmbedMediaModal(discord.ui.Modal, title="ИЗОБРАЖЕНИЯ"):
         await interaction.response.edit_message(embed=render_active_preview(self.state), view=self.editor_view)
 
 
-class EmbedAuthorFooterModal(discord.ui.Modal, title="AUTHOR / FOOTER"):
+class EmbedAuthorFooterModal(Modal, title="AUTHOR / FOOTER"):
+    texts = "embed.author_modal"
+
     author_input = discord.ui.TextInput(label="Author name", required=False, max_length=256)
     footer_input = discord.ui.TextInput(label="Footer", required=False, max_length=2048)
 
@@ -724,7 +730,9 @@ class EmbedAuthorFooterModal(discord.ui.Modal, title="AUTHOR / FOOTER"):
         await interaction.response.edit_message(embed=render_active_preview(self.state), view=self.editor_view)
 
 
-class EmbedFieldModal(discord.ui.Modal, title="ПОЛЕ"):
+class EmbedFieldModal(Modal, title="ПОЛЕ"):
+    texts = "embed.field_modal"
+
     name_input = discord.ui.TextInput(label="Название", max_length=256)
     value_input = discord.ui.TextInput(label="Значение", style=discord.TextStyle.paragraph, max_length=1024)
     inline_input = discord.ui.TextInput(label="Inline? yes/no", required=False, max_length=3)
@@ -749,12 +757,12 @@ class EmbedFieldModal(discord.ui.Modal, title="ПОЛЕ"):
 class InteractiveTypeSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Форма", emoji="📝", value="form"),
-            discord.SelectOption(label="Открывающийся список", emoji="📋", value="list"),
-            discord.SelectOption(label="Выбор (роль/участник/канал)", emoji="🎯", value="select"),
-            discord.SelectOption(label="Кнопки", emoji="🔘", value="buttons"),
+            discord.SelectOption(label=t("embed.interactive.option_form")[:100], emoji="📝", value="form"),
+            discord.SelectOption(label=t("embed.interactive.option_list")[:100], emoji="📋", value="list"),
+            discord.SelectOption(label=t("embed.interactive.option_select")[:100], emoji="🎯", value="select"),
+            discord.SelectOption(label=t("embed.interactive.option_buttons")[:100], emoji="🔘", value="buttons"),
         ]
-        super().__init__(placeholder="Не выбрано — можно пропустить", options=options, row=0)
+        super().__init__(placeholder=t("embed.interactive.placeholder")[:150], options=options, row=0)
 
     async def callback(self, interaction):
         self.view.chosen_type = self.values[0]
@@ -762,6 +770,8 @@ class InteractiveTypeSelect(discord.ui.Select):
 
 
 class InteractiveMenuView(PanelView):
+    texts = "embed.interactive"
+
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
@@ -773,22 +783,22 @@ class InteractiveMenuView(PanelView):
         if self.chosen_type == "form":
             import extended_modules
             await interaction.response.edit_message(
-                embed=E(interaction, "FORM BUILDER", "Настрой форму. По завершении сохрани её отдельно — Message Build сохранится следующим шагом."),
+                embed=panel_embed(interaction, "embed.form_step"),
                 view=extended_modules.FormStartView(self.state.guild_id, self.state.owner_id)
             )
         elif self.chosen_type == "list":
             await interaction.response.edit_message(
-                embed=E(interaction, "ОТКРЫВАЮЩИЙСЯ СПИСОК", "Добавь опции списка."),
+                embed=panel_embed(interaction, "embed.list"),
                 view=CustomListBuilderView(self.state, back_target=(interaction.message.embeds[0], self))
             )
         elif self.chosen_type == "select":
             await interaction.response.edit_message(
-                embed=E(interaction, "ВЫБОР", "Какой тип выбора нужен?"),
+                embed=panel_embed(interaction, "embed.native_select"),
                 view=NativeSelectTypeView(self.state, back_target=(interaction.message.embeds[0], self))
             )
         elif self.chosen_type == "buttons":
             await interaction.response.edit_message(
-                embed=E(interaction, "КНОПКИ", f"До {MAX_BUTTONS} кнопок."),
+                embed=panel_embed(interaction, "embed.buttons", max=MAX_BUTTONS),
                 view=ButtonBuilderView(self.state, back_target=(interaction.message.embeds[0], self))
             )
         else:
@@ -797,6 +807,8 @@ class InteractiveMenuView(PanelView):
 
 class CustomListBuilderView(PanelView):
     """Пользовательский select с опциями, которые сама задаёшь."""
+
+    texts = "embed.list"
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
@@ -806,7 +818,7 @@ class CustomListBuilderView(PanelView):
     @discord.ui.button(label="Добавить опцию", emoji="➕", style=discord.ButtonStyle.success)
     async def add_option(self, interaction, button):
         if len(self.state.list_options) >= 25:
-            await interaction.response.send_message("Максимум 25 опций в select.", ephemeral=True)
+            await say(interaction, "embed.list.too_many")
             return
         await interaction.response.send_modal(ListOptionModal(self.state, self))
 
@@ -815,7 +827,9 @@ class CustomListBuilderView(PanelView):
         await finish_message_build(interaction, self.state)
 
 
-class ListOptionModal(discord.ui.Modal, title="ОПЦИЯ СПИСКА"):
+class ListOptionModal(Modal, title="ОПЦИЯ СПИСКА"):
+    texts = "embed.list_option_modal"
+
     label_input = discord.ui.TextInput(label="Текст опции", max_length=100)
     description_input = discord.ui.TextInput(label="Описание", required=False, max_length=100)
     emoji_input = discord.ui.TextInput(label="Emoji", required=False, max_length=100)
@@ -833,7 +847,7 @@ class ListOptionModal(discord.ui.Modal, title="ОПЦИЯ СПИСКА"):
         }
         view = discord.ui.View(timeout=300)
         view.add_item(ListOptionActionSelect(interaction, self.state, pending))
-        await interaction.response.send_message("Какое действие у этой опции?", view=view, ephemeral=True)
+        await interaction.response.send_message(t("embed.list.pick_action"), view=view, ephemeral=True)
 
 
 class ListOptionActionSelect(discord.ui.Select):
@@ -843,20 +857,22 @@ class ListOptionActionSelect(discord.ui.Select):
         options = [
             discord.SelectOption(label=row[0], description=(row[3] or "")[:100], value=row[0])
             for row in allowed
-        ] or [discord.SelectOption(label="Нет доступных действий", value="__none__")]
-        super().__init__(placeholder="Выбери действие", options=options)
+        ] or [discord.SelectOption(label=t("embed.no_actions")[:100], value="__none__")]
+        super().__init__(placeholder=t("embed.pick_action")[:150], options=options)
         self.state = state
         self.pending = pending
 
     async def callback(self, interaction):
         if self.values[0] == "__none__":
-            await interaction.response.send_message("Тебе не разрешено ни одно действие из реестра.", ephemeral=True)
+            await say(interaction, "embed.no_actions_allowed")
             return
         self.pending["action_key"] = self.values[0]
         await interaction.response.send_modal(ListOptionValueModal(self.state, self.pending))
 
 
-class ListOptionValueModal(discord.ui.Modal, title="ЗНАЧЕНИЕ ОПЦИИ"):
+class ListOptionValueModal(Modal, title="ЗНАЧЕНИЕ ОПЦИИ"):
+    texts = "embed.list_value_modal"
+
     value_input = discord.ui.TextInput(label="Текст ответа при выборе", required=False, style=discord.TextStyle.paragraph, max_length=1000)
 
     def __init__(self, state, pending):
@@ -867,10 +883,12 @@ class ListOptionValueModal(discord.ui.Modal, title="ЗНАЧЕНИЕ ОПЦИИ"
     async def on_submit(self, interaction):
         self.pending["value"] = self.value_input.value
         self.state.list_options.append(self.pending)
-        await interaction.response.send_message(f"Опция «{self.pending['label']}» добавлена. Всего: {len(self.state.list_options)}.", ephemeral=True)
+        await say(interaction, "embed.list.option_added", label=self.pending["label"], total=len(self.state.list_options))
 
 
 class NativeSelectTypeView(PanelView):
+    texts = "embed.native_select"
+
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
@@ -901,6 +919,8 @@ class NativeSelectTypeView(PanelView):
 # ============================================================
 
 class ButtonBuilderView(PanelView):
+    texts = "embed.buttons"
+
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
@@ -908,7 +928,7 @@ class ButtonBuilderView(PanelView):
     @discord.ui.button(label="Добавить кнопку", emoji="➕", style=discord.ButtonStyle.success)
     async def add(self, interaction, button):
         if len(self.state.buttons) >= MAX_BUTTONS:
-            await interaction.response.send_message("Максимум 5 кнопок.", ephemeral=True)
+            await say(interaction, "embed.buttons.too_many")
             return
         await interaction.response.send_modal(ButtonLabelModal(self.state, self))
 
@@ -917,7 +937,9 @@ class ButtonBuilderView(PanelView):
         await finish_message_build(interaction, self.state)
 
 
-class ButtonLabelModal(discord.ui.Modal, title="ТЕКСТ КНОПКИ"):
+class ButtonLabelModal(Modal, title="ТЕКСТ КНОПКИ"):
+    texts = "embed.button_label_modal"
+
     label_input = discord.ui.TextInput(label="Текст кнопки", max_length=80)
 
     def __init__(self, state, builder_view):
@@ -928,7 +950,7 @@ class ButtonLabelModal(discord.ui.Modal, title="ТЕКСТ КНОПКИ"):
     async def on_submit(self, interaction):
         pending = {"label": self.label_input.value}
         await interaction.response.edit_message(
-            embed=E(interaction, "ЦВЕТ КНОПКИ", "Выбери стиль (Discord поддерживает только эти 5, кастомный HEX недоступен)."),
+            embed=panel_embed(interaction, "embed.button_color"),
             view=ButtonColorView(self.state, pending, self.builder_view)
         )
 
@@ -939,15 +961,15 @@ class ButtonColorView(PanelView):
         self.state = state
         self.pending = pending
         self.builder_view = builder_view
-        for key, (label, _) in BUTTON_STYLES.items():
-            btn = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
+        for key in BUTTON_STYLES:
+            btn = discord.ui.Button(label=t(f"embed.button_color.{key}")[:80], style=discord.ButtonStyle.secondary)
 
             async def cb(interaction, key=key):
                 self.pending["style"] = key
                 action_view = ButtonActionView(self.state, self.pending, self.builder_view)
                 action_view.add_item(ButtonActionSelect(interaction, self.state, self.pending))
                 await interaction.response.edit_message(
-                    embed=E(interaction, "ДЕЙСТВИЕ", "Что должна делать кнопка? Список зависит от твоего уровня доступа."),
+                    embed=panel_embed(interaction, "embed.button_action"),
                     view=action_view
                 )
 
@@ -962,14 +984,14 @@ class ButtonActionSelect(discord.ui.Select):
         options = [
             discord.SelectOption(label=row[0], description=(row[3] or "")[:100], value=row[0])
             for row in allowed
-        ] or [discord.SelectOption(label="Нет доступных действий", value="__none__")]
-        super().__init__(placeholder="Выбери действие", options=options, row=0)
+        ] or [discord.SelectOption(label=t("embed.no_actions")[:100], value="__none__")]
+        super().__init__(placeholder=t("embed.pick_action")[:150], options=options, row=0)
         self.state = state
         self.pending = pending
 
     async def callback(self, interaction):
         if self.values[0] == "__none__":
-            await interaction.response.send_message("Тебе не разрешено ни одно действие из реестра.", ephemeral=True)
+            await say(interaction, "embed.no_actions_allowed")
             return
         self.pending["action_key"] = self.values[0]
         await interaction.response.send_modal(ButtonValueModal(self.state, self.pending, self.view.builder_view))
@@ -983,7 +1005,9 @@ class ButtonActionView(PanelView):
         self.builder_view = builder_view
 
 
-class ButtonValueModal(discord.ui.Modal, title="ЗНАЧЕНИЕ"):
+class ButtonValueModal(Modal, title="ЗНАЧЕНИЕ"):
+    texts = "embed.button_value_modal"
+
     value_input = discord.ui.TextInput(label="URL или текст действия", required=False, style=discord.TextStyle.paragraph, max_length=1000)
 
     def __init__(self, state, pending, builder_view):
@@ -996,7 +1020,7 @@ class ButtonValueModal(discord.ui.Modal, title="ЗНАЧЕНИЕ"):
         self.pending["value"] = self.value_input.value
         self.state.buttons.append(self.pending)
         await interaction.response.edit_message(
-            embed=E(interaction, "КНОПКИ", f"Добавлено: {len(self.state.buttons)}/{MAX_BUTTONS}."),
+            embed=panel_embed(interaction, "embed.buttons", description=t("embed.buttons.added", count=len(self.state.buttons), max=MAX_BUTTONS)),
             view=self.builder_view
         )
 
@@ -1007,7 +1031,7 @@ class ButtonValueModal(discord.ui.Modal, title="ЗНАЧЕНИЕ"):
 
 async def finish_message_build(interaction, state):
     if interaction.guild is None:
-        await interaction.response.send_message("Только на сервере.", ephemeral=True)
+        await say(interaction, "common.only_in_guild")
         return
 
     interactive_payload = None
@@ -1031,12 +1055,14 @@ async def finish_message_build(interaction, state):
     )
 
     await interaction.response.edit_message(
-        embed=E(interaction, "MESSAGE BUILD СОХРАНЁН", f"ID: `{build_id}` · embed'ов: {len(state.embeds)} · кнопок: {len(state.buttons)}"),
+        embed=panel_embed(interaction, "embed.saved_build", id=build_id, embeds=len(state.embeds), buttons=len(state.buttons)),
         view=MessageBuildFinalView(build_id, back_target=None)
     )
 
 
 class MessageBuildFinalView(PanelView):
+    texts = "embed.final"
+
     def __init__(self, build_id, back_target):
         super().__init__(back_target=back_target)
         self.build_id = build_id
@@ -1045,7 +1071,7 @@ class MessageBuildFinalView(PanelView):
     async def preview(self, interaction, button):
         row = get_message_build(self.build_id)
         if not row:
-            await interaction.response.send_message("Не найден.", ephemeral=True)
+            await say(interaction, "embed.build_not_found")
             return
         embeds_data = json.loads(row[5])
         buttons_data = json.loads(row[6])
@@ -1060,31 +1086,66 @@ class MessageBuildFinalView(PanelView):
     @discord.ui.button(label="Отправить", emoji="📤", style=discord.ButtonStyle.success)
     async def send(self, interaction, button):
         view = discord.ui.View(timeout=300)
-        select = discord.ui.ChannelSelect(placeholder="Куда отправить", channel_types=[discord.ChannelType.text], min_values=1, max_values=5)
+        select = discord.ui.ChannelSelect(placeholder=t("embed.send.placeholder")[:150], channel_types=[discord.ChannelType.text], min_values=1, max_values=5)
 
         async def selected(i):
+            # Отправка в несколько каналов может занять дольше 3 секунд —
+            # сначала defer, иначе Discord сочтёт interaction проваленным.
+            await i.response.defer(ephemeral=True, thinking=True)
+
             row = get_message_build(self.build_id)
-            embeds_data = json.loads(row[5])
+            if not row:
+                await i.followup.send(t("embed.build_not_found"), ephemeral=True)
+                return
+            content = row[4] or None
+            embeds_data = json.loads(row[5])[:MAX_EMBEDS]
             buttons_data = json.loads(row[6])
             interactive_data = json.loads(row[11]) if row[11] else None
             final_view = build_final_view(buttons_data, interactive_data)
 
+            # Каждый embed — отдельным сообщением; content идёт с первым,
+            # компоненты — с последним.
+            parts = [
+                {"embed": build_discord_embed(embed_data)}
+                for embed_data in embeds_data
+            ] or [{}]
+            if content:
+                parts[0]["content"] = content
+            if final_view is not None:
+                parts[-1]["view"] = final_view
+            if parts == [{}]:
+                await i.followup.send(t("embed.build_empty"), ephemeral=True)
+                return
+
+            sent, failed = [], []
             for channel in select.values:
                 real_channel = i.guild.get_channel(channel.id)
-                for index, embed_data in enumerate(embeds_data):
-                    is_last = index == len(embeds_data) - 1
-                    msg = await real_channel.send(
-                        embed=build_discord_embed(embed_data),
-                        view=final_view if is_last else None,
-                    )
-                    # Живой объект: помним, откуда родилось каждое сообщение
-                    save_sent_instance(self.build_id, msg.id, real_channel.id, i.guild.id)
+                if real_channel is None:
+                    failed.append(t("embed.send.channel_missing", channel=f"<#{channel.id}>"))
+                    continue
+                try:
+                    for part in parts:
+                        msg = await real_channel.send(**part)
+                        # Живой объект: помним, откуда родилось каждое сообщение
+                        save_sent_instance(self.build_id, msg.id, real_channel.id, i.guild.id)
+                except discord.Forbidden:
+                    failed.append(t("embed.send.forbidden", channel=real_channel.mention))
+                    continue
+                except discord.HTTPException as error:
+                    failed.append(t("embed.send.http_error", channel=real_channel.mention, error=error))
+                    continue
+                sent.append(real_channel.mention)
 
-            await i.response.send_message(f"Отправлено в {len(select.values)} канал(ов).", ephemeral=True)
+            lines = []
+            if sent:
+                lines.append(t("embed.send.sent", channels=", ".join(sent)))
+            if failed:
+                lines.append(t("embed.send.failed", errors="\n".join(failed)))
+            await i.followup.send("\n\n".join(lines), ephemeral=True)
 
         select.callback = selected
         view.add_item(select)
-        await interaction.response.send_message("Выбери канал(ы):", view=view, ephemeral=True)
+        await interaction.response.send_message(t("embed.send.prompt"), view=view, ephemeral=True)
 
     @discord.ui.button(label="Сохранить как шаблон", emoji="💾", style=discord.ButtonStyle.primary)
     async def save_template_button(self, interaction, button):
@@ -1093,12 +1154,14 @@ class MessageBuildFinalView(PanelView):
     @discord.ui.button(label="Удалить", emoji="🗑️", style=discord.ButtonStyle.danger)
     async def delete(self, interaction, button):
         if delete_message_build(self.build_id, interaction.user.id):
-            await interaction.response.edit_message(embed=discord.Embed(title="MESSAGE BUILD УДАЛЁН"), view=None)
+            await interaction.response.edit_message(embed=panel_embed(interaction, "embed.deleted"), view=None)
         else:
-            await interaction.response.send_message("Удалить может только создатель.", ephemeral=True)
+            await say(interaction, "embed.delete_denied")
 
 
-class SaveAsTemplateModal(discord.ui.Modal, title="СОХРАНИТЬ КАК ШАБЛОН"):
+class SaveAsTemplateModal(Modal, title="СОХРАНИТЬ КАК ШАБЛОН"):
+    texts = "embed.save_template_modal"
+
     name_input = discord.ui.TextInput(label="Название шаблона", max_length=100)
     category_input = discord.ui.TextInput(label="Категория", required=False, max_length=50)
 
@@ -1109,7 +1172,7 @@ class SaveAsTemplateModal(discord.ui.Modal, title="СОХРАНИТЬ КАК Ш�
     async def on_submit(self, interaction):
         row = get_message_build(self.build_id)
         if not row:
-            await interaction.response.send_message("Message Build не найден.", ephemeral=True)
+            await say(interaction, "embed.build_not_found")
             return
         payload = {
             "embeds": json.loads(row[5]),
@@ -1126,7 +1189,7 @@ class SaveAsTemplateModal(discord.ui.Modal, title="СОХРАНИТЬ КАК Ш�
             category=self.category_input.value.strip() or "general",
             allowed_role_ids_json=row[9],
         )
-        await interaction.response.send_message(f"Сохранено как шаблон `{tid}`.", ephemeral=True)
+        await say(interaction, "embed.save_template_modal.done", id=tid)
 
 
 # ============================================================
@@ -1140,11 +1203,7 @@ def register_embed(bot):
             return
 
         await interaction.response.send_message(
-            embed=E(
-                interaction, "MESSAGE BUILD",
-                "Собери сообщение из embed'ов, добавь кнопки/форму/список и отправь пакетом в нужные каналы.\n\n"
-                "С чего начнём?"
-            ),
+            embed=panel_embed(interaction, "embed.home"),
             view=EmbedHomeView(interaction.guild.id, interaction.user.id),
             ephemeral=True,
         )
