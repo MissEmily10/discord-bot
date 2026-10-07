@@ -16,6 +16,7 @@ bot_settings через core.set_setting — изменения применяю
 Без порта панель не запускается, без URL /panel объяснит, что добавить.
 """
 
+import asyncio
 import base64
 import hashlib
 import io
@@ -320,10 +321,13 @@ async def upload_asset(request):
         return web.json_response({"error": "Загрузка работает, когда в .env задан WEB_PANEL_URL."}, status=409)
     try:
         body = await request.json()
+        if not isinstance(body, dict):
+            raise TypeError("body must be an object")
         raw = base64.b64decode(body.get("data") or "", validate=True)
     except (ValueError, TypeError):
         return web.json_response({"error": "Файл не прочитался, попробуй ещё раз."}, status=400)
-    name, error = save_asset(raw)
+    # разбор картинки (до 8 МБ) и запись на диск — не в цикле событий бота
+    name, error = await asyncio.to_thread(save_asset, raw)
     if error:
         return web.json_response({"error": error}, status=422)
     _log.info("web panel: uploaded asset %s (%d bytes)", name, len(raw))

@@ -621,6 +621,8 @@ class LiveAndAutomationTests(unittest.TestCase):
         self.automation, self.live = automation, live
         self.guild = make_guild()
         automation._bot = types.SimpleNamespace(get_guild=lambda gid: self.guild if gid == GUILD else None)
+        automation._trigger_cache.clear()
+        automation._cooldowns.clear()
         live._bot = None
 
     def test_parse_time(self):
@@ -639,6 +641,9 @@ class LiveAndAutomationTests(unittest.TestCase):
         self.assertEqual(a.parse_interval("1 неделя"), 10080)
         self.assertEqual(a.parse_interval("12ч"), 720)
         self.assertIsNone(a.parse_interval("1м"))  # слишком часто
+        self.assertIsNone(a.parse_when("+1 мес", now))  # не «1 минута»
+        self.assertEqual(a.parse_duration("2 часа"), 120)
+        self.assertEqual(a.parse_duration("3 недели"), 30240)
 
     def test_variables_and_inheritance(self):
         live = self.live
@@ -708,6 +713,84 @@ class LiveAndAutomationTests(unittest.TestCase):
         self.assertEqual(channel.sent[0]["content"], f"Привет, <@{MEMBER}>! Правила тут.")
         # персональное сообщение не попадает в «обновить отправленные»
         self.assertEqual(database.get_sent_instances(bid), [])
+
+    def test_member_join_welcomes_everyone_and_cache_invalidates(self):
+        a = self.automation
+        channel = FakeChannel(self.guild, 9003)
+        bid = database.save_message_build(GUILD, STAFF, "hi", "Привет, {user}!", "[]", "[]")
+
+        async def join(uid):
+            await a.on_member_join(types.SimpleNamespace(guild=self.guild, id=uid, mention=f"<@{uid}>",
+                                                         display_name=f"u{uid}", name=f"u{uid}"))
+
+        async def check():
+            await join(MEMBER)  # триггера ещё нет — кэш запомнил пустой список
+            trigger_id = database.add_trigger(GUILD, bid, STAFF, "member_join", target_channel_id=channel.id)
+            a.invalidate_triggers(GUILD)
+            await join(MEMBER)
+            await join(ADMIN2)  # второй новичок в ту же паузу тоже получает приветствие
+            await join(MEMBER)  # повтор того же человека — пауза
+            self.assertEqual([m["content"] for m in channel.sent], [f"Привет, <@{MEMBER}>!", f"Привет, <@{ADMIN2}>!"])
+            database.delete_trigger(trigger_id)
+            a.invalidate_triggers(GUILD)
+            a._cooldowns.clear()
+            await join(STAFF)
+            self.assertEqual(len(channel.sent), 2)
+
+        run(check())
+
+    def test_user_name_cannot_ping(self):
+        async def check():
+            user = types.SimpleNamespace(mention="<@5>", display_name="<@&777> @everyone", name="x")
+            values = await self.live.collect(self.guild, {("user_name", None)}, user=user)
+            self.assertNotIn("<@&777>", values["user_name"])
+            self.assertNotIn("@everyone", values["user_name"])
+
+        run(check())
+
+    def test_resync_keeps_sends_grouped(self):
+        live = self.live
+        edits, deleted, counter = [], [], [1000]
+
+        class Partial:
+            def __init__(self, mid):
+                self.id = mid
+
+            async def edit(self, **kwargs):
+                edits.append(self.id)
+
+            async def delete(self):
+                deleted.append(self.id)
+
+        class Channel:
+            id = 9100
+            guild = self.guild
+
+            def get_partial_message(self, mid):
+                return Partial(mid)
+
+            async def send(self, **kwargs):
+                counter[0] += 1
+                return types.SimpleNamespace(id=counter[0])
+
+        self.guild.channels[Channel.id] = Channel()
+        bid = database.save_message_build(GUILD, STAFF, "g", "", json.dumps([{"title": "1"}, {"title": "2"}]), "[]")
+        for mid, part in ((1, 0), (2, 1), (3, 0), (4, 1)):  # две отправки по 2 сообщения
+            database.save_sent_instance(bid, mid, Channel.id, GUILD, part)
+        row = database.get_message_build(bid)
+        database.update_message_build(bid, **{**database.build_snapshot(row),
+                                              "embeds_json": json.dumps([{"title": "1"}, {"title": "2"}, {"title": "3"}])})
+
+        async def check():
+            first = await live.resync_build(self.guild, bid)
+            self.assertEqual(first[2], 2)  # дослано по одному в каждую отправку
+            second = await live.resync_build(self.guild, bid)
+            self.assertEqual(second, (6, 0, 0, 0))  # повторно ничего не досылается и не удаляется
+            groups = live._group_sends([(m, p) for m, _, _, _, p in database.get_sent_instances(bid)])
+            self.assertEqual(sorted(len(g) for g in groups), [3, 3])
+
+        run(check())
+        self.assertEqual(deleted, [])
 
     def test_counter_variant_and_goto(self):
         g = self.guild
@@ -877,6 +960,28 @@ class WebPanelTests(unittest.TestCase):
         self.assertEqual(web_panel.validate("banner.embed", "none"), ("none", None))
         self.assertIn("banner.embed", web_panel.editable_keys())
         self.assertEqual(web_panel.group_of("banner.embed"), "style")
+
+    def test_upload_rejects_non_object_body(self):
+        import web_panel
+
+        class Request:
+            def __init__(self, body):
+                self.body = body
+
+            async def json(self):
+                return self.body
+
+        old = os.environ.get("WEB_PANEL_URL")
+        os.environ["WEB_PANEL_URL"] = "http://127.0.0.1:1"
+        try:
+            for body in ([], "строка", {"data": "не base64!"}):
+                response = run(web_panel.upload_asset(Request(body)))
+                self.assertEqual(response.status, 400)
+        finally:
+            if old is None:
+                os.environ.pop("WEB_PANEL_URL", None)
+            else:
+                os.environ["WEB_PANEL_URL"] = old
 
 
 class LogoTests(unittest.TestCase):

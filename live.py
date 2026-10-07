@@ -15,6 +15,7 @@ live.py
 import asyncio
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -23,7 +24,7 @@ import discord
 import core
 from core import t
 from actions import (
-    load_source, message_parts, used_variables, member_can_view,
+    load_source, message_parts, used_variables, member_can_view, _json,
 )
 from database import (
     get_message_build, get_message_builds, get_sent_instances, save_sent_instance,
@@ -72,6 +73,15 @@ async def _online(guild):
         pass
     _online_cache[guild.id] = (time.time(), value)
     return value
+
+
+_MENTION = re.compile(r"<(@[!&]?|#)(\d+)>")
+
+
+def safe_text(text):
+    """Текст от участника без рабочих упоминаний: ни @everyone/@here, ни <@&роль>, ни <@id>."""
+    text = discord.utils.escape_mentions(str(text))  # @everyone / @here
+    return _MENTION.sub(lambda m: f"<\u200b{m[1]}{m[2]}>", text)
 
 
 async def collect(guild, needed, user=None, extra=None):
@@ -124,7 +134,9 @@ async def collect(guild, needed, user=None, extra=None):
 
     if user is not None:
         variables["user"] = user.mention
-        variables["user_name"] = getattr(user, "display_name", None) or user.name
+        # Имя задаёт сам участник: без экранирования «<@&роль>» в нике пинговал бы
+        # роль, если у автора расписания/триггера есть право на массовые упоминания.
+        variables["user_name"] = safe_text(getattr(user, "display_name", None) or user.name)
     variables.update(extra or {})
     return variables
 
@@ -262,11 +274,20 @@ async def _resync_one(guild, build_id):
     for channel_id, instances in by_channel.items():
         channel = guild.get_channel_or_thread(channel_id)
         if channel is None:
-            missing += len(instances)
-            for message_id, _ in instances:
-                delete_sent_instance(message_id)
-            continue
+            # Архивные ветки и посты форума не лежат в кэше — это не значит,
+            # что их нет. Забываем сообщения, только если канал правда удалён.
+            try:
+                channel = await guild.fetch_channel(channel_id)
+            except discord.NotFound:
+                missing += len(instances)
+                for message_id, _ in instances:
+                    delete_sent_instance(message_id)
+                continue
+            except discord.HTTPException:
+                missing += len(instances)
+                continue
         for group in _group_sends(instances):
+            kept = []
             for position, message_id in enumerate(group):
                 message = channel.get_partial_message(message_id)
                 try:
@@ -284,16 +305,27 @@ async def _resync_one(guild, build_id):
                 except discord.NotFound:
                     delete_sent_instance(message_id)
                     missing += 1
+                    continue
                 except discord.HTTPException:
                     missing += 1
+                kept.append(message_id)
+            appended = []
             for position in range(len(group), len(parts)):
                 try:
                     msg = await channel.send(allowed_mentions=discord.AllowedMentions.none(), **parts[position])
                 except discord.HTTPException:
                     missing += 1
                     continue
-                save_sent_instance(build_id, msg.id, channel.id, guild.id, position)
+                appended.append(msg.id)
                 added += 1
+            if appended:
+                # Записи отправки должны идти подряд (по id), иначе _group_sends
+                # в следующий раз припишет досланное сообщение чужой отправке
+                # в этом же канале. Поэтому переписываем всю группу заново.
+                for message_id in kept:
+                    delete_sent_instance(message_id)
+                for position, message_id in enumerate(kept + appended):
+                    save_sent_instance(build_id, message_id, channel.id, guild.id, position)
     return updated, removed, added, missing
 
 
@@ -360,17 +392,9 @@ def automation_author(guild, owner_id, build_row):
     member = guild.get_member(owner_id)
     if member is None or build_row is None:
         return None
-    settings_roles = core_json(build_row[9])
-    levels = core_json(build_row[10])
+    settings_roles = _json(build_row[9], [])
+    levels = _json(build_row[10], [])
     if not member_can_view(guild, member, build_row[2], build_row[7], settings_roles, levels):
         return None
     return member
 
-
-def core_json(value):
-    import json
-    try:
-        result = json.loads(value or "[]")
-    except (TypeError, ValueError):
-        return []
-    return result if isinstance(result, list) else []

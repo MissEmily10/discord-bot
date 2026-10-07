@@ -17,6 +17,7 @@ actions.py
 
 import json
 import re
+import time
 from datetime import datetime
 
 import discord
@@ -956,6 +957,10 @@ async def _build_goto(interaction, value, creator_id=None, **_):
     await _send_parts(interaction, parts)
 
 
+_REFRESH_COOLDOWN = 30
+_last_refresh = {}  # build_id -> ts последнего обновления кнопкой
+
+
 async def _build_refresh(interaction, value, creator_id=None, **_):
     import live
 
@@ -964,6 +969,17 @@ async def _build_refresh(interaction, value, creator_id=None, **_):
     if not row or row[1] != interaction.guild.id:
         await reply(interaction, "embed.build_not_found")
         return
+    if not build_attach_allowed(interaction, row, creator_id):
+        await reply(interaction, "actions.build_no_access")
+        return
+    # Кнопка доступна всем: без паузы её можно жать без конца, и каждое
+    # нажатие правит все отправленные сообщения build'а (лимиты Discord).
+    now = time.monotonic()
+    wait = _REFRESH_COOLDOWN - (now - _last_refresh[build_id]) if build_id in _last_refresh else 0
+    if wait > 0:
+        await reply(interaction, "actions.build_refresh.cooldown", seconds=int(wait) + 1)
+        return
+    _last_refresh[build_id] = now
     await interaction.response.defer(ephemeral=True, thinking=True)
     updated, removed, added, missing = await live.resync_build(interaction.guild, build_id)
     await interaction.followup.send(t("actions.build_refresh.done", updated=updated + added), ephemeral=True)

@@ -322,6 +322,7 @@ CATALOG = {
     "automation.variant_build.title": "ЧТО ПОКАЗАТЬ",
     "automation.variant_build.text": "Выбери build, который увидят эти люди вместо основного.",
     "actions.build_refresh.done": "🔄 Обновлено сообщений: {updated}.",
+    "actions.build_refresh.cooldown": "⏳ Эти сообщения только что обновлялись — попробуй через {seconds} сек.",
     "actions.counter.bad_value": "Счётчик: имя и изменение, например `очки +1`, `очки -5` или `очки =0`.",
     "actions.counter.done": "Счётчик **{name}**: {value}",
     "embed.value_hint.counter.change": "очки +1  ·  очки -1  ·  очки =0",

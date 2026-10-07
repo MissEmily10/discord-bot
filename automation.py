@@ -17,6 +17,7 @@ Message Build без ручной отправки:
 """
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -54,10 +55,10 @@ _bot = None
 # ============================================================
 
 _UNITS = {
-    "m": 1, "min": 1, "мин": 1, "м": 1,
-    "h": 60, "ч": 60, "час": 60,
-    "d": 1440, "д": 1440, "дн": 1440, "день": 1440, "дня": 1440, "дней": 1440,
-    "w": 10080, "н": 10080, "нед": 10080, "неделя": 10080, "недели": 10080,
+    **dict.fromkeys(("m", "min", "mins", "minute", "minutes", "м", "мин", "минута", "минуты", "минут", "минуту"), 1),
+    **dict.fromkeys(("h", "hour", "hours", "ч", "час", "часа", "часов"), 60),
+    **dict.fromkeys(("d", "day", "days", "д", "дн", "день", "дня", "дней"), 1440),
+    **dict.fromkeys(("w", "week", "weeks", "н", "нед", "неделя", "недели", "недель", "неделю"), 10080),
 }
 _DURATION = re.compile(r"^(\d{1,4})\s*([a-zа-яё]+)$")
 
@@ -67,11 +68,9 @@ def parse_duration(text):
     match = _DURATION.match((text or "").strip().lower())
     if not match:
         return None
-    unit = match[2]
-    for name in sorted(_UNITS, key=len, reverse=True):
-        if unit.startswith(name):
-            return int(match[1]) * _UNITS[name]
-    return None
+    # Только точное совпадение: по префиксу «1 мес» превращался в 1 минуту.
+    unit = _UNITS.get(match[2])
+    return int(match[1]) * unit if unit else None
 
 
 def parse_when(text, now=None):
@@ -231,13 +230,35 @@ async def run_schedule(schedule, now):
 # ТРИГГЕРЫ
 # ============================================================
 
-_cooldowns = {}  # (trigger_id, channel_id) -> ts
+_cooldowns = {}  # (trigger_id, channel_id[, member_id]) -> ts
+
+# Активные триггеры сервера по событию. on_message срабатывает на каждое
+# сообщение — без кэша это запрос к базе на каждую реплику в чате.
+TRIGGER_CACHE_SECONDS = 30
+_trigger_cache = {}  # (guild_id, event) -> (ts, [rows])
+
+
+def active_triggers(guild_id, event):
+    key = (guild_id, event)
+    cached = _trigger_cache.get(key)
+    if cached and time.monotonic() - cached[0] < TRIGGER_CACHE_SECONDS:
+        return cached[1]
+    rows = get_triggers(guild_id=guild_id, event=event)
+    _trigger_cache[key] = (time.monotonic(), rows)
+    return rows
+
+
+def invalidate_triggers(guild_id):
+    for key in [k for k in _trigger_cache if k[0] == guild_id]:
+        del _trigger_cache[key]
 
 
 async def fire_trigger(trigger, guild, channel, user=None):
-    trigger_id, _, build_id, owner_id = trigger[:4]
+    trigger_id, _, build_id, owner_id, event = trigger[:5]
     cooldown = trigger[8] or 0
-    key = (trigger_id, channel.id)
+    # Приветствие нужно каждому новичку: пауза для member_join — на человека,
+    # иначе зашедшие в одни 30 секунд остаются без сообщения.
+    key = (trigger_id, channel.id, user.id if event == "member_join" and user is not None else None)
     now = time.time()
     if now - _cooldowns.get(key, 0) < cooldown:
         return
@@ -257,14 +278,14 @@ def _watches(trigger, channel):
 
 
 async def on_member_join(member):
-    for trigger in get_triggers(guild_id=member.guild.id, event="member_join"):
+    for trigger in active_triggers(member.guild.id, "member_join"):
         channel = member.guild.get_channel_or_thread(trigger[7] or 0)
         if channel is not None:
             await fire_trigger(trigger, member.guild, channel, user=member)
 
 
 async def on_thread_create(thread):
-    triggers = [tr for tr in get_triggers(guild_id=thread.guild.id, event="thread_create") if _watches(tr, thread)]
+    triggers = [tr for tr in active_triggers(thread.guild.id, "thread_create") if _watches(tr, thread)]
     if not triggers:
         return
     await asyncio.sleep(THREAD_DELAY)
@@ -284,7 +305,7 @@ def keyword_matches(pattern, content):
 async def on_message(message):
     if message.guild is None or message.author.bot or message.webhook_id:
         return
-    for trigger in get_triggers(guild_id=message.guild.id, event="keyword"):
+    for trigger in active_triggers(message.guild.id, "keyword"):
         if _watches(trigger, message.channel) and keyword_matches(trigger[5], message.content):
             await fire_trigger(trigger, message.guild, message.channel, user=message.author)
 
@@ -592,6 +613,7 @@ class TriggersView(PanelView):
             watch_channel_id=watch.id if watch else None, target_channel_id=target.id if target else None,
             cooldown_seconds=cooldown,
         )
+        invalidate_triggers(interaction.guild.id)
         core.audit(interaction, "trigger.created", "build", self.build_id, f"trigger={trigger_id} event={event}")
         return True
 
@@ -644,6 +666,7 @@ class KeywordScopeView(PanelView):
             return
         trigger_id = add_trigger(interaction.guild.id, view.build_id, interaction.user.id, "keyword",
                                  pattern=self.words, cooldown_seconds=self.cooldown)
+        invalidate_triggers(interaction.guild.id)
         core.audit(interaction, "trigger.created", "build", view.build_id, f"trigger={trigger_id} event=keyword")
         await view._show_list(interaction)
 
@@ -674,6 +697,7 @@ class TriggerItemView(PanelView):
         row = self._row()
         if row:
             update_trigger(self.trigger_id, enabled=0 if row[9] else 1, last_error=None)
+            invalidate_triggers(interaction.guild.id)
         await self._back(interaction)
 
     @discord.ui.button(label="Удалить", emoji="🗑️", style=discord.ButtonStyle.danger)
@@ -682,6 +706,7 @@ class TriggerItemView(PanelView):
             return
         if self._row():
             delete_trigger(self.trigger_id)
+            invalidate_triggers(interaction.guild.id)
             core.audit(interaction, "trigger.deleted", "build", self.build_id, f"trigger={self.trigger_id}")
         await self._back(interaction)
 
@@ -843,7 +868,7 @@ class VariantConditionView(PanelView):
             variants = list(get_build_settings(build_id).get("variants") or [])
             variants.append({**condition, "build_id": target[0]})
             self.settings_view._update(variants=variants)
-            core.audit(i, "build.variant_added", "build", build_id, json_safe(condition))
+            core.audit(i, "build.variant_added", "build", build_id, json.dumps(condition, ensure_ascii=False))
             await self.settings_view.show(i)
 
         select.callback = picked
@@ -857,11 +882,6 @@ class VariantConditionView(PanelView):
     @discord.ui.button(label="Admin и выше", style=discord.ButtonStyle.primary)
     async def admin(self, interaction, button):
         await self._pick_build(interaction, {"level": "admin"})
-
-
-def json_safe(value):
-    import json
-    return json.dumps(value, ensure_ascii=False)
 
 
 # ============================================================
