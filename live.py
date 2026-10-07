@@ -346,7 +346,7 @@ def setup(bot):
 def builds_using(guild_id, predicate):
     """build'ы сервера, которые отправлены и используют переменную, подходящую под predicate(имя, арг)."""
     result = []
-    for build_id, *_ in get_message_builds(guild_id):
+    for build_id, *_ in get_message_builds(guild_id, include_hidden=True):
         if not get_sent_instances(build_id):
             continue
         data = load_source("b", build_id)

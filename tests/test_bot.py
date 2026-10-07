@@ -511,6 +511,81 @@ class EmbedEditorTests(unittest.TestCase):
         run(check())
 
 
+class SendThenSaveTests(unittest.TestCase):
+    def setUp(self):
+        import embed_module
+        self.em = embed_module
+        self.guild = make_guild()
+
+    def interaction(self):
+        i = FakeInteraction(self.guild, self.guild.members[STAFF])
+        i.edits = []
+
+        async def edit_original_response(**kwargs):
+            i.edits.append(kwargs)
+        i.edit_original_response = edit_original_response
+        return i
+
+    def listed_ids(self):
+        return [row[0] for row in database.get_message_builds(GUILD)]
+
+    def test_send_without_saving_then_save(self):
+        em = self.em
+        channel = FakeChannel(self.guild, 9200)
+        state = em.EmbedState(GUILD, STAFF)
+        state.content = "Объявление"
+
+        async def check():
+            hub = em.InteractiveHubView(state, back_target=None)
+            i = self.interaction()
+            await em.send_from_editor(i, state, [channel], hub)
+            build_id = state.build_id
+            self.assertEqual(channel.sent[0]["content"], "Объявление")
+            # отправлено, работает, но в списках не видно
+            self.assertNotIn(build_id, self.listed_ids())
+            self.assertIn(build_id, [r[0] for r in database.get_message_builds(GUILD, include_hidden=True)])
+            self.assertIsInstance(i.edits[-1]["view"], em.SaveAfterSendView)
+            # повторная отправка того же черновика не плодит новые build'ы
+            await em.send_from_editor(self.interaction(), state, [channel], hub)
+            self.assertEqual(state.build_id, build_id)
+            # «Сохранить» с названием -> появляется в списке
+            modal = em.SaveAfterSendModal(build_id, state.name)
+            modal.name_input._value = "Новости недели"
+            await modal.on_submit(self.interaction())
+            self.assertIn(build_id, self.listed_ids())
+            self.assertEqual(database.get_message_build(build_id)[3], "Новости недели")
+            # уже сохранённый: отправка не спрашивает и не прячет
+            i = self.interaction()
+            await em.send_from_editor(i, state, [channel], hub)
+            self.assertIsInstance(i.edits[-1]["view"], em.MessageBuildFinalView)
+            self.assertIn(build_id, self.listed_ids())
+
+        run(check())
+
+    def test_failed_send_leaves_no_junk(self):
+        em = self.em
+        closed = FakeChannel(self.guild, 9201, allow=False)
+        state = em.EmbedState(GUILD, STAFF)
+        state.content = "x"
+        before = len(database.get_message_builds(GUILD, include_hidden=True))
+
+        async def check():
+            i = self.interaction()
+            await em.send_from_editor(i, state, [closed], em.InteractiveHubView(state, back_target=None))
+            self.assertIsNone(state.build_id)
+            self.assertIn("НЕ ОТПРАВЛЕНО", i.edits[-1]["embed"].title)
+
+        run(check())
+        self.assertEqual(len(database.get_message_builds(GUILD, include_hidden=True)), before)
+
+    def test_plain_save_is_listed(self):
+        em = self.em
+        state = em.EmbedState(GUILD, STAFF)
+        state.content = "сохранить"
+        run(em.finish_message_build(self.interaction(), state))
+        self.assertIn(state.build_id, self.listed_ids())
+
+
 class BuildToolsTests(unittest.TestCase):
     def setUp(self):
         import build_tools

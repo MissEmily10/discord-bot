@@ -425,6 +425,7 @@ HINTS_FOR = {
     "webhooks.created": "webhooks.card",
     "embed.saved_build": "embed.final",
     "embed.build_card": "embed.final",
+    "embed.sent_saved": "embed.final",
 }
 _hint_keys = {}
 

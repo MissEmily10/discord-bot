@@ -119,6 +119,9 @@ def init_database():
             ALTER TABLE message_builds
             ADD COLUMN interactive_json TEXT NOT NULL DEFAULT 'null'
         """)
+    if "listed" not in mb_columns:
+        # 0 — отправлен без сохранения: кнопки работают, но в списках его нет
+        cursor.execute("ALTER TABLE message_builds ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
     if "settings_json" not in mb_columns:
         # живое обновление, родитель стиля, варианты по ролям
         cursor.execute("ALTER TABLE message_builds ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'")
@@ -475,6 +478,7 @@ def save_message_build(
     allowed_role_ids_json="[]",
     visibility_levels_json="[]",
     interactive_json="null",
+    listed=True,
 ):
     now = int(time.time())
     connection = get_connection()
@@ -484,12 +488,12 @@ def save_message_build(
         INSERT INTO message_builds
         (guild_id, owner_id, name, content, embeds_json, buttons_json,
          visibility, category, allowed_role_ids_json, visibility_levels_json,
-         interactive_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         interactive_json, created_at, updated_at, listed)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         guild_id, owner_id, name, content, embeds_json, buttons_json,
         visibility, category, allowed_role_ids_json, visibility_levels_json,
-        interactive_json, now, now
+        interactive_json, now, now, int(bool(listed))
     ))
 
     build_id = cursor.lastrowid
@@ -513,36 +517,45 @@ def get_message_build(build_id):
     return result
 
 
-def get_message_builds(guild_id, owner_id=None, include_public=True):
+def get_message_builds(guild_id, owner_id=None, include_public=True, include_hidden=False):
+    """Build'ы сервера для списков. Скрытые (отправлены без сохранения) — только с include_hidden."""
+    where, params = ["guild_id = ?"], [guild_id]
+    if owner_id is not None:
+        if include_public:
+            where.append("(owner_id = ? OR visibility = 'public')")
+        else:
+            where.append("owner_id = ?")
+        params.append(owner_id)
+    if not include_hidden:
+        where.append("listed = 1")
     connection = get_connection()
-    cursor = connection.cursor()
-
-    if owner_id is None:
-        cursor.execute("""
-            SELECT id, owner_id, name, visibility, category, updated_at
-            FROM message_builds
-            WHERE guild_id = ?
-            ORDER BY updated_at DESC
-        """, (guild_id,))
-    elif include_public:
-        cursor.execute("""
-            SELECT id, owner_id, name, visibility, category, updated_at
-            FROM message_builds
-            WHERE guild_id = ?
-              AND (owner_id = ? OR visibility = 'public')
-            ORDER BY updated_at DESC
-        """, (guild_id, owner_id))
-    else:
-        cursor.execute("""
-            SELECT id, owner_id, name, visibility, category, updated_at
-            FROM message_builds
-            WHERE guild_id = ? AND owner_id = ?
-            ORDER BY updated_at DESC
-        """, (guild_id, owner_id))
-
-    rows = cursor.fetchall()
+    rows = connection.execute(f"""
+        SELECT id, owner_id, name, visibility, category, updated_at
+        FROM message_builds
+        WHERE {' AND '.join(where)}
+        ORDER BY updated_at DESC
+    """, params).fetchall()
     connection.close()
     return rows
+
+
+def is_build_listed(build_id):
+    connection = get_connection()
+    row = connection.execute("SELECT listed FROM message_builds WHERE id = ?", (build_id,)).fetchone()
+    connection.close()
+    return bool(row and row[0])
+
+
+def set_build_listed(build_id, listed=True, name=None):
+    """Показать отправленное без сохранения сообщение в списках (и дать ему название)."""
+    connection = get_connection()
+    if name is None:
+        connection.execute("UPDATE message_builds SET listed = ? WHERE id = ?", (int(bool(listed)), build_id))
+    else:
+        connection.execute("UPDATE message_builds SET listed = ?, name = ? WHERE id = ?",
+                           (int(bool(listed)), name, build_id))
+    connection.commit()
+    connection.close()
 
 
 def update_message_build(

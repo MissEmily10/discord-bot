@@ -22,11 +22,12 @@ from core import PanelView, Modal, t, panel_embed, get_user_level, actions_for_l
 from actions import (
     MAX_EMBEDS, MAX_BUTTONS, BUTTON_STYLES,
     say, valid_emoji, build_discord_embed,
-    validate_action_value, build_visible, template_visible, form_visible,
+    validate_action_value, build_visible, template_visible, form_visible, reply,
     check_url, embed_has_content, EMBED_TOTAL_LIMIT,
 )
 from database import (
     save_message_build, update_message_build, get_message_build, get_message_builds,
+    is_build_listed, set_build_listed,
     delete_message_build, get_sent_instances,
     save_template, get_templates, get_template, get_forms, get_form,
 )
@@ -708,7 +709,26 @@ class InteractiveHubView(PanelView):
             view=FormAttachView(interaction, self.state, hub=self, back_target=self.hub_target(interaction))
         )
 
-    @discord.ui.button(label="Сохранить", emoji="💾", style=discord.ButtonStyle.success, row=1)
+    @discord.ui.button(label="Отправить", emoji="📤", style=discord.ButtonStyle.success, row=1)
+    async def send_now(self, interaction, button):
+        problem = state_problem(self.state)
+        if problem:
+            await say(interaction, problem[0], **problem[1])
+            return
+        view = PanelView(back_target=(interaction.message.embeds[0], self), timeout=600)
+        select = discord.ui.ChannelSelect(
+            placeholder=t("embed.send.placeholder")[:150], channel_types=SEND_CHANNEL_TYPES,
+            min_values=1, max_values=5,
+        )
+
+        async def selected(i):
+            await send_from_editor(i, self.state, select.values, self)
+
+        select.callback = selected
+        view.add_item(select)
+        await interaction.response.edit_message(embed=panel_embed(interaction, "embed.send_pick"), view=view)
+
+    @discord.ui.button(label="Сохранить", emoji="💾", style=discord.ButtonStyle.secondary, row=1)
     async def save(self, interaction, button):
         await finish_message_build(interaction, self.state)
 
@@ -1101,20 +1121,28 @@ class ButtonColorView(PanelView):
 # ФИНАЛ — живой Message Build
 # ============================================================
 
-async def finish_message_build(interaction, state):
-    if interaction.guild is None:
-        await say(interaction, "common.only_in_guild")
-        return
+def state_problem(state):
+    """-> (ключ ошибки, параметры) или None, если сообщение можно сохранить/отправить."""
     if not state.content.strip() and not state.buttons and not state.interactive \
             and not any(embed_has_content(e) for e in state.embeds):
-        await say(interaction, "embed.save_empty")
-        return
+        return "embed.save_empty", {}
     for n, data in enumerate(state.embeds, 1):
         length = len(build_discord_embed(data))
         if length > EMBED_TOTAL_LIMIT:
-            await say(interaction, "embed.too_long_n", n=n, length=length, max=EMBED_TOTAL_LIMIT)
-            return
+            return "embed.too_long_n", {"n": n, "length": length, "max": EMBED_TOTAL_LIMIT}
+    return None
 
+
+async def persist_state(interaction, state, listed=True):
+    """
+    Записать build из редактора. Новый — создаётся (listed=False: отправлен без
+    сохранения — работает, но в списках не виден); существующий — обновляется,
+    прежний вид уходит в историю. -> id build'а или None (ошибка уже показана).
+    """
+    problem = state_problem(state)
+    if problem:
+        await reply(interaction, problem[0], **problem[1])
+        return None
     fields = dict(
         name=state.name,
         content=state.content,
@@ -1129,19 +1157,31 @@ async def finish_message_build(interaction, state):
     if state.build_id is not None:
         row = get_message_build(state.build_id)
         if not row or not can_manage_build(interaction, row):
-            await say(interaction, "embed.edit_denied")
-            return
+            await reply(interaction, "embed.edit_denied")
+            return None
         from build_tools import remember_version
         remember_version(state.build_id, interaction.user.id)  # прежний вид — в историю
         update_message_build(state.build_id, **fields)
-        build_id = state.build_id
-        core.audit(interaction, "build.updated", "build", build_id)
-        key = "embed.saved_build.updated"
-    else:
-        build_id = save_message_build(guild_id=interaction.guild.id, owner_id=interaction.user.id, **fields)
-        core.audit(interaction, "build.created", "build", build_id)
-        key = "embed.saved_build.text"
+        if listed:
+            set_build_listed(state.build_id, True)
+        core.audit(interaction, "build.updated", "build", state.build_id)
+        return state.build_id
+    state.build_id = save_message_build(
+        guild_id=interaction.guild.id, owner_id=interaction.user.id, listed=listed, **fields,
+    )
+    core.audit(interaction, "build.created", "build", state.build_id, "" if listed else "unlisted")
+    return state.build_id
 
+
+async def finish_message_build(interaction, state):
+    if interaction.guild is None:
+        await say(interaction, "common.only_in_guild")
+        return
+    existed = state.build_id is not None and is_build_listed(state.build_id)
+    build_id = await persist_state(interaction, state, listed=True)
+    if build_id is None:
+        return
+    key = "embed.saved_build.updated" if existed else "embed.saved_build.text"
     await interaction.response.edit_message(
         content=None,  # убираем подсказку импорта, если была
         embed=panel_embed(interaction, "embed.saved_build", description=t(
@@ -1150,6 +1190,89 @@ async def finish_message_build(interaction, state):
         )),
         view=MessageBuildFinalView(build_id, back_target=None)
     )
+
+
+async def send_from_editor(interaction, state, channels, hub):
+    """
+    «Отправить» на последнем шаге конструктора: build записывается скрытым
+    (если он новый), уходит в каналы, а потом бот спрашивает, сохранить ли его
+    в списки. Ничего не ушло — новый скрытый build удаляется, мусора нет.
+    """
+    await interaction.response.defer()
+    created = state.build_id is None
+    build_id = await persist_state(interaction, state, listed=False)
+    if build_id is None:
+        return
+    sent, failed = await send_build(interaction, build_id, channels)
+    result = []
+    if sent:
+        result.append(t("embed.send.sent", channels=", ".join(sent)))
+    if failed:
+        result.append(t("embed.send.failed", errors="\n".join(failed)))
+    result = "\n\n".join(result)
+    hub_screen = (panel_embed(interaction, "embed.interactive", description=interactive_summary(state)),
+                  InteractiveHubView(state, back_target=hub.back_target))
+    if not sent:
+        if created:
+            delete_message_build(build_id)
+            state.build_id = None
+        await interaction.edit_original_response(
+            embed=panel_embed(interaction, "embed.send_failed", result=result),
+            view=PanelView(back_target=hub_screen),
+        )
+        return
+    if is_build_listed(build_id):
+        embed = panel_embed(interaction, "embed.sent_saved", result=result, id=build_id)
+        view = MessageBuildFinalView(build_id, back_target=None)
+    else:
+        embed = panel_embed(interaction, "embed.save_after", result=result)
+        view = SaveAfterSendView(build_id, state)
+    await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+
+class SaveAfterSendView(PanelView):
+    """Сообщение отправлено без сохранения: добавить его в «Мои сохранённые»?"""
+
+    texts = "embed.save_after"
+
+    def __init__(self, build_id, state):
+        super().__init__(back_target=None)
+        self.build_id = build_id
+        self.state = state
+
+    @discord.ui.button(label="Сохранить", emoji="💾", style=discord.ButtonStyle.success)
+    async def save(self, interaction, button):
+        await interaction.response.send_modal(SaveAfterSendModal(self.build_id, self.state.name))
+
+    @discord.ui.button(label="Не нужно", style=discord.ButtonStyle.secondary)
+    async def skip(self, interaction, button):
+        await interaction.response.edit_message(embed=panel_embed(interaction, "embed.save_after_skipped"), view=None)
+
+
+class SaveAfterSendModal(Modal, title="СОХРАНИТЬ СООБЩЕНИЕ"):
+    texts = "embed.save_after_modal"
+
+    name_input = discord.ui.TextInput(label="Название в списке", max_length=100)
+
+    def __init__(self, build_id, name):
+        super().__init__()
+        self.build_id = build_id
+        default = t("embed.default_name")
+        self.name_input.default = "" if name == default else name
+
+    async def on_submit(self, interaction):
+        row = get_message_build(self.build_id)
+        if not row or row[1] != interaction.guild.id or not can_manage_build(interaction, row):
+            await say(interaction, "embed.build_not_found")
+            return
+        name = self.name_input.value.strip() or t("embed.default_name")
+        set_build_listed(self.build_id, True, name=name)
+        core.audit(interaction, "build.listed", "build", self.build_id, name)
+        row = get_message_build(self.build_id)
+        await interaction.response.edit_message(
+            embed=build_card_embed(interaction, row),
+            view=MessageBuildFinalView(self.build_id, back_target=None),
+        )
 
 
 SEND_CHANNEL_TYPES = [
