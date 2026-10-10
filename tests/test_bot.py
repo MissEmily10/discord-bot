@@ -142,7 +142,8 @@ class FakeChannel:
 
     def permissions_for(self, who):
         return discord.Permissions(view_channel=self.allow, send_messages=self.allow, embed_links=True,
-                                   send_messages_in_threads=self.allow, mention_everyone=False)
+                                   send_messages_in_threads=self.allow, mention_everyone=False,
+                                   read_message_history=self.allow)
 
     async def send(self, **kwargs):
         self.sent.append(kwargs)
@@ -586,6 +587,100 @@ class SendThenSaveTests(unittest.TestCase):
         self.assertIn(state.build_id, self.listed_ids())
 
 
+class MediaTests(unittest.TestCase):
+    FOREIGN = "<:pepe:123456789012345678>"
+    ANIMATED = "<a:dance:223456789012345678>"
+
+    def setUp(self):
+        import media
+        from PIL import Image
+        self.media = media
+        media.ensure_table()
+        media._app_emoji_ids.clear()
+        media._app_emoji_names.clear()
+        buffer = io.BytesIO()
+        Image.new("RGBA", (64, 64), (255, 0, 0, 255)).save(buffer, format="PNG")
+        self.png = buffer.getvalue()
+        self.downloads, self.created = [], []
+        self.fail_download = set()
+        test = self
+
+        async def fake_fetch(url, timeout=8, max_bytes=0):
+            test.downloads.append(url)
+            return None if any(part in url for part in test.fail_download) else test.png
+        self._old_fetch = core.fetch_bytes
+        core.fetch_bytes = fake_fetch
+
+        class Emoji:
+            def __init__(self, emoji_id, name, animated=False):
+                self.id, self.name, self.animated = emoji_id, name, animated
+
+            def __str__(self):
+                return f"<{'a' if self.animated else ''}:{self.name}:{self.id}>"
+
+        async def create_application_emoji(name, image):
+            emoji = Emoji(900000000000000000 + len(test.created), name)
+            test.created.append(emoji)
+            return emoji
+
+        local = {111111111111111111}
+        self.bot = types.SimpleNamespace(
+            get_emoji=lambda emoji_id: object() if emoji_id in local else None,
+            create_application_emoji=create_application_emoji,
+        )
+        os.environ["WEB_PANEL_URL"] = "http://bot.example:8080"
+        import web_panel
+        web_panel.ASSETS_DIR = pathlib.Path(_TMP.name) / "assets"
+
+    def tearDown(self):
+        core.fetch_bytes = self._old_fetch
+        os.environ.pop("WEB_PANEL_URL", None)
+
+    def test_foreign_emoji_is_copied_once(self):
+        m = self.media
+
+        async def check():
+            first = await m.mirror_emoji(self.bot, self.FOREIGN)
+            self.assertRegex(first, r"^<:pepe:9\d+>$")
+            again = await m.mirror_emoji(self.bot, self.FOREIGN)
+            self.assertEqual(first, again)
+            self.assertEqual(len(self.created), 1)  # вторую копию не создаёт
+            # свой эмодзи и обычный unicode не трогаем
+            self.assertEqual(await m.mirror_emoji(self.bot, "<:ours:111111111111111111>"), "<:ours:111111111111111111>")
+            self.assertEqual(await m.mirror_emoji(self.bot, "🔥"), "🔥")
+            await m.mirror_emoji(self.bot, self.ANIMATED)
+            self.assertTrue(self.downloads[-1].endswith(".gif?size=128"))
+
+        run(check())
+
+    def test_prepare_payload(self):
+        m = self.media
+        self.fail_download.add("223456789012345678")  # анимированный не скачался
+        self.fail_download.add("old.png")              # протухшая ссылка
+        payload = {
+            "content": f"Привет {self.FOREIGN}!",
+            "embeds": [{"title": "t", "image": "https://cdn.discordapp.com/attachments/1/2/pic.png?ex=1&hm=2",
+                        "thumbnail": "https://media.discordapp.net/attachments/1/2/old.png", "fields": []}],
+            "buttons": [{"label": "a", "emoji": self.FOREIGN}, {"label": "b", "emoji": self.ANIMATED}],
+            "interactive": {"type": "list", "options": [{"label": "o", "emoji": "🙂"}]},
+        }
+        self.assertTrue(m.needs_work(self.bot, payload))
+
+        async def check():
+            warnings = await m.prepare(self.bot, payload)
+            self.assertNotIn("123456789012345678", payload["content"])
+            self.assertRegex(payload["buttons"][0]["emoji"], r"^<:pepe:9\d+>$")
+            self.assertIsNone(payload["buttons"][1]["emoji"])  # не скопировался — убран, иначе кнопку не примут
+            self.assertTrue(payload["embeds"][0]["image"].startswith("http://bot.example:8080/assets/"))
+            self.assertIsNone(payload["embeds"][0]["thumbnail"])
+            keys = [key for key, _ in warnings]
+            self.assertIn("media.expired", keys)
+            self.assertIn("media.emoji_failed", keys)
+            self.assertFalse(m.needs_work(self.bot, payload))
+
+        run(check())
+
+
 class BuildToolsTests(unittest.TestCase):
     def setUp(self):
         import build_tools
@@ -602,6 +697,35 @@ class BuildToolsTests(unittest.TestCase):
         self.assertEqual(p("123456789012345678-223456789012345678"), (None, 123456789012345678, 223456789012345678))
         self.assertEqual(p("700", default_channel_id=42), (None, 42, 700))
         self.assertIsNone(p("привет"))
+
+    def test_import_from_other_server(self):
+        bt = self.bt
+        other = make_guild()
+        other.id = 600
+        other.members.pop(MEMBER)
+        channel = FakeChannel(other, 7001)
+        message = types.SimpleNamespace(id=1)
+
+        async def fetch_message(message_id):
+            return message
+        channel.fetch_message = fetch_message
+        link = "https://discord.com/channels/600/7001/123"
+
+        async def check():
+            i = self.i(MEMBER)
+            i.channel = None
+            i.client = types.SimpleNamespace(get_guild=lambda gid: None)
+            self.assertEqual((await bt.fetch_message_for(i, link))[1], "build_tools.import.bot_not_there")
+            i.client = types.SimpleNamespace(get_guild=lambda gid: other if gid == 600 else None)
+            self.assertEqual((await bt.fetch_message_for(i, link))[1], "build_tools.import.not_member")
+            i = self.i(STAFF)
+            i.channel = None
+            i.client = types.SimpleNamespace(get_guild=lambda gid: other if gid == 600 else None)
+            self.assertIs((await bt.fetch_message_for(i, link))[0], message)
+            channel.allow = False  # на том сервере канал закрыт для тебя
+            self.assertEqual((await bt.fetch_message_for(i, link))[1], "build_tools.import.no_access")
+
+        run(check())
 
     def test_message_to_payload_and_sanitize(self):
         bt = self.bt

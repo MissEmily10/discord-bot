@@ -159,9 +159,14 @@ def message_to_payload(message):
                      "emoji": _emoji_text(option.emoji), "action_key": None, "value": None}
                     for option in item.options
                 ]}
+    embeds = [embed_to_data(embed) for embed in message.embeds if embed.type == "rich"]
+    # Картинки, прикреплённые к сообщению файлами, — отдельными embed'ами с картинкой.
+    for attachment in getattr(message, "attachments", None) or []:
+        if (attachment.content_type or "").startswith("image/") and len(embeds) < MAX_EMBEDS:
+            embeds.append({"title": "", "description": "", "image": attachment.url, "fields": []})
     return {
         "content": message.content or "",
-        "embeds": [embed_to_data(embed) for embed in message.embeds if embed.type == "rich"],
+        "embeds": embeds,
         "buttons": buttons,
         "interactive": interactive,
     }
@@ -173,12 +178,22 @@ async def fetch_message_for(interaction, text):
     if ref is None:
         return None, "build_tools.import.bad_ref"
     guild_id, channel_id, message_id = ref
+    source_guild, reader = interaction.guild, interaction.user
     if guild_id is not None and guild_id != interaction.guild.id:
-        return None, "build_tools.import.other_guild"
-    channel = interaction.guild.get_channel_or_thread(channel_id)
+        # Другой сервер: бот должен там быть, а ты — состоять на нём и видеть канал.
+        source_guild = interaction.client.get_guild(guild_id)
+        if source_guild is None:
+            return None, "build_tools.import.bot_not_there"
+        reader = source_guild.get_member(interaction.user.id)
+        if reader is None:
+            return None, "build_tools.import.not_member"
+    channel = source_guild.get_channel_or_thread(channel_id)
     if channel is None:
-        return None, "build_tools.import.no_channel"
-    perms = channel.permissions_for(interaction.user)
+        try:
+            channel = await source_guild.fetch_channel(channel_id)  # архивные ветки не в кэше
+        except discord.HTTPException:
+            return None, "build_tools.import.no_channel"
+    perms = channel.permissions_for(reader)
     if not (perms.view_channel and perms.read_message_history):
         return None, "build_tools.import.no_access"
     try:
@@ -327,7 +342,11 @@ async def open_imported(interaction, payload, name=None, source_key="build_tools
     """Открыть редактор с импортированным содержимым (ещё не сохранено)."""
     from embed_module import EmbedState, EmbedEditorView, editor_embeds
 
+    import media
+
     clean, dropped = sanitize_payload(interaction, payload)
+    # Чужие эмодзи и вложения Discord (ссылки на них истекают) — сразу в хранилище бота.
+    media_warnings = await media.prepare(interaction.client, clean)
     state = EmbedState(interaction.guild.id, interaction.user.id)
     state.load_payload(clean)
     if name:
@@ -340,6 +359,8 @@ async def open_imported(interaction, payload, name=None, source_key="build_tools
         note += "\n" + t("build_tools.import.dropped", count=dropped)
     if unconfigured:
         note += "\n" + t("build_tools.import.unconfigured", count=unconfigured)
+    for key, params in media_warnings:
+        note += "\n⚠️ " + t(key, **params)
     note += "\n" + t("build_tools.import.save_hint")
     kwargs = dict(content=note, embeds=editor_embeds(state), view=EmbedEditorView(state, back_target=None))
     if interaction.response.is_done():

@@ -24,6 +24,7 @@ import embed_module
 import extended_modules
 import logo_module
 import automation
+import media
 import web_panel
 from extended_modules import register_extended
 
@@ -70,6 +71,7 @@ async def setup_hook():
     bot.add_dynamic_items(*actions.DYNAMIC_ITEMS, *extended_modules.DYNAMIC_ITEMS, *logo_module.DYNAMIC_ITEMS)
     await web_panel.start(bot)
     automation.setup(bot)  # расписание, триггеры, живое обновление
+    await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)
 
 bot.setup_hook = setup_hook
 
@@ -189,18 +191,30 @@ class InlineButtonModal(Modal, title="НОВАЯ КНОПКА"):
             await interaction.response.send_message(t(error), ephemeral=True)
             return
 
+        emoji = self.emoji_input.value.strip() or None
+        if emoji and media.needs_work(interaction.client, {"buttons": [{"emoji": emoji}]}):
+            # эмодзи с чужого сервера: копия в хранилище бота (скачивание — не за 3 секунды)
+            await interaction.response.defer()
+            emoji = await media.mirror_emoji(interaction.client, emoji)
+            if emoji is None:
+                await interaction.followup.send(t("media.emoji_failed", count=1), ephemeral=True)
+
         self.state.buttons.append({
             "label": self.label_input.value,
-            "emoji": self.emoji_input.value.strip() or None,
+            "emoji": emoji,
             "style": style,
             "action_key": action_key,
             "value": value,
         })
 
-        await interaction.response.edit_message(
+        kwargs = dict(
             embed=render_button_builder(interaction, self.state),
-            view=InlineButtonBuilderView(self.state, back_target=self.back_target)
+            view=InlineButtonBuilderView(self.state, back_target=self.back_target),
         )
+        if interaction.response.is_done():
+            await interaction.edit_original_response(**kwargs)
+        else:
+            await interaction.response.edit_message(**kwargs)
 
 
 class ButtonSetNameModal(Modal, title="НАЗВАНИЕ НАБОРА"):

@@ -1143,6 +1143,8 @@ async def persist_state(interaction, state, listed=True):
     if problem:
         await reply(interaction, problem[0], **problem[1])
         return None
+    if not await prepare_media(interaction, state):
+        return None
     fields = dict(
         name=state.name,
         content=state.content,
@@ -1173,6 +1175,34 @@ async def persist_state(interaction, state, listed=True):
     return state.build_id
 
 
+async def prepare_media(interaction, state):
+    """
+    Чужие эмодзи -> копии в хранилище бота, вложения Discord -> постоянные
+    ссылки (см. media.py). Скачивание может занять больше 3 секунд, поэтому
+    ответ Discord'у откладывается заранее. -> False, если ответить не вышло.
+    """
+    import media
+    payload = {"content": state.content, "embeds": state.embeds, "buttons": state.buttons,
+               "interactive": state.interactive}
+    if not media.needs_work(interaction.client, payload):
+        return True
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    warnings = await media.prepare(interaction.client, payload)
+    state.content = payload["content"]
+    for key, params in warnings:
+        await reply(interaction, key, **params)
+    return True
+
+
+async def edit_panel(interaction, **kwargs):
+    """Обновить панель, даже если ответ уже отложен (defer)."""
+    if interaction.response.is_done():
+        await interaction.edit_original_response(**kwargs)
+    else:
+        await interaction.response.edit_message(**kwargs)
+
+
 async def finish_message_build(interaction, state):
     if interaction.guild is None:
         await say(interaction, "common.only_in_guild")
@@ -1182,7 +1212,7 @@ async def finish_message_build(interaction, state):
     if build_id is None:
         return
     key = "embed.saved_build.updated" if existed else "embed.saved_build.text"
-    await interaction.response.edit_message(
+    await edit_panel(interaction,
         content=None,  # убираем подсказку импорта, если была
         embed=panel_embed(interaction, "embed.saved_build", description=t(
             key, id=build_id, embeds=len(state.embeds), buttons=len(state.buttons),

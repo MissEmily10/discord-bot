@@ -80,6 +80,21 @@ current data from the database.
   itself saved, so it can be undone. Sent messages follow after
   **Обновить отправленные**.
 
+## Emoji and images from other servers
+
+- **Emoji:** a bot can only show custom emoji it can see. When a build is
+  saved or sent, emoji from servers the bot isn't on are copied once into the
+  bot's own application emoji storage (up to 2000, usable on any server, no
+  server slots) and swapped in on buttons, lists and text. Copies are never
+  deleted — deleting would break buttons that were already sent.
+- **Images:** links to Discord attachments (`cdn.discordapp.com/attachments/…`)
+  expire after about a day. On save/send/import the bot downloads them while
+  they still work and serves them from the web panel (`/assets/…`), so this
+  needs `WEB_PANEL_URL`.
+- **Import from another server:** `/embed` → «Из сообщения» accepts links from
+  other servers if the bot is there and you can read that channel; images
+  attached to the message become embed images.
+
 ## Automation and live messages
 
 All of this lives on a build's card (`/messages` → a build):
