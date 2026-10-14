@@ -45,14 +45,20 @@ Discord рисует картинку внутри embed'а только под 
 | Ключ | Где видно |
 |---|---|
 | `thumbnail.default` | всё, у чего нет своей иконки |
-| `thumbnail.embed` | /embed, /messages, расписание, триггеры, настройки сообщений |
-| `thumbnail.forms` | /forms |
-| `thumbnail.access` | /access, /design |
-| `thumbnail.buttons` | /buttons |
-| `thumbnail.templates` | /templates |
-| `thumbnail.webhooks` | /webhooks |
-| `thumbnail.select` | /select |
-| `thumbnail.logo` | /logo |
+| `thumbnail.embed` | /embed и всё внутри (расписание, триггеры, настройки) |
+| `thumbnail.library` | главная /library (пока — иконка шаблонов) |
+| `thumbnail.templates` | шаблоны в /library |
+| `thumbnail.interactive` | главная /interactive (пока — иконка кнопок) |
+| `thumbnail.buttons` | наборы кнопок в /interactive |
+| `thumbnail.select` | меню ролей в /interactive |
+| `thumbnail.forms` | формы в /interactive и /forms |
+| `thumbnail.logo` | /logo и стили иконок |
+| `thumbnail.eminemovna` | главная /eminemovna (пока — иконка доступа) |
+| `thumbnail.access` | доступ и оформление в /eminemovna |
+| `thumbnail.webhooks` | вебхуки в /eminemovna |
+
+Для `library`, `interactive` и `eminemovna` своих иконок пока нет — если
+нарисуешь, добавлю слоты в Figma и подключу.
 
 Своя иконка экрана (`<экран>.thumbnail`, например `embed.home.thumbnail`)
 перекрывает иконку команды. `none` — без иконки.
@@ -63,7 +69,8 @@ Discord рисует картинку внутри embed'а только под 
 `access.users.banner`). Баннер показывается **только** на своём экране:
 ничего не подставляется на чужие экраны и не «наследуется» от команды.
 Пустой ключ — на экране баннера нет. Полный список экранов — в Figma
-(раздел «Баннеры экранов») и в веб-панели (поле `banner` у каждого экрана).
+(раздел «Баннеры экранов», по 6 командам) и в веб-панели (поле `banner` у
+каждого экрана).
 
 ## Как картинки попадают в бота
 
