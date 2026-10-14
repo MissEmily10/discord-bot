@@ -772,6 +772,7 @@ class InteractiveHubView(PanelView):
 
         select.callback = selected
         view.add_item(select)
+        add_webhook_option(interaction, view, lambda i, record: send_from_editor(i, self.state, [], self, record))
         await interaction.response.edit_message(embed=panel_embed(interaction, "embed.send_pick"), view=view)
 
     @discord.ui.button(label="Сохранить", emoji="💾", style=discord.ButtonStyle.secondary, row=1)
@@ -1272,7 +1273,7 @@ async def finish_message_build(interaction, state):
     )
 
 
-async def send_from_editor(interaction, state, channels, hub):
+async def send_from_editor(interaction, state, channels, hub, webhook_record=None):
     """
     «Отправить» на последнем шаге конструктора: build записывается скрытым
     (если он новый), уходит в каналы, а потом бот спрашивает, сохранить ли его
@@ -1283,7 +1284,13 @@ async def send_from_editor(interaction, state, channels, hub):
     build_id = await persist_state(interaction, state, listed=False)
     if build_id is None:
         return
-    sent, failed = await send_build(interaction, build_id, channels)
+    if webhook_record is not None:
+        import live
+        message, error = await live.deliver_webhook(interaction.guild, interaction.user, build_id, webhook_record)
+        sent = [t("embed.send.via_webhook", name=webhook_record[5], channel=message.channel.mention)] if message else []
+        failed = [error] if error else []
+    else:
+        sent, failed = await send_build(interaction, build_id, channels)
     result = []
     if sent:
         result.append(t("embed.send.sent", channels=", ".join(sent)))
@@ -1308,6 +1315,40 @@ async def send_from_editor(interaction, state, channels, hub):
         embed = panel_embed(interaction, "embed.save_after", result=result)
         view = SaveAfterSendView(build_id, state)
     await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+
+def add_webhook_option(interaction, view, on_pick):
+    """
+    Кнопка «Через вебхук» на шаге отправки: только тем, кому доступны вебхуки
+    (admin+), и если на сервере есть сохранённые вебхуки (/eminemovna → Вебхуки).
+    """
+    import live
+    from database import get_webhooks, get_webhook
+
+    rows = get_webhooks(interaction.guild.id)
+    if not rows or not live.can_use_webhooks(interaction.guild, interaction.user):
+        return
+    button = discord.ui.Button(label=t("embed.send_pick.via_webhook")[:80], emoji="🪝",
+                               style=discord.ButtonStyle.secondary, row=1)
+
+    async def choose(i):
+        pick = PanelView(back_target=(core.screen(i), view), timeout=600)
+        select = discord.ui.Select(
+            placeholder=t("embed.send_pick.webhook_placeholder")[:150],
+            options=[discord.SelectOption(label=f"{(name or '—')[:70]} · #{rid}", value=str(rid),
+                                          description=t("embed.send_pick.webhook_option", channel_id=channel_id)[:100])
+                     for rid, owner, webhook_id, channel_id, name, *_ in rows[:25]],
+        )
+
+        async def picked(ci):
+            await on_pick(ci, get_webhook(int(select.values[0])))
+
+        select.callback = picked
+        pick.add_item(select)
+        await i.response.edit_message(embed=panel_embed(i, "embed.send_webhook"), view=pick)
+
+    button.callback = choose
+    view.add_item(button)
 
 
 class SaveAfterSendView(PanelView):
@@ -1440,8 +1481,19 @@ class MessageBuildFinalView(PanelView):
                 lines.append(t("embed.send.failed", errors="\n".join(failed)))
             await i.followup.send("\n\n".join(lines), ephemeral=True)
 
+        async def via_webhook(i, record):
+            import live
+            await i.response.defer(ephemeral=True, thinking=True)
+            message, error = await live.deliver_webhook(i.guild, i.user, self.build_id, record)
+            text = (t("embed.send.sent", channels=t("embed.send.via_webhook", name=record[5], channel=message.channel.mention))
+                    if message else "") + (("\n\n" + t("embed.send.failed", errors=error)) if error else "")
+            if message:
+                core.audit(i, "build.sent", "build", self.build_id, f"webhook={record[0]}")
+            await i.followup.send(text.strip(), ephemeral=True)
+
         select.callback = selected
         view.add_item(select)
+        add_webhook_option(interaction, view, via_webhook)
         await interaction.response.send_message(t("embed.send.prompt"), view=view, ephemeral=True)
 
     @discord.ui.button(label="Редактировать", emoji="✏️", style=discord.ButtonStyle.primary)

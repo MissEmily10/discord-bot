@@ -1174,6 +1174,42 @@ class HubTests(unittest.TestCase):
         self.assertIn(("library",), rows)
 
 
+class WebhookSendTests(unittest.TestCase):
+    def test_send_build_through_webhook(self):
+        import live
+        g = make_guild()
+        channel = FakeChannel(g, 9400)
+        sent = []
+
+        class FakeWebhook:
+            async def send(self, wait=False, **kwargs):
+                sent.append(kwargs)
+                return types.SimpleNamespace(id=len(sent), channel=channel)
+
+        old = discord.Webhook.from_url
+        discord.Webhook.from_url = staticmethod(lambda url, client=None, session=None: FakeWebhook())
+        buttons = json.dumps([{"label": "Ок", "style": "blue", "action_key": "message.send", "value": "hi"}])
+        bid = database.save_message_build(GUILD, ADMIN, "wh", "Привет", "[]", buttons)
+        rid = database.save_webhook(GUILD, ADMIN, 555, channel.id, "Ведущий", "https://discord.com/api/webhooks/1/x", None)
+        other = database.save_webhook(GUILD + 1, ADMIN, 556, channel.id, "Чужой", "https://discord.com/api/webhooks/2/y", None)
+        try:
+            async def check():
+                # staff — нельзя (вебхуки — для admin+)
+                _, error = await live.deliver_webhook(g, g.members[STAFF], bid, database.get_webhook(rid))
+                self.assertEqual(error, core.t("common.need_admin"))
+                # вебхук другого сервера — нельзя
+                _, error = await live.deliver_webhook(g, g.members[ADMIN], bid, database.get_webhook(other))
+                self.assertIsNotNone(error)
+                message, error = await live.deliver_webhook(g, g.members[ADMIN], bid, database.get_webhook(rid))
+                self.assertIsNone(error)
+                self.assertEqual(sent[0]["content"], "Привет")
+                self.assertIn("view", sent[0])  # кнопки уходят и через вебхук
+
+            run(check())
+        finally:
+            discord.Webhook.from_url = old
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

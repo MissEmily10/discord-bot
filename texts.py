@@ -796,7 +796,17 @@ CATALOG = {
     "embed.layout.summary_single": "Embed'ов: **{count}** — одним сообщением",
     "embed.layout.summary_split": "Embed'ов: **{count}** — разными сообщениями пачкой",
     "embed.send_pick.title": "КУДА ОТПРАВИТЬ",
-    "embed.send_pick.text": "Выбери до 5 каналов, веток или форумов. После отправки спрошу, сохранить ли сообщение в «Мои сохранённые».",
+    "embed.send_pick.via_webhook": "Через вебхук",
+    "embed.send_pick.webhook_placeholder": "Выбери вебхук",
+    "embed.send_pick.webhook_option": "канал {channel_id}",
+    "embed.send_webhook.title": "ЧЕРЕЗ ВЕБХУК",
+    "embed.send_webhook.text": (
+        "Сообщение уйдёт от имени вебхука — с его именем и аватаркой, в его канал. Кнопки работают.\n"
+        "⚠️ Такое сообщение потом не обновится кнопкой «Обновить отправленные»: править его может только сам вебхук."
+    ),
+    "embed.send.via_webhook": "через вебхук «{name}» в {channel}",
+    "live.error.webhook_gone": "вебхук «{name}» удалён в Discord — создай новый в /eminemovna → Вебхуки",
+    "embed.send_pick.text": "Выбери до 5 каналов, веток или форумов — или «Через вебхук» (от имени вебхука). После отправки спрошу, сохранить ли сообщение в «Мои сохранённые».",
     "embed.send_failed.title": "НЕ ОТПРАВЛЕНО",
     "embed.send_failed.text": "{result}\n\nСообщение не сохранено. Вернись назад, чтобы выбрать другой канал.",
     "embed.sent_saved.title": "ОТПРАВЛЕНО",
