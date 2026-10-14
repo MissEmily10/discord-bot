@@ -219,6 +219,7 @@ class FormTargetRoleView(PanelView):
 
 class FormView(PanelView):
     texts = "forms.builder"
+    button_order = ('basic', 'question', 'routing', 'target', 'save', 'remove_question', 'toggle_dm')
 
     def __init__(self, state, back_target=None):
         super().__init__(back_target=back_target)
@@ -826,6 +827,7 @@ class WebhookListView(PanelView):
 
 class WebhookActions(PanelView):
     texts = "webhooks.card"
+    button_order = ('send', 'test', 'rename', 'avatar', 'history', 'show', 'regenerate', 'delete')
 
     def __init__(self, rid, back_target=None):
         super().__init__(back_target=back_target)

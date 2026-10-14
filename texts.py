@@ -38,6 +38,9 @@ CATALOG = {
     "nav_back": "◀️ Назад",
     "nav_next": "▶️ Далее",
     "nav_cancel": "❌ Отмена",
+    "nav_prev_emoji": "◀️",
+    "nav_next_emoji": "▶️",
+    "nav_page": "стр. {page}/{pages}",
 
     # ================= ОБЩЕЕ =================
     "common.only_in_guild": "Эта функция работает только на сервере.",

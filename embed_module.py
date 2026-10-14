@@ -405,6 +405,7 @@ class EmbedFieldSelect(discord.ui.Select):
 
 class EmbedEditorView(PanelView):
     texts = "embed.editor"
+    button_order = ('basic', 'meta', 'media', 'add_field', 'confirm', 'author_footer', 'timestamp', 'visibility', 'delete_embed')
 
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
@@ -714,6 +715,7 @@ class BuildMetaModal(Modal, title="НАЗВАНИЕ И ТЕКСТ"):
 
 class InteractiveHubView(PanelView):
     texts = "embed.interactive"
+    button_order = ('send_now', 'buttons', 'list', 'form', 'save', 'native', 'clear_interactive')
 
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
@@ -1380,6 +1382,7 @@ async def send_build(interaction, build_id, channels):
 
 class MessageBuildFinalView(PanelView):
     texts = "embed.final"
+    button_order = ('send', 'edit', 'preview', 'resync', 'schedule', 'triggers', 'settings', 'history', 'export_json', 'save_template_button', 'delete')
 
     def __init__(self, build_id, back_target):
         super().__init__(back_target=back_target)

@@ -1083,6 +1083,42 @@ class LiveAndAutomationTests(unittest.TestCase):
         run(check())
 
 
+class PaginationTests(unittest.TestCase):
+    def labels(self, view):
+        return [[c.get("label") or c.get("placeholder") or (c.get("emoji") or {}).get("name") for c in row["components"]]
+                for row in view.to_components()]
+
+    def test_max_five_actions_per_page(self):
+        import embed_module as em
+
+        async def check():
+            view = em.MessageBuildFinalView(1, back_target=("e", None))
+            rows = self.labels(view)
+            self.assertEqual(rows[0][:2], ["Отправить", "Редактировать"])  # важное — первым
+            self.assertLessEqual(len(rows[0]), 5)
+            self.assertIn("стр. 1/3", rows[-1])
+            self.assertIn(core.t("nav_back"), rows[-1])  # «Назад» — в ряду навигации, не в лимите
+            # ▶ листает дальше, ◀ с первой — на последнюю
+            nav = [c for c in view.children if getattr(c, "_panel_nav", False) and c.emoji]
+            i = FakeInteraction(make_guild(), make_guild().members[STAFF])
+            edits = []
+
+            async def edit_message(**kwargs):
+                edits.append(kwargs)
+            i.response.edit_message = edit_message
+            await nav[-1].callback(i)
+            self.assertIn("стр. 2/3", self.labels(view)[-1])
+            await nav[0].callback(i)
+            await nav[0].callback(i)
+            self.assertIn("стр. 3/3", self.labels(view)[-1])
+            self.assertIs(edits[-1]["view"], view)
+            # маленькие панели не трогаем
+            small = em.SaveAfterSendView(1, em.EmbedState(1, 1))
+            self.assertFalse(any("стр." in str(label) for row in self.labels(small) for label in row))
+
+        run(check())
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

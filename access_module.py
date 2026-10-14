@@ -66,6 +66,7 @@ async def deny(interaction, key):
 class AccessHomeView(PanelView):
 
     texts = "access.home"
+    button_order = ('users_button', 'role_access_button', 'commands_button', 'denials_button', 'audit_button', 'settings_button')
 
     def __init__(self, bot):
         super().__init__(back_target=None)
@@ -762,6 +763,7 @@ class ActionRegistryView(PanelView):
 class ActionEditView(PanelView):
 
     texts = "access.action"
+    button_order = ('enable', 'disable', 'toggle_dangerous', 'member', 'staff', 'admin', 'use_member', 'use_staff', 'use_admin')
 
     def __init__(self, action_key, back_target):
         super().__init__(back_target=back_target)

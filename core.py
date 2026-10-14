@@ -612,6 +612,15 @@ class Modal(discord.ui.Modal):
 # PANEL VIEW — базовый класс с "Назад"
 # =========================
 
+def _nav_emoji(key, fallback):
+    """Эмодзи стрелок перелистывания: можно задать свой (в том числе <:имя:id>) в веб-панели."""
+    value = (get_setting(key) or fallback).strip()
+    try:
+        return discord.PartialEmoji.from_str(value)
+    except (TypeError, ValueError):
+        return discord.PartialEmoji.from_str(fallback)
+
+
 class PanelView(discord.ui.View):
     """
     Базовый класс для всех панелей бота.
@@ -635,12 +644,78 @@ class PanelView(discord.ui.View):
         if back_target is not None:
             self._insert_back_button()
 
+    # Больше кнопок действий на одной странице не показываем; остальные — ◀ ▶.
+    PAGE_SIZE = 5
+    # Порядок кнопок по важности (имена методов); не указанные — следом, как в коде.
+    button_order = ()
+
+    def to_components(self):
+        self._apply_pages()
+        return super().to_components()
+
+    def _nav(self, item):
+        item._panel_nav = True
+        return item
+
+    def _apply_pages(self):
+        """
+        Разложить кнопки действий по страницам (один раз, при первой отправке:
+        к этому моменту подклассы уже добавили свои кнопки и списки).
+        «Назад» и стрелки не считаются кнопками действий.
+        """
+        if getattr(self, "_pages_ready", False):
+            return
+        self._pages_ready = True
+        actions = [c for c in self.children
+                   if isinstance(c, discord.ui.Button) and not getattr(c, "_panel_nav", False)]
+        if len(actions) <= self.PAGE_SIZE:
+            return
+        names = {}
+        for name in getattr(self, "__view_children_items__", {}):
+            item = getattr(self, name, None)
+            if isinstance(item, discord.ui.Item):
+                names[id(item)] = name
+        rank = {name: n for n, name in enumerate(self.button_order)}
+        actions.sort(key=lambda item: rank.get(names.get(id(item)), len(rank)))
+        for item in actions:
+            self.remove_item(item)
+        taken = {c.row for c in self.children if c.row is not None and not getattr(c, "_panel_nav", False)}
+        self._page_row = next((row for row in range(4) if row not in taken), 3)
+        self._pages = [actions[i:i + self.PAGE_SIZE] for i in range(0, len(actions), self.PAGE_SIZE)]
+        self._page = 0
+
+        prev_button = self._nav(discord.ui.Button(style=discord.ButtonStyle.secondary, row=4,
+                                                  emoji=_nav_emoji("nav_prev_emoji", "◀️")))
+        self._page_label = self._nav(discord.ui.Button(style=discord.ButtonStyle.secondary, row=4, disabled=True))
+        next_button = self._nav(discord.ui.Button(style=discord.ButtonStyle.secondary, row=4,
+                                                  emoji=_nav_emoji("nav_next_emoji", "▶️")))
+
+        async def turn(interaction, step):
+            self._show_page((self._page + step) % len(self._pages))
+            await interaction.response.edit_message(view=self)
+
+        prev_button.callback = lambda interaction: turn(interaction, -1)
+        next_button.callback = lambda interaction: turn(interaction, 1)
+        for item in (prev_button, self._page_label, next_button):
+            self.add_item(item)
+        self._show_page(0)
+
+    def _show_page(self, page):
+        for item in self._pages[self._page]:
+            if item in self.children:
+                self.remove_item(item)
+        self._page = page
+        for item in self._pages[page]:
+            item.row = self._page_row
+            self.add_item(item)
+        self._page_label.label = t("nav_page", page=page + 1, pages=len(self._pages))[:80]
+
     def _insert_back_button(self):
-        button = discord.ui.Button(
+        button = self._nav(discord.ui.Button(
             label=t("nav_back")[:80],
             style=discord.ButtonStyle.secondary,
             row=4,
-        )
+        ))
 
         async def callback(interaction):
             embed, view = self.back_target
