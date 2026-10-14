@@ -109,10 +109,14 @@
 </div>
 <script>
 const GROUP_NAMES = {
-  style: "Оформление", common: "Общие фразы", level: "Уровни доступа", panel: "/panel",
-  access: "/access", design: "/design", actions: "Действия кнопок", embed: "/embed",
-  buttons: "/buttons", forms: "/forms", templates: "/templates", webhooks: "/webhooks",
-  select: "/select", messages: "/messages", ping: "/ping",
+  style: "Оформление", common: "Общие фразы", level: "Уровни доступа",
+  embed: "/embed", automation: "/embed · автоматика", build_tools: "/embed · инструменты",
+  library: "/library", messages: "/library · сообщения", templates: "/library · шаблоны",
+  interactive: "/interactive", buttons: "/interactive · кнопки", select: "/interactive · меню ролей",
+  forms: "/forms и формы", logo: "/logo",
+  eminemovna: "/eminemovna", access: "/eminemovna · доступ", design: "/eminemovna · оформление",
+  webhooks: "/eminemovna · вебхуки", panel: "/eminemovna · веб-панель", actions: "Действия кнопок",
+  hints: "Пояснения к кнопкам",
 };
 const GROUP_ORDER = Object.keys(GROUP_NAMES);
 const KIND_HINT = {
@@ -401,7 +405,7 @@ $("#search").addEventListener("input", render);
 $("#onlyChanged").addEventListener("change", render);
 $("#logout").addEventListener("click", async () => {
   await fetch("/api/logout", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
-  $("#content").innerHTML = `<div class="empty">Вы вышли. Новая ссылка — через /panel в Discord.</div>`;
+  $("#content").innerHTML = `<div class="empty">Вы вышли. Новая ссылка — /eminemovna → «Веб-панель» в Discord.</div>`;
 });
 
 (async () => {

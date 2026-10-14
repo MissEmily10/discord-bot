@@ -5,15 +5,15 @@ web_panel.py
 прямо в браузере. Работает внутри процесса бота (aiohttp), пишет в ту же
 bot_settings через core.set_setting — изменения применяются сразу.
 
-Вход: владелец пишет /panel в Discord и получает одноразовую ссылку
+Вход: владелец жмёт /eminemovna → «Веб-панель» в Discord и получает одноразовую ссылку
 (10 минут). По ней браузер получает cookie-сессию на 7 дней.
-Сессии живут в памяти: после перезапуска бота — снова /panel.
+Сессии живут в памяти: после перезапуска бота — снова «Веб-панель».
 
 Настройка (.env):
     WEB_PANEL_PORT=<порт из вкладки Network на хостинге>
                    (если не задан — берётся SERVER_PORT от Pterodactyl)
     WEB_PANEL_URL=http://<ip>:<порт>   — адрес, который попадёт в ссылку
-Без порта панель не запускается, без URL /panel объяснит, что добавить.
+Без порта панель не запускается, без URL кнопка «Веб-панель» объяснит, что добавить.
 """
 
 import asyncio
@@ -240,7 +240,7 @@ async def security_headers(request, handler):
 async def auth_middleware(request, handler):
     if request.path.startswith("/api/"):
         if not _session_ok(request):
-            return web.json_response({"error": "Сессия истекла — получи новую ссылку через /panel."}, status=401)
+            return web.json_response({"error": "Сессия истекла — получи новую ссылку: /eminemovna → «Веб-панель»."}, status=401)
         # SameSite=Strict + обязательный JSON закрывают CSRF через обычные формы
         if request.method != "GET" and request.content_type != "application/json":
             return web.json_response({"error": "Ожидается JSON."}, status=415)
@@ -250,7 +250,7 @@ async def auth_middleware(request, handler):
 async def index(request):
     if not _session_ok(request):
         return web.Response(
-            text="Вход в панель — через команду /panel в Discord.",
+            text="Вход в панель — через /eminemovna → «Веб-панель» в Discord.",
             content_type="text/plain", charset="utf-8", status=401,
         )
     return web.FileResponse(INDEX_HTML, headers={"Cache-Control": "no-store"})
@@ -261,7 +261,7 @@ async def login(request):
     token = request.query.get("token", "")
     if not token or _login_tokens.pop(token, None) is None:
         return web.Response(
-            text="Ссылка недействительна или уже использована. Получи новую через /panel.",
+            text="Ссылка недействительна или уже использована. Получи новую: /eminemovna → «Веб-панель».",
             content_type="text/plain", charset="utf-8", status=403,
         )
     _purge(_sessions)

@@ -20,6 +20,24 @@
 Use `python3 bot.py` as the worker start command. Add `DISCORD_TOKEN` and
 `OWNER_ID` as environment variables in the hosting service. Do not upload
 `.env` or `bot.db` to GitHub.
+
+## Commands
+
+Six commands, each a hub with at most 5 action buttons per screen (more are on
+pages: ◀ «стр. 1/2» ▶). Details: [docs/STRUCTURE.md](docs/STRUCTURE.md).
+
+| Command | What |
+|---|---|
+| `/embed` | message builder; send from the bot or through a saved webhook |
+| `/library` | saved messages and templates |
+| `/interactive` | button sets, role menus, application forms |
+| `/forms` | review submissions |
+| `/logo` | role icons for staff: `brief:` from scratch, `image:` from a mockup |
+| `/eminemovna` | settings: access, design, webhooks, icon styles, web panel, bunker; `file:` + `style:` add icon style references |
+
+Personal grants for the old commands (`/buttons`, `/select`, `/messages`,
+`/templates`, `/access`, `/webhooks`) are copied to the new ones on start.
+
 ## Web panel
 
 All bot texts, colors and per-screen thumbnails live in `texts.py`; the owner
@@ -29,14 +47,14 @@ overrides them from a web panel that runs inside the bot process.
    - `WEB_PANEL_PORT` — the port from the hosting panel's Network tab
      (falls back to `SERVER_PORT` on Pterodactyl hosts);
    - `WEB_PANEL_URL` — the address the browser opens, e.g. `http://1.2.3.4:25565`.
-2. Restart the bot and run `/panel` in Discord (owner only). It replies with a
+2. Restart the bot and press `/eminemovna` → **Веб-панель** (owner only). It replies with a
    one-time login link valid for 10 minutes; the browser session lasts 7 days.
 
-Panel images: each command has its own icon and banner
-(`thumbnail.<command>`, `banner.<command>` in the **Оформление** section; every
-screen of the command picks them up). Use **Загрузить** next to an image field
-to upload a PNG/JPG straight from the browser — sizes and the full list are in
-[docs/DESIGN_ASSETS.md](docs/DESIGN_ASSETS.md).
+Panel images: each command has an icon (`thumbnail.<command>`, from
+`panel_art/` by default) and every screen may have its own banner
+(`<screen>.banner`, shown above the text). Use **Загрузить** next to an image
+field to upload a PNG/JPG straight from the browser — sizes and the full list
+are in [docs/DESIGN_ASSETS.md](docs/DESIGN_ASSETS.md).
 
 After editing texts in code, run `python3 scripts/check_texts.py` to make sure
 every key used in the code exists in the catalog.
@@ -47,7 +65,7 @@ every key used in the code exists in the catalog.
   A user can only change the level, access or ban of someone strictly below
   them; granting `admin` (to a user or a role) is owner-only. A ban beats any
   individual command grant.
-- Action registry (`/access` → Settings → Action Registry): every button action
+- Action registry (`/eminemovna` → Бункер → Action Registry): every button action
   has a **create** level (who may put it on a button) and a **use** level (who
   may press it). On every click the bot re-checks both the presser and the
   button's creator — demote the creator and their buttons stop working.
@@ -58,7 +76,7 @@ every key used in the code exists in the catalog.
   on every click.
 - The bot never posts on someone's behalf where that person can't post, and
   `@everyone`/role pings go through only if the sender has that permission.
-- Every sensitive change is written to the audit log (`/access` → Журнал).
+- Every sensitive change is written to the audit log (`/eminemovna` → Доступ → Журнал).
 
 Buttons, lists, form apply buttons, review buttons, role menus and `/logo`
 results are persistent: they keep working after a restart and always read the
@@ -97,7 +115,7 @@ current data from the database.
 
 ## Automation and live messages
 
-All of this lives on a build's card (`/messages` → a build):
+All of this lives on a build's card (`/library` → Сообщения → a build):
 
 - **Расписание** — post the build to a channel, thread or forum (a forum gets a
   new post) at a given time: `18:30`, `25.12 18:30`, `+2ч`; optionally repeat
@@ -144,8 +162,8 @@ Role icons generated in your own style via Hugging Face Inference Providers.
 
 1. Create a Hugging Face token (Settings → Access Tokens, "Make calls to
    Inference Providers") and put it into `.env` as `HF_TOKEN`.
-2. `/logo styles` → **Новый стиль** — name and a short style description.
-3. `/logo reference style:<style> file:<png or zip>` — upload your reference
+2. `/eminemovna` → **Стили иконок** → **Новый стиль** — name and a short style description.
+3. `/eminemovna style:<style> file:<png or zip>` — upload your reference
    icons (up to 60; a zip with all 30 at once works).
 4. Optional: **Описать по референсам** writes the style description for you
    from the references (vision model).
@@ -153,8 +171,9 @@ Role icons generated in your own style via Hugging Face Inference Providers.
    captions. Train a FLUX LoRA on it (e.g. fal-ai `flux-lora-fast-training` or
    Hugging Face AutoTrain), publish it as a HF repo and put the repo id into the
    style's **LoRA** field.
-6. Generate: `/logo generate brief:"…"` (from scratch) or
-   `/logo stylize image:<your mockup>` (redraws your icon in the style).
+6. Generate: `/logo brief:"…"` (from scratch) or
+   `/logo image:<your mockup>` (redraws your icon in the style). Staff need the
+   staff level (e.g. via a role in `/eminemovna` → Доступ → Доступ по ролям).
    Result buttons: put on a role (with name-based suggestions), another
    variant, remove background. Role icons need server boost level 2.
 
