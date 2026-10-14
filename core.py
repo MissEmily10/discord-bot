@@ -383,13 +383,19 @@ def command_of(context):
 
 def _resolve_image(interaction, context, kind):
     """
-    Картинка экрана по цепочке: <экран>.<kind> -> <kind>.<команда> -> <kind>.default.
-    "none" на любом шаге — явно без картинки; {bot_avatar} — аватар бота.
+    Картинка экрана. Иконка (thumbnail): <экран>.thumbnail -> thumbnail.<команда>
+    -> thumbnail.default. Баннер — только свой у экрана (<экран>.banner): он
+    рисуется под конкретный экран и не должен «переезжать» на чужие.
+    "none" — явно без картинки; {bot_avatar} — аватар бота;
+    "art:файл.png" — картинка из папки panel_art (лежит в репозитории).
     """
     candidates = []
     if context:
-        candidates += [f"{context}.{kind}", f"{kind}.{command_of(context)}"]
-    candidates.append(f"{kind}.default")
+        candidates.append(f"{context}.{kind}")
+        if kind == "thumbnail":
+            candidates.append(f"{kind}.{command_of(context)}")
+    if kind == "thumbnail":
+        candidates.append(f"{kind}.default")
     value = ""
     for key in candidates:
         value = (get_setting(key) or "").strip()
@@ -400,6 +406,9 @@ def _resolve_image(interaction, context, kind):
     if value == "{bot_avatar}":
         user = interaction.client.user if interaction is not None else None
         return user.display_avatar.url if user else None
+    if value.startswith("art:"):
+        import web_panel
+        return web_panel.art_url(value[4:])
     return value if value.startswith(("http://", "https://")) else "https://" + value
 
 
@@ -409,7 +418,7 @@ def resolve_thumbnail(interaction, context):
 
 
 def resolve_banner(interaction, context):
-    """Широкий баннер внизу панели (embed image)."""
+    """Широкий баннер экрана — показывается над текстом панели."""
     return _resolve_image(interaction, context, "banner")
 
 
@@ -454,6 +463,79 @@ def button_hints(prefix):
     return (t("hints.header") + "\n" + "\n".join(lines)) if lines else ""
 
 
+class PanelEmbed(discord.Embed):
+    """Embed панели бота; banner_url — баннер, который встаёт над ним отдельным embed'ом."""
+
+    banner_url = None
+
+    def banner_embed(self):
+        return discord.Embed(color=self.color).set_image(url=self.banner_url)
+
+
+def screen(interaction):
+    """
+    Снимок текущего экрана для «Назад»: все embed'ы сообщения (баннер + текст),
+    а не только первый — иначе с баннером сверху вернулся бы один баннер.
+    """
+    message = getattr(interaction, "message", None)
+    return list(message.embeds) if message is not None else []
+
+
+def expand_embeds(kwargs):
+    """
+    embed=<список> -> embeds=<список>; панель с баннером -> [баннер, панель].
+    Discord рисует картинку embed'а только под текстом, поэтому баннер «над
+    текстом» — это отдельный embed перед основным.
+    """
+    if "embed" in kwargs:
+        embed = kwargs["embed"]
+        if isinstance(embed, list):
+            kwargs.pop("embed")
+            kwargs["embeds"] = embed
+        elif isinstance(embed, PanelEmbed) and embed.banner_url:
+            kwargs.pop("embed")
+            kwargs["embeds"] = [embed]
+    embeds = kwargs.get("embeds")
+    if isinstance(embeds, list) and any(isinstance(e, PanelEmbed) and e.banner_url for e in embeds):
+        expanded = []
+        for embed in embeds:
+            if isinstance(embed, PanelEmbed) and embed.banner_url:
+                previous = expanded[-1] if expanded else None
+                # повторный проход (например, «Назад» + общий перехватчик) не дублирует баннер
+                already = (previous is not None and not previous.title and not previous.description
+                           and previous.image.url == embed.banner_url)
+                if not already:
+                    expanded.append(embed.banner_embed())
+            expanded.append(embed)
+        kwargs["embeds"] = expanded[:10]
+    return kwargs
+
+
+def install_banner_hook():
+    """Один раз при старте: все отправки и правки сообщений проходят через expand_embeds."""
+    import functools
+
+    targets = [
+        (discord.InteractionResponse, "send_message"),
+        (discord.InteractionResponse, "edit_message"),
+        (discord.Interaction, "edit_original_response"),
+        (discord.Webhook, "send"),
+        (discord.abc.Messageable, "send"),
+        (discord.Message, "edit"),
+    ]
+    for owner, name in targets:
+        original = getattr(owner, name)
+        if getattr(original, "_banner_hook", False):
+            continue
+
+        @functools.wraps(original)
+        async def wrapper(self, *args, __original=original, **kwargs):
+            return await __original(self, *args, **expand_embeds(kwargs))
+
+        wrapper._banner_hook = True
+        setattr(owner, name, wrapper)
+
+
 def panel_embed(interaction, context, description=None, *, title=None, danger=False, hints=None, **params):
     """
     Единый конструктор служебных embed'ов бота.
@@ -470,7 +552,7 @@ def panel_embed(interaction, context, description=None, *, title=None, danger=Fa
         legend = button_hints(hints or HINTS_FOR.get(context, context))
         if legend:
             description = f"{description}\n\n{legend}" if description else legend
-    embed = discord.Embed(
+    embed = PanelEmbed(
         title=str(title)[:256] or None,
         description=str(description)[:4096] or None,
         color=danger_color() if danger else embed_color(),
@@ -478,9 +560,7 @@ def panel_embed(interaction, context, description=None, *, title=None, danger=Fa
     thumbnail = resolve_thumbnail(interaction, context)
     if thumbnail:
         embed.set_thumbnail(url=thumbnail)
-    banner = resolve_banner(interaction, context)
-    if banner:
-        embed.set_image(url=banner)
+    embed.banner_url = resolve_banner(interaction, context)
     return embed
 
 
@@ -564,7 +644,7 @@ class PanelView(discord.ui.View):
 
         async def callback(interaction):
             embed, view = self.back_target
-            await interaction.response.edit_message(embed=embed, view=view)
+            await interaction.response.edit_message(**expand_embeds({"embed": embed}), view=view)
 
         button.callback = callback
         self.add_item(button)

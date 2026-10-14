@@ -456,7 +456,7 @@ class VersionsView(PanelView):
             await i.response.edit_message(
                 embed=panel_embed(i, "build_tools.version", when=f"<t:{version[4]}:f>", who=f"<@{version[2]}>",
                                   name=version[3].get("name") or "—"),
-                view=VersionActionsView(self.build_id, version[0], back_target=(i.message.embeds[0], self)),
+                view=VersionActionsView(self.build_id, version[0], back_target=(core.screen(i), self)),
             )
 
         select.callback = picked

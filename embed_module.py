@@ -174,14 +174,14 @@ class EmbedHomeView(PanelView):
         state = EmbedState(self.guild_id, self.owner_id)
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "embed.visibility"),
-            view=VisibilityView(state, back_target=(interaction.message.embeds[0], self))
+            view=VisibilityView(state, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Мои сохранённые", emoji="📦", style=discord.ButtonStyle.secondary)
     async def saved(self, interaction, button):
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "embed.saved"),
-            view=SavedBuildsListView(interaction, back_target=(interaction.message.embeds[0], self))
+            view=SavedBuildsListView(interaction, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Из сообщения", emoji="📥", style=discord.ButtonStyle.secondary)
@@ -195,7 +195,7 @@ class EmbedHomeView(PanelView):
             row for row in get_templates(self.guild_id, template_type="message")
             if template_visible(interaction, get_template(row[0]))
         ]
-        view = PanelView(back_target=(interaction.message.embeds[0], self))
+        view = PanelView(back_target=(core.screen(interaction), self))
         for tid, owner, name, *_ in rows[:20]:
             btn = discord.ui.Button(label=f"{(name or t('embed.default_name'))[:60]} · #{tid}", style=discord.ButtonStyle.secondary)
 
@@ -208,7 +208,7 @@ class EmbedHomeView(PanelView):
                 state.load_payload(_json(row[5], {}))
                 await i.response.edit_message(
                     embeds=editor_embeds(state),
-                    view=EmbedEditorView(state, back_target=(i.message.embeds[0], view)),
+                    view=EmbedEditorView(state, back_target=(core.screen(i), view)),
                 )
 
             btn.callback = cb
@@ -237,7 +237,7 @@ class SavedBuildsListView(PanelView):
                     return
                 await i.response.edit_message(
                     embed=build_card_embed(i, row),
-                    view=MessageBuildFinalView(bid, back_target=(i.message.embeds[0], self))
+                    view=MessageBuildFinalView(bid, back_target=(core.screen(i), self))
                 )
 
             btn.callback = cb
@@ -269,19 +269,19 @@ class VisibilityView(PanelView):
     @discord.ui.button(label="Публичный", emoji="🌐", style=discord.ButtonStyle.success)
     async def public(self, interaction, button):
         self.state.visibility = "public"
-        await go_to_editor(interaction, self.state, back_target=(interaction.message.embeds[0], self))
+        await go_to_editor(interaction, self.state, back_target=(core.screen(interaction), self))
 
     @discord.ui.button(label="Приватный", emoji="🔒", style=discord.ButtonStyle.secondary)
     async def private(self, interaction, button):
         self.state.visibility = "private"
-        await go_to_editor(interaction, self.state, back_target=(interaction.message.embeds[0], self))
+        await go_to_editor(interaction, self.state, back_target=(core.screen(interaction), self))
 
     @discord.ui.button(label="Ограниченный", emoji="🎭", style=discord.ButtonStyle.primary)
     async def restricted(self, interaction, button):
         self.state.visibility = "restricted"
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "embed.restriction"),
-            view=RestrictionModeView(self.state, back_target=(interaction.message.embeds[0], self))
+            view=RestrictionModeView(self.state, back_target=(core.screen(interaction), self))
         )
 
 
@@ -296,18 +296,18 @@ class RestrictionModeView(PanelView):
     async def by_level(self, interaction, button):
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "embed.restriction_level"),
-            view=LevelRestrictionView(self.state, back_target=(interaction.message.embeds[0], self))
+            view=LevelRestrictionView(self.state, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="По роли(ям)", emoji="🎭", style=discord.ButtonStyle.secondary)
     async def by_role(self, interaction, button):
-        view = PanelView(back_target=(interaction.message.embeds[0], self))
+        view = PanelView(back_target=(core.screen(interaction), self))
         select = discord.ui.RoleSelect(placeholder=t("embed.restriction_roles.placeholder")[:150], min_values=1, max_values=5)
 
         async def selected(i):
             self.state.visibility_roles = [r.id for r in select.values]
             self.state.visibility_levels = []
-            await go_to_editor(i, self.state, back_target=(i.message.embeds[0], view))
+            await go_to_editor(i, self.state, back_target=(core.screen(i), view))
 
         select.callback = selected
         view.add_item(select)
@@ -324,7 +324,7 @@ class LevelRestrictionView(PanelView):
     async def pick(self, interaction, level):
         self.state.visibility_levels = [level]
         self.state.visibility_roles = []
-        await go_to_editor(interaction, self.state, back_target=(interaction.message.embeds[0], self))
+        await go_to_editor(interaction, self.state, back_target=(core.screen(interaction), self))
 
     @discord.ui.button(label="Member", style=discord.ButtonStyle.secondary)
     async def member(self, interaction, button):
@@ -437,7 +437,7 @@ class EmbedEditorView(PanelView):
     async def visibility(self, interaction, button):
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "embed.visibility"),
-            view=VisibilityView(self.state, back_target=(interaction.message.embeds[0], self)),
+            view=VisibilityView(self.state, back_target=(core.screen(interaction), self)),
         )
 
     @discord.ui.button(label="Название и текст", emoji="📝", style=discord.ButtonStyle.primary, row=2)
@@ -462,7 +462,7 @@ class EmbedEditorView(PanelView):
     async def confirm(self, interaction, button):
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "embed.interactive", description=interactive_summary(self.state)),
-            view=InteractiveHubView(self.state, back_target=(interaction.message.embeds[0], self))
+            view=InteractiveHubView(self.state, back_target=(core.screen(interaction), self))
         )
 
 
@@ -676,7 +676,7 @@ class InteractiveHubView(PanelView):
         self.state = state
 
     def hub_target(self, interaction):
-        return (interaction.message.embeds[0], self)
+        return (core.screen(interaction), self)
 
     @discord.ui.button(label="Кнопки", emoji="🔘", style=discord.ButtonStyle.primary)
     async def buttons(self, interaction, button):
@@ -715,7 +715,7 @@ class InteractiveHubView(PanelView):
         if problem:
             await say(interaction, problem[0], **problem[1])
             return
-        view = PanelView(back_target=(interaction.message.embeds[0], self), timeout=600)
+        view = PanelView(back_target=(core.screen(interaction), self), timeout=600)
         select = discord.ui.ChannelSelect(
             placeholder=t("embed.send.placeholder")[:150], channel_types=SEND_CHANNEL_TYPES,
             min_values=1, max_values=5,
@@ -1401,7 +1401,7 @@ class MessageBuildFinalView(PanelView):
         state = EmbedState.from_build(row)
         await interaction.response.edit_message(
             embeds=editor_embeds(state),
-            view=EmbedEditorView(state, back_target=(interaction.message.embeds[0], self)),
+            view=EmbedEditorView(state, back_target=(core.screen(interaction), self)),
         )
 
     @discord.ui.button(label="Обновить отправленные", emoji="🔄", style=discord.ButtonStyle.secondary)
@@ -1439,7 +1439,7 @@ class MessageBuildFinalView(PanelView):
         await interaction.response.edit_message(
             content=None,
             embed=panel_embed(interaction, "build_tools.versions"),
-            view=VersionsView(interaction, self.build_id, back_target=(interaction.message.embeds[0], self)),
+            view=VersionsView(interaction, self.build_id, back_target=(core.screen(interaction), self)),
         )
 
     async def _automation(self, interaction, screen, view_factory):
@@ -1450,7 +1450,7 @@ class MessageBuildFinalView(PanelView):
         if not automation.can_automate(interaction, row):
             await say(interaction, "automation.denied")
             return
-        back = (interaction.message.embeds[0], self)
+        back = (core.screen(interaction), self)
         await interaction.response.edit_message(content=None, embed=screen(interaction, self.build_id),
                                                 view=view_factory(self.build_id, back_target=back))
 

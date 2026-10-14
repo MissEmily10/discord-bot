@@ -30,6 +30,9 @@ from extended_modules import register_extended
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
+# Баннер панели встаёт над текстом отдельным embed'ом (см. core.expand_embeds).
+core.install_banner_hook()
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # Тексты, цвета и thumbnails — в texts.py (core.t / core.panel_embed).
@@ -376,14 +379,14 @@ class StandaloneButtonStartView(PanelView):
         state = ButtonSetState()
         await interaction.response.edit_message(
             embed=render_button_builder(interaction, state),
-            view=InlineButtonBuilderView(state, back_target=(interaction.message.embeds[0], self))
+            view=InlineButtonBuilderView(state, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Сохранённые наборы", emoji="📦", style=discord.ButtonStyle.secondary)
     async def saved(self, interaction, button):
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "buttons.list"),
-            view=ButtonSetListView(interaction, back_target=(interaction.message.embeds[0], self))
+            view=ButtonSetListView(interaction, back_target=(core.screen(interaction), self))
         )
 
 
@@ -407,7 +410,7 @@ class ButtonSetListView(PanelView):
                 await interaction.response.edit_message(
                     embed=panel_embed(interaction, "buttons.card", title=row[3], category=row[6],
                                       visibility=row[5], count=len(json.loads(row[4] or "[]"))),
-                    view=ButtonSetActions(set_id, back_target=(interaction.message.embeds[0], self)),
+                    view=ButtonSetActions(set_id, back_target=(core.screen(interaction), self)),
                 )
 
             button.callback = callback

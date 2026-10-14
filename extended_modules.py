@@ -246,7 +246,7 @@ class FormView(PanelView):
     async def target(self, i, b):
         await i.response.edit_message(
             embed=panel_embed(i, "forms.target_role"),
-            view=FormTargetRoleView(self.state, self, back_target=(i.message.embeds[0], self)),
+            view=FormTargetRoleView(self.state, self, back_target=(core.screen(i), self)),
         )
 
     @discord.ui.button(label="Убрать вопрос", emoji="➖", style=discord.ButtonStyle.secondary, row=1)
@@ -280,7 +280,7 @@ class FormView(PanelView):
         role = f"<@&{s.target_role}>" if s.target_role else t("forms.builder.role_unset")
         await i.response.edit_message(
             embed=panel_embed(i, "forms.saved", id=fid, channel=f"<#{s.destination}>", role=role),
-            view=FormUseView(fid, back_target=(i.message.embeds[0], self)),
+            view=FormUseView(fid, back_target=(core.screen(i), self)),
         )
 
 
@@ -555,11 +555,11 @@ class FormStartView(PanelView):
     @discord.ui.button(label="Создать", emoji="➕", style=discord.ButtonStyle.success)
     async def create(self, i, b):
         state = FormState(self.guild_id, i.user.id)
-        await i.response.edit_message(embed=form_builder_embed(i, state), view=FormView(state, back_target=(i.message.embeds[0], self)))
+        await i.response.edit_message(embed=form_builder_embed(i, state), view=FormView(state, back_target=(core.screen(i), self)))
 
     @discord.ui.button(label="Сохранённые", emoji="📦", style=discord.ButtonStyle.secondary)
     async def saved(self, i, b):
-        await i.response.edit_message(embed=panel_embed(i, "forms.list"), view=FormListView(i, back_target=(i.message.embeds[0], self)))
+        await i.response.edit_message(embed=panel_embed(i, "forms.list"), view=FormListView(i, back_target=(core.screen(i), self)))
 
 
 class FormListView(PanelView):
@@ -574,7 +574,7 @@ class FormListView(PanelView):
                 if row and form_visible(i, row):
                     await i.response.edit_message(
                         embed=panel_embed(i, "forms.card", title=row[3], description=row[4] or t("forms.no_description")),
-                        view=FormUseView(fid, back_target=(i.message.embeds[0], self)),
+                        view=FormUseView(fid, back_target=(core.screen(i), self)),
                     )
                 else:
                     await say(i, "forms.unavailable")
@@ -647,7 +647,7 @@ class TemplateListView(PanelView):
                 if not row or not template_visible(i, row):
                     await say(i, "templates.unavailable")
                     return
-                await i.response.edit_message(embed=template_card_embed(i, row), view=TemplateActions(tid, back_target=(i.message.embeds[0], self)))
+                await i.response.edit_message(embed=template_card_embed(i, row), view=TemplateActions(tid, back_target=(core.screen(i), self)))
 
             b.callback = cb
             self.add_item(b)
@@ -704,7 +704,7 @@ class TemplateActions(PanelView):
         state = EmbedState(i.guild.id, i.user.id)
         state.load_payload(j(row[5], {}))
         state.name = row[3]
-        await i.response.edit_message(embeds=editor_embeds(state), view=EmbedEditorView(state, back_target=(i.message.embeds[0], self)))
+        await i.response.edit_message(embeds=editor_embeds(state), view=EmbedEditorView(state, back_target=(core.screen(i), self)))
 
     @discord.ui.button(label="Избранное", emoji="⭐", style=discord.ButtonStyle.secondary)
     async def favorite(self, i, b):
@@ -735,7 +735,7 @@ class TemplateHome(PanelView):
 
     @discord.ui.button(label="Список", emoji="📚", style=discord.ButtonStyle.primary)
     async def list(self, i, b):
-        await i.response.edit_message(embed=panel_embed(i, "templates.list"), view=TemplateListView(i, back_target=(i.message.embeds[0], self)))
+        await i.response.edit_message(embed=panel_embed(i, "templates.list"), view=TemplateListView(i, back_target=(core.screen(i), self)))
 
     @discord.ui.button(label="Сохранить JSON", emoji="💾", style=discord.ButtonStyle.secondary)
     async def save(self, i, b):
@@ -815,7 +815,7 @@ class WebhookListView(PanelView):
                 if row:
                     await i.response.edit_message(
                         embed=panel_embed(i, "webhooks.card", name=row[5], channel=f"<#{row[4]}>", id=row[3]),
-                        view=WebhookActions(rid, back_target=(i.message.embeds[0], self)),
+                        view=WebhookActions(rid, back_target=(core.screen(i), self)),
                     )
 
             b.callback = cb
@@ -1055,7 +1055,7 @@ class WebhookHome(PanelView):
 
     @discord.ui.button(label="Список", emoji="📚", style=discord.ButtonStyle.secondary)
     async def list(self, i, b):
-        await i.response.edit_message(embed=panel_embed(i, "webhooks.list"), view=WebhookListView(i, back_target=(i.message.embeds[0], self)))
+        await i.response.edit_message(embed=panel_embed(i, "webhooks.list"), view=WebhookListView(i, back_target=(core.screen(i), self)))
 
     @discord.ui.button(label="История", emoji="📜", style=discord.ButtonStyle.secondary)
     async def history(self, i, b):
@@ -1064,7 +1064,7 @@ class WebhookHome(PanelView):
             mine = {row[2] for row in get_webhooks(i.guild.id, i.user.id)}
             rows = [row for row in rows if row[1] in mine]
         text = "\n".join(f"<t:{c}:R> · <@{o}> · `{a}` · webhook `{w}`" for o, w, a, _, _, c in rows[:20]) or t("webhooks.history.empty")
-        await i.response.edit_message(embed=panel_embed(i, "webhooks.history", description=text[:4000]), view=PanelView(back_target=(i.message.embeds[0], self)))
+        await i.response.edit_message(embed=panel_embed(i, "webhooks.history", description=text[:4000]), view=PanelView(back_target=(core.screen(i), self)))
 
 
 # ============================================================
@@ -1246,11 +1246,11 @@ class SelectHome(PanelView):
         if not core.is_action_allowed(get_user_level(i), "role.toggle"):
             await say(i, "embed.no_actions_allowed")
             return
-        await i.response.edit_message(embed=panel_embed(i, "select.menu_new"), view=RoleMenuRolesView(back_target=(i.message.embeds[0], self)))
+        await i.response.edit_message(embed=panel_embed(i, "select.menu_new"), view=RoleMenuRolesView(back_target=(core.screen(i), self)))
 
     @discord.ui.button(label="Мои меню", emoji="📚", style=discord.ButtonStyle.secondary)
     async def menus(self, i, b):
-        view = PanelView(back_target=(i.message.embeds[0], self))
+        view = PanelView(back_target=(core.screen(i), self))
         rows = [row for row in get_role_menus(i.guild.id) if owns_or_admin(i, row[1])]
         for mid, owner, name, roles_json, max_values, updated in rows[:20]:
             btn = discord.ui.Button(label=f"{(name or '')[:60]} · #{mid}", style=discord.ButtonStyle.secondary)
@@ -1260,7 +1260,7 @@ class SelectHome(PanelView):
                 if not row:
                     await say(ci, "actions.source_gone")
                     return
-                await ci.response.edit_message(embed=role_menu_embed(ci, row), view=RoleMenuActions(mid, back_target=(ci.message.embeds[0], view)))
+                await ci.response.edit_message(embed=role_menu_embed(ci, row), view=RoleMenuActions(mid, back_target=(core.screen(ci), view)))
 
             btn.callback = cb
             view.add_item(btn)

@@ -22,26 +22,18 @@ CATALOG = {
     # ================= ОФОРМЛЕНИЕ =================
     "embed_color": "0x5865F2",
     "danger_color": "0xED4245",
-    "thumbnail.default": "",
-    # Картинки команд: экран без своей картинки берёт картинку своей команды,
-    # а та — общую (*.default). "none" — без картинки. Размеры — docs/DESIGN_ASSETS.md.
-    "thumbnail.embed": "",
-    "thumbnail.forms": "",
-    "thumbnail.access": "",
-    "thumbnail.buttons": "",
-    "thumbnail.templates": "",
-    "thumbnail.webhooks": "",
-    "thumbnail.select": "",
-    "thumbnail.logo": "",
-    "banner.default": "",
-    "banner.embed": "",
-    "banner.forms": "",
-    "banner.access": "",
-    "banner.buttons": "",
-    "banner.templates": "",
-    "banner.webhooks": "",
-    "banner.select": "",
-    "banner.logo": "",
+    "thumbnail.default": "art:thumbnail.default.png",
+    # Иконки команд: экран без своей иконки берёт иконку команды, а та — общую.
+    # "art:<файл>" — картинка из panel_art (макеты из Figma). Баннеры — только
+    # <экран>.banner (свой у каждого экрана). Размеры — docs/DESIGN_ASSETS.md.
+    "thumbnail.embed": "art:thumbnail.embed.png",
+    "thumbnail.forms": "art:thumbnail.forms.png",
+    "thumbnail.access": "art:thumbnail.access.png",
+    "thumbnail.buttons": "art:thumbnail.buttons.png",
+    "thumbnail.templates": "art:thumbnail.templates.png",
+    "thumbnail.webhooks": "art:thumbnail.webhooks.png",
+    "thumbnail.select": "art:thumbnail.select.png",
+    "thumbnail.logo": "art:thumbnail.logo.png",
     "text_access_denied": "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
     "nav_back": "◀️ Назад",
     "nav_next": "▶️ Далее",
@@ -67,7 +59,6 @@ CATALOG = {
     # ================= /access =================
     "access.home.title": "ACCESS MANAGER",
     "access.home.text": 'Кто что может делать с ботом: уровни людей и ролей, доступ к командам, запреты и журнал действий.\n\nТвой уровень: {level}',
-    "access.home.thumbnail": "{bot_avatar}",
     "access.home.users_button": "Пользователи",
     "access.home.commands_button": "Команды",
     "access.home.role_access_button": "Доступ по ролям",
@@ -1097,6 +1088,6 @@ def kind(key):
     """Тип значения для редактора: color / image / text."""
     if key.endswith("color"):
         return "color"
-    if key.endswith("thumbnail") or key.startswith(("thumbnail.", "banner.")):
+    if key.endswith(("thumbnail", ".banner")) or key.startswith("thumbnail."):
         return "image"
     return "text"

@@ -383,7 +383,7 @@ class SchedulesView(PanelView):
             await say(interaction, "automation.too_many", max=MAX_SCHEDULES_PER_BUILD)
             return
         from embed_module import SEND_CHANNEL_TYPES
-        view = PanelView(back_target=(interaction.message.embeds[0], self), timeout=300)
+        view = PanelView(back_target=(core.screen(interaction), self), timeout=300)
         select = discord.ui.ChannelSelect(placeholder=t("automation.pick_channel")[:150], channel_types=SEND_CHANNEL_TYPES)
 
         async def picked(i):
@@ -544,7 +544,7 @@ class TriggersView(PanelView):
         )
 
     async def _channel_step(self, interaction, screen, channel_types, on_pick, here_label=None):
-        view = PanelView(back_target=(interaction.message.embeds[0], self), timeout=300)
+        view = PanelView(back_target=(core.screen(interaction), self), timeout=300)
         select = discord.ui.ChannelSelect(placeholder=t("automation.pick_channel")[:150], channel_types=channel_types)
 
         async def picked(i):
@@ -772,7 +772,7 @@ class BuildSettingsView(PanelView):
             return
         from database import get_child_builds
         exclude = {self.build_id, *get_child_builds(self.build_id)}
-        view = PanelView(back_target=(interaction.message.embeds[0], self), timeout=300)
+        view = PanelView(back_target=(core.screen(interaction), self), timeout=300)
         options = [discord.SelectOption(label=t("automation.settings.no_parent")[:100], value="0")] + build_options(interaction, exclude)[:24]
         select = discord.ui.Select(placeholder=t("automation.settings.pick_parent")[:150], options=options)
 
@@ -801,7 +801,7 @@ class BuildSettingsView(PanelView):
             return
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "automation.variant"),
-            view=VariantConditionView(self, back_target=(interaction.message.embeds[0], self)),
+            view=VariantConditionView(self, back_target=(core.screen(interaction), self)),
         )
 
     @discord.ui.button(label="Убрать варианты", emoji="🧹", style=discord.ButtonStyle.danger)
@@ -851,7 +851,7 @@ class VariantConditionView(PanelView):
 
     async def _pick_build(self, interaction, condition):
         build_id = self.settings_view.build_id
-        view = PanelView(back_target=(interaction.message.embeds[0], self), timeout=300)
+        view = PanelView(back_target=(core.screen(interaction), self), timeout=300)
         options = build_options(interaction, exclude={build_id})
         if not options:
             await say(interaction, "embed.build_pick.none")

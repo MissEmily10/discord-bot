@@ -611,7 +611,7 @@ class StylesHome(PanelView):
                 if not style:
                     await say(i, "logo.style_missing")
                     return
-                await i.response.edit_message(embed=style_embed(i, style), view=StyleActions(style_id, back_target=(i.message.embeds[0], self)))
+                await i.response.edit_message(embed=style_embed(i, style), view=StyleActions(style_id, back_target=(core.screen(i), self)))
 
             button.callback = cb
             self.add_item(button)

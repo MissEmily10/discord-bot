@@ -78,7 +78,7 @@ class AccessHomeView(PanelView):
             return
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.users"),
-            view=UserManagementView(back_target=(interaction.message.embeds[0], self))
+            view=UserManagementView(back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Команды", emoji="🧩", style=discord.ButtonStyle.primary)
@@ -88,7 +88,7 @@ class AccessHomeView(PanelView):
             return
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.commands"),
-            view=CommandSelectView(self.bot, back_target=(interaction.message.embeds[0], self))
+            view=CommandSelectView(self.bot, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Доступ по ролям", emoji="🎭", style=discord.ButtonStyle.secondary)
@@ -98,7 +98,7 @@ class AccessHomeView(PanelView):
             return
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.roles"),
-            view=RoleAccessView(back_target=(interaction.message.embeds[0], self))
+            view=RoleAccessView(back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Запреты", emoji="🚫", style=discord.ButtonStyle.danger)
@@ -108,7 +108,7 @@ class AccessHomeView(PanelView):
             return
         await interaction.response.edit_message(
             embed=denial_list_embed(interaction),
-            view=DenialAccessView(interaction, back_target=(interaction.message.embeds[0], self))
+            view=DenialAccessView(interaction, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Журнал", emoji="📜", style=discord.ButtonStyle.secondary, row=1)
@@ -118,7 +118,7 @@ class AccessHomeView(PanelView):
             return
         await interaction.response.edit_message(
             embed=audit_embed(interaction),
-            view=PanelView(back_target=(interaction.message.embeds[0], self)),
+            view=PanelView(back_target=(core.screen(interaction), self)),
         )
 
     @discord.ui.button(label="⚙️ Настройки", style=discord.ButtonStyle.secondary, row=1)
@@ -128,7 +128,7 @@ class AccessHomeView(PanelView):
             return
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.settings"),
-            view=SettingsView(self.bot, back_target=(interaction.message.embeds[0], self))
+            view=SettingsView(self.bot, back_target=(core.screen(interaction), self))
         )
 
 
@@ -154,7 +154,7 @@ class UserManagementView(PanelView):
         )
         await interaction.response.edit_message(
             embed=embed,
-            view=UserLevelView(user.id, user.mention, back_target=(interaction.message.embeds[0], self))
+            view=UserLevelView(user.id, user.mention, back_target=(core.screen(interaction), self))
         )
 
 
@@ -174,7 +174,7 @@ class UserLevelView(PanelView):
             return
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.duration", user=self.user_mention, level=level_label(level)),
-            view=LevelDurationView(self.user_id, self.user_mention, level, back_target=(interaction.message.embeds[0], self))
+            view=LevelDurationView(self.user_id, self.user_mention, level, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Ограниченный", style=discord.ButtonStyle.secondary)
@@ -286,7 +286,7 @@ class CommandSelectView(PanelView):
                 embed = command_access_embed(interaction, command_name, description)
                 await interaction.response.edit_message(
                     embed=embed,
-                    view=CommandAccessView(command_name, description, back_target=(interaction.message.embeds[0], self))
+                    view=CommandAccessView(command_name, description, back_target=(core.screen(interaction), self))
                 )
 
             button.callback = command_callback
@@ -328,7 +328,7 @@ class CommandAccessView(PanelView):
             return
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.command_add", command=self.command_name),
-            view=CommandUserPickView(self.command_name, self.description, "add", back_target=(interaction.message.embeds[0], self))
+            view=CommandUserPickView(self.command_name, self.description, "add", back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Убрать", emoji="➖", style=discord.ButtonStyle.danger)
@@ -338,7 +338,7 @@ class CommandAccessView(PanelView):
             return
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.command_remove", command=self.command_name),
-            view=CommandUserPickView(self.command_name, self.description, "remove", back_target=(interaction.message.embeds[0], self))
+            view=CommandUserPickView(self.command_name, self.description, "remove", back_target=(core.screen(interaction), self))
         )
 
 
@@ -371,7 +371,7 @@ class CommandUserPickView(PanelView):
         # add -> спрашиваем срок
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.command_duration", command=self.command_name, user=user.mention),
-            view=CommandDurationView(self.command_name, self.description, user.id, user.mention, back_target=(interaction.message.embeds[0], self))
+            view=CommandDurationView(self.command_name, self.description, user.id, user.mention, back_target=(core.screen(interaction), self))
         )
 
 
@@ -430,7 +430,7 @@ class RoleAccessView(PanelView):
         role = self.children[0].values[0]
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.role", role=role.mention),
-            view=RoleLevelAccessView(role.id, role.mention, back_target=(interaction.message.embeds[0], self))
+            view=RoleLevelAccessView(role.id, role.mention, back_target=(core.screen(interaction), self))
         )
 
 
@@ -531,7 +531,7 @@ class DenialAccessView(PanelView):
         # бан — требует подтверждения
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "access.deny_confirm", danger=True, user=user.mention),
-            view=DenyConfirmView(user.id, user.mention, back_target=(interaction.message.embeds[0], self))
+            view=DenyConfirmView(user.id, user.mention, back_target=(core.screen(interaction), self))
         )
 
 
@@ -559,7 +559,7 @@ class DenyConfirmView(PanelView):
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction, button):
         embed, view = self.back_target
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.response.edit_message(**core.expand_embeds({"embed": embed}), view=view)
 
 
 # ============================================================
@@ -602,7 +602,7 @@ class SettingsView(PanelView):
             return
         await interaction.response.edit_message(
             embed=denial_list_embed(interaction),
-            view=DenialAccessView(interaction, back_target=(interaction.message.embeds[0], self))
+            view=DenialAccessView(interaction, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Action Registry", emoji="🔑", style=discord.ButtonStyle.primary)
@@ -612,7 +612,7 @@ class SettingsView(PanelView):
         ensure_default_actions()
         await interaction.response.edit_message(
             embed=action_registry_embed(interaction),
-            view=ActionRegistryView(back_target=(interaction.message.embeds[0], self))
+            view=ActionRegistryView(back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Перезапуск", emoji="🔄", style=discord.ButtonStyle.danger)
@@ -752,7 +752,7 @@ class ActionRegistryView(PanelView):
             async def callback(interaction, key=key):
                 await interaction.response.edit_message(
                     embed=panel_embed(interaction, "access.action", title=key),
-                    view=ActionEditView(key, back_target=(interaction.message.embeds[0], self))
+                    view=ActionEditView(key, back_target=(core.screen(interaction), self))
                 )
 
             button.callback = callback

@@ -1125,23 +1125,36 @@ class WebPanelTests(unittest.TestCase):
     def test_command_images_chain(self):
         g = make_guild()
         i = FakeInteraction(g, g.members[STAFF])
+        old = os.environ.get("WEB_PANEL_URL")
+        os.environ["WEB_PANEL_URL"] = "http://bot.example:8080"
         try:
-            core.set_setting("thumbnail.default", "https://cdn/default.png")
-            core.set_setting("thumbnail.embed", "https://cdn/embed.png")
-            core.set_setting("banner.embed", "https://cdn/embed-banner.png")
-            # экран команды без своей картинки -> картинка команды; automation относится к /embed
-            self.assertEqual(core.panel_embed(i, "embed.home").thumbnail.url, "https://cdn/embed.png")
-            self.assertEqual(core.panel_embed(i, "automation.schedules", list="", tz="").thumbnail.url, "https://cdn/embed.png")
-            self.assertEqual(core.panel_embed(i, "embed.home").image.url, "https://cdn/embed-banner.png")
-            # другая команда -> общая картинка, баннера нет
-            self.assertEqual(core.panel_embed(i, "forms.home").thumbnail.url, "https://cdn/default.png")
-            self.assertIsNone(core.panel_embed(i, "forms.home").image.url)
-            # своя картинка экрана и явное none
+            # иконки из Figma лежат в panel_art и подключены по умолчанию
+            url = core.panel_embed(i, "embed.home").thumbnail.url
+            self.assertRegex(url, r"^http://bot.example:8080/art/thumbnail\.embed\.png\?v=[0-9a-f]{10}$")
+            # экран расписания относится к /embed
+            self.assertIn("thumbnail.embed.png", core.panel_embed(i, "automation.schedules", list="", tz="").thumbnail.url)
+            self.assertIn("thumbnail.access.png", core.panel_embed(i, "access.home", level="x").thumbnail.url)
+            # баннер — только свой у экрана и встаёт отдельным embed'ом над текстом
+            core.set_setting("embed.home.banner", "https://cdn/home-banner.png")
+            home = core.panel_embed(i, "embed.home")
+            self.assertIsNone(home.image.url)
+            self.assertEqual(home.banner_url, "https://cdn/home-banner.png")
+            self.assertIsNone(core.panel_embed(i, "embed.editor.title" and "embed.saved").banner_url)
+            kwargs = core.expand_embeds({"embed": home, "ephemeral": True})
+            self.assertNotIn("embed", kwargs)
+            self.assertEqual(kwargs["embeds"][0].image.url, "https://cdn/home-banner.png")
+            self.assertIs(kwargs["embeds"][1], home)
+            # «Назад» со снимком экрана (список embed'ов) — тоже embeds=
+            self.assertEqual(core.expand_embeds({"embed": kwargs["embeds"]})["embeds"], kwargs["embeds"])
             core.set_setting("embed.home.thumbnail", "none")
             self.assertIsNone(core.panel_embed(i, "embed.home").thumbnail.url)
         finally:
-            for key in ("thumbnail.default", "thumbnail.embed", "banner.embed", "embed.home.thumbnail"):
+            for key in ("embed.home.banner", "embed.home.thumbnail"):
                 core.reset_setting(key)
+            if old is None:
+                os.environ.pop("WEB_PANEL_URL", None)
+            else:
+                os.environ["WEB_PANEL_URL"] = old
 
     def test_asset_upload(self):
         import web_panel
@@ -1156,9 +1169,10 @@ class WebPanelTests(unittest.TestCase):
         self.assertEqual(web_panel.save_asset(buffer.getvalue())[0], name)  # тот же файл — то же имя
         self.assertIsNotNone(web_panel.save_asset(b"<svg onload=alert(1)>")[1])
         self.assertIsNotNone(web_panel.save_asset(b"x" * (web_panel.MAX_ASSET_BYTES + 1))[1])
-        self.assertEqual(web_panel.validate("banner.embed", "none"), ("none", None))
-        self.assertIn("banner.embed", web_panel.editable_keys())
-        self.assertEqual(web_panel.group_of("banner.embed"), "style")
+        self.assertEqual(web_panel.validate("embed.home.banner", "none"), ("none", None))
+        self.assertIn("embed.home.banner", web_panel.editable_keys())
+        self.assertEqual(web_panel.validate("thumbnail.embed", "art:thumbnail.embed.png"), ("art:thumbnail.embed.png", None))
+        self.assertIsNotNone(web_panel.validate("thumbnail.embed", "art:../bot.db")[1])
 
     def test_upload_rejects_non_object_body(self):
         import web_panel

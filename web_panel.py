@@ -46,6 +46,23 @@ ASSETS_DIR = pathlib.Path(os.getenv("WEB_PANEL_ASSETS") or "panel_assets")
 MAX_ASSET_BYTES = 8 * 1024 * 1024
 ASSET_FORMATS = {"PNG": "png", "JPEG": "jpg", "GIF": "gif", "WEBP": "webp"}
 _ASSET_NAME = re.compile(r"^[0-9a-f]{20}\.(png|jpg|gif|webp)$")
+# Оформление из репозитория (макеты из Figma): значение "art:<файл>" в каталоге.
+ART_DIR = pathlib.Path(__file__).with_name("panel_art")
+_ART_NAME = re.compile(r"^[\w.-]{1,80}\.(png|jpg|gif|webp)$")
+_art_versions = {}
+
+
+def art_url(name):
+    """Публичная ссылка на картинку из panel_art; ?v= меняется вместе с файлом,
+    чтобы Discord не показывал старую версию из своего кэша. None — нет файла/URL."""
+    path = ART_DIR / name
+    if not panel_url() or not _ART_NAME.match(name) or not path.is_file():
+        return None
+    stat = path.stat()
+    key = (name, stat.st_mtime_ns, stat.st_size)
+    if key not in _art_versions:
+        _art_versions[key] = hashlib.sha256(path.read_bytes()).hexdigest()[:10]
+    return f"{panel_url()}/art/{name}?v={_art_versions[key]}"
 
 _login_tokens = {}  # token -> expires_at
 _sessions = {}      # session_id -> expires_at
@@ -105,11 +122,12 @@ def editable_keys():
     contexts = set(screen_contexts())
     keys = []
     for key in CATALOG:
-        if key.endswith(".thumbnail") and key[: -len(".thumbnail")] in contexts:
+        if key.endswith((".thumbnail", ".banner")) and key.rsplit(".", 1)[0] in contexts:
             continue  # добавится после .title
         keys.append(key)
         if key.endswith(".title") and key[: -len(".title")] in contexts:
-            keys.append(key[: -len(".title")] + ".thumbnail")
+            screen = key[: -len(".title")]
+            keys += [screen + ".thumbnail", screen + ".banner"]
     return keys
 
 
@@ -158,6 +176,9 @@ def validate(key, raw):
     if kind(key) == "image":
         if value.lower() == "none" or value == "{bot_avatar}":
             return value, None
+        if value.startswith("art:"):
+            ok = _ART_NAME.match(value[4:]) and (ART_DIR / value[4:]).is_file()
+            return (value, None) if ok else (None, "Такого файла нет в panel_art.")
         if len(value) > 1000 or " " in value:
             return None, "Нужна прямая ссылка на картинку, none или {bot_avatar}."
         return value if value.startswith(("http://", "https://")) else "https://" + value, None
@@ -334,6 +355,15 @@ async def upload_asset(request):
     return web.json_response({"url": f"{panel_url()}/assets/{name}"})
 
 
+async def get_art(request):
+    name = request.match_info["name"]
+    path = ART_DIR / name
+    if not _ART_NAME.match(name) or not path.is_file():
+        raise web.HTTPNotFound()
+    # версия в ?v=, поэтому кэшировать можно надолго
+    return web.FileResponse(path, headers={"Cache-Control": "public, max-age=31536000"})
+
+
 async def get_asset(request):
     name = request.match_info["name"]
     path = ASSETS_DIR / name
@@ -353,6 +383,7 @@ def build_app():
     app.router.add_put("/api/settings", put_setting)
     app.router.add_post("/api/assets", upload_asset)
     app.router.add_get("/assets/{name}", get_asset)
+    app.router.add_get("/art/{name}", get_art)
     return app
 
 

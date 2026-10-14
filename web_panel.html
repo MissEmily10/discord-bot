@@ -116,7 +116,7 @@ const GROUP_NAMES = {
 };
 const GROUP_ORDER = Object.keys(GROUP_NAMES);
 const KIND_HINT = {
-  image: "Загрузи файл или вставь ссылку. Пусто — берётся картинка команды, а если её нет — общая (*.default). none — без картинки, {bot_avatar} — аватар бота. Размеры — в docs/DESIGN_ASSETS.md.",
+  image: "Загрузи файл или вставь ссылку. Иконка: пусто — берётся иконка команды, а если её нет — общая. Баннер показывается только на своём экране, над текстом. none — без картинки, art:файл.png — картинка из репозитория. Размеры — в docs/DESIGN_ASSETS.md.",
   color: "HEX-цвет, например #5865F2.",
 };
 
@@ -155,12 +155,16 @@ function imageUrl(v) {
   v = (v || "").trim();
   if (!v || v.toLowerCase() === "none") return null;
   if (v === "{bot_avatar}") return bot.avatar;
+  if (v.startsWith("art:")) return "/art/" + encodeURIComponent(v.slice(4));
   return /^https?:\/\//.test(v) ? v : "https://" + v;
 }
-// как в боте: <экран>.<kind> -> <kind>.<команда> -> <kind>.default
+// как в боте: иконка <экран> -> команда -> default; баннер — только свой у экрана
 function resolveImage(context, kind) {
-  const chain = context ? [context + "." + kind, kind + "." + (commandOf[context] || context.split(".")[0])] : [];
-  chain.push(kind + ".default");
+  const chain = context ? [context + "." + kind] : [];
+  if (kind === "thumbnail") {
+    if (context) chain.push(kind + "." + (commandOf[context] || context.split(".")[0]));
+    chain.push(kind + ".default");
+  }
   for (const key of chain) {
     const v = (live(key) || "").trim();
     if (v) return imageUrl(v);
@@ -211,9 +215,9 @@ function previewHtml(context) {
   const thumb = resolveThumb(context);
   const banner = resolveImage(context, "banner");
   return `<div class="embed" data-preview="${esc(context)}" style="border-left-color:${hexColor(live("embed_color"))}">
+    ${banner ? `<img class="e-banner" src="${esc(banner)}" alt="" referrerpolicy="no-referrer">` : ""}
     <div><div class="e-title">${discordMarkdown(title)}</div><div class="e-text">${discordMarkdown(text)}</div></div>
     ${thumb ? `<img src="${esc(thumb)}" alt="" referrerpolicy="no-referrer">` : ""}
-    ${banner ? `<img class="e-banner" src="${esc(banner)}" alt="" referrerpolicy="no-referrer">` : ""}
   </div>`;
 }
 
