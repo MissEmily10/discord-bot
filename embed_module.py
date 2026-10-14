@@ -74,6 +74,8 @@ class EmbedState:
         self.visibility_levels = []
         self.category = "general"
         self.editor_back = None  # куда ведёт «Назад» из редактора
+        # несколько embed'ов: single — одним сообщением, split — отдельными пачкой
+        self.layout = "single"
 
     @property
     def active_embed(self):
@@ -98,6 +100,7 @@ class EmbedState:
         state.visibility_roles = _json(row[9], [])
         state.visibility_levels = _json(row[10], [])
         state.interactive = _json(row[11], None)
+        state.layout = row[14] if len(row) > 14 and row[14] in ("single", "split") else "split"
         return state
 
     def load_payload(self, payload):
@@ -107,6 +110,7 @@ class EmbedState:
         self.embeds = [e for e in (payload.get("embeds") or []) if isinstance(e, dict)][:MAX_EMBEDS] or [default_embed_data()]
         self.buttons = list(payload.get("buttons") or [])[:MAX_BUTTONS]
         self.interactive = payload.get("interactive")
+        self.layout = payload.get("layout") if payload.get("layout") in ("single", "split") else "single"
 
 
 def editor_embeds(state):
@@ -142,6 +146,8 @@ def interactive_summary(state):
         extra = t("embed.interactive.summary_native", kind=interactive.get("kind"))
     else:
         extra = t("embed.interactive.summary_none")
+    if len(state.embeds) > 1:
+        extra += "\n" + t(f"embed.layout.summary_{state.layout}", count=len(state.embeds))
     return t("embed.interactive.text", buttons=len(state.buttons), max=MAX_BUTTONS, extra=extra)
 
 
@@ -460,10 +466,48 @@ class EmbedEditorView(PanelView):
 
     @discord.ui.button(label="Подтвердить дизайн", emoji="✅", style=discord.ButtonStyle.success, row=2)
     async def confirm(self, interaction, button):
+        back = (core.screen(interaction), self)
+        if len(self.state.embeds) > 1:
+            # несколько embed'ов — сначала спросить, как их отправлять
+            await interaction.response.edit_message(
+                embed=panel_embed(interaction, "embed.layout", count=len(self.state.embeds)),
+                view=LayoutChoiceView(self.state, back_target=back),
+            )
+            return
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "embed.interactive", description=interactive_summary(self.state)),
-            view=InteractiveHubView(self.state, back_target=(core.screen(interaction), self))
+            view=InteractiveHubView(self.state, back_target=back)
         )
+
+
+class LayoutChoiceView(PanelView):
+    """Несколько embed'ов: одним сообщением или разными сообщениями одной пачкой."""
+
+    texts = "embed.layout"
+
+    def __init__(self, state, back_target):
+        super().__init__(back_target=back_target)
+        self.state = state
+
+    async def pick(self, interaction, layout):
+        if layout == "single":
+            total = sum(len(build_discord_embed(e)) for e in self.state.embeds if embed_has_content(e))
+            if total > EMBED_TOTAL_LIMIT:
+                await say(interaction, "embed.layout.too_long", length=total, max=EMBED_TOTAL_LIMIT)
+                return
+        self.state.layout = layout
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "embed.interactive", description=interactive_summary(self.state)),
+            view=InteractiveHubView(self.state, back_target=(core.screen(interaction), self)),
+        )
+
+    @discord.ui.button(label="Одним сообщением", emoji="🧩", style=discord.ButtonStyle.primary)
+    async def single(self, interaction, button):
+        await self.pick(interaction, "single")
+
+    @discord.ui.button(label="Разными сообщениями", emoji="📚", style=discord.ButtonStyle.secondary)
+    async def split(self, interaction, button):
+        await self.pick(interaction, "split")
 
 
 def _parse_color(text):
@@ -1130,6 +1174,10 @@ def state_problem(state):
         length = len(build_discord_embed(data))
         if length > EMBED_TOTAL_LIMIT:
             return "embed.too_long_n", {"n": n, "length": length, "max": EMBED_TOTAL_LIMIT}
+    if state.layout == "single":
+        total = sum(len(build_discord_embed(e)) for e in state.embeds if embed_has_content(e))
+        if total > EMBED_TOTAL_LIMIT:
+            return "embed.layout.too_long", {"length": total, "max": EMBED_TOTAL_LIMIT}
     return None
 
 
@@ -1163,13 +1211,13 @@ async def persist_state(interaction, state, listed=True):
             return None
         from build_tools import remember_version
         remember_version(state.build_id, interaction.user.id)  # прежний вид — в историю
-        update_message_build(state.build_id, **fields)
+        update_message_build(state.build_id, layout=state.layout, **fields)
         if listed:
             set_build_listed(state.build_id, True)
         core.audit(interaction, "build.updated", "build", state.build_id)
         return state.build_id
     state.build_id = save_message_build(
-        guild_id=interaction.guild.id, owner_id=interaction.user.id, listed=listed, **fields,
+        guild_id=interaction.guild.id, owner_id=interaction.user.id, listed=listed, layout=state.layout, **fields,
     )
     core.audit(interaction, "build.created", "build", state.build_id, "" if listed else "unlisted")
     return state.build_id
@@ -1511,6 +1559,7 @@ class SaveAsTemplateModal(Modal, title="СОХРАНИТЬ КАК ШАБЛОН")
             "embeds": _json(row[5], []),
             "buttons": _json(row[6], []),
             "interactive": _json(row[11], None),
+            "layout": row[14] if len(row) > 14 else "split",
         }
         visibility = row[7] if row[7] in ("public", "private") else "private"
         tid = save_template(

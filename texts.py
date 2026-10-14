@@ -778,6 +778,20 @@ CATALOG = {
     "embed.interactive.form": 'Кнопка формы',
     "embed.interactive.save": 'Сохранить',
     "embed.interactive.send_now": 'Отправить',
+    "embed.layout.title": "КАК ОТПРАВИТЬ",
+    "embed.layout.text": (
+        "В сообщении {count} embed'ов. Как их отправлять?\n\n"
+        "⚠️ Если потом прикрепить это сообщение к кнопке («показать сообщение» или «шаг»), "
+        "по кнопке придёт **одно** сообщение: все embed'ы вместе, если влезут в лимит Discord "
+        "(6000 символов на сообщение), иначе только первый."
+    ),
+    "embed.layout.single": "Одним сообщением",
+    "embed.layout.split": "Разными сообщениями",
+    "embed.layout.single.hint": "все embed'ы в одном сообщении (до 10 и до 6000 символов вместе)",
+    "embed.layout.split.hint": "каждый embed отдельным сообщением, все — одной пачкой подряд",
+    "embed.layout.too_long": "Вместе embed'ы занимают {length} символов, а в одно сообщение влезает {max}. Выбери «Разными сообщениями» или сократи текст.",
+    "embed.layout.summary_single": "Embed'ов: **{count}** — одним сообщением",
+    "embed.layout.summary_split": "Embed'ов: **{count}** — разными сообщениями пачкой",
     "embed.send_pick.title": "КУДА ОТПРАВИТЬ",
     "embed.send_pick.text": "Выбери до 5 каналов, веток или форумов. После отправки спрошу, сохранить ли сообщение в «Мои сохранённые».",
     "embed.send_failed.title": "НЕ ОТПРАВЛЕНО",

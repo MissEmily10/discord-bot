@@ -24,7 +24,7 @@ import discord
 import core
 from core import t
 from actions import (
-    load_source, message_parts, used_variables, member_can_view, _json,
+    load_source, message_parts, used_variables, member_can_view, _json, part_embeds,
 )
 from database import (
     get_message_build, get_message_builds, get_sent_instances, save_sent_instance,
@@ -298,7 +298,7 @@ async def _resync_one(guild, build_id):
                         continue
                     part = parts[position]
                     await message.edit(
-                        content=part.get("content"), embed=part.get("embed"), view=part.get("view"),
+                        content=part.get("content"), embeds=part_embeds(part), view=part.get("view"),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                     updated += 1

@@ -119,6 +119,9 @@ def init_database():
             ALTER TABLE message_builds
             ADD COLUMN interactive_json TEXT NOT NULL DEFAULT 'null'
         """)
+    if "layout" not in mb_columns:
+        # single — все embed'ы одним сообщением; split — каждый отдельным (как было раньше)
+        cursor.execute("ALTER TABLE message_builds ADD COLUMN layout TEXT NOT NULL DEFAULT 'split'")
     if "listed" not in mb_columns:
         # 0 — отправлен без сохранения: кнопки работают, но в списках его нет
         cursor.execute("ALTER TABLE message_builds ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
@@ -479,6 +482,7 @@ def save_message_build(
     visibility_levels_json="[]",
     interactive_json="null",
     listed=True,
+    layout="split",
 ):
     now = int(time.time())
     connection = get_connection()
@@ -488,12 +492,12 @@ def save_message_build(
         INSERT INTO message_builds
         (guild_id, owner_id, name, content, embeds_json, buttons_json,
          visibility, category, allowed_role_ids_json, visibility_levels_json,
-         interactive_json, created_at, updated_at, listed)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         interactive_json, created_at, updated_at, listed, layout)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         guild_id, owner_id, name, content, embeds_json, buttons_json,
         visibility, category, allowed_role_ids_json, visibility_levels_json,
-        interactive_json, now, now, int(bool(listed))
+        interactive_json, now, now, int(bool(listed)), layout if layout in ("single", "split") else "split"
     ))
 
     build_id = cursor.lastrowid
@@ -508,7 +512,7 @@ def get_message_build(build_id):
     cursor.execute("""
         SELECT id, guild_id, owner_id, name, content, embeds_json,
                buttons_json, visibility, category, allowed_role_ids_json,
-               visibility_levels_json, interactive_json, created_at, updated_at
+               visibility_levels_json, interactive_json, created_at, updated_at, layout
         FROM message_builds
         WHERE id = ?
     """, (build_id,))
@@ -569,6 +573,7 @@ def update_message_build(
     allowed_role_ids_json,
     visibility_levels_json,
     interactive_json,
+    layout=None,
 ):
     connection = get_connection()
     cursor = connection.cursor()
@@ -583,8 +588,10 @@ def update_message_build(
         allowed_role_ids_json, visibility_levels_json, interactive_json,
         _now(), build_id,
     ))
-    connection.commit()
     changed = cursor.rowcount > 0
+    if layout in ("single", "split"):
+        cursor.execute("UPDATE message_builds SET layout = ? WHERE id = ?", (layout, build_id))
+    connection.commit()
     connection.close()
     return changed
 

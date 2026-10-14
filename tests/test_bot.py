@@ -405,11 +405,11 @@ class ButtonTests(unittest.TestCase):
         embeds = json.dumps([{"title": "Правила"}, {"title": "FAQ"}])
         buttons = json.dumps([{"label": "Ок", "style": "blue", "action_key": "message.send", "value": "hi"}])
         bid = database.save_message_build(GUILD, STAFF, "info", "текст", embeds, buttons)  # private по умолчанию
-        # кнопку собрал сам автор — участник видит build: текст+embed, затем второй embed с кнопками
+        # кнопку собрал сам автор — участник видит build одним сообщением (оба embed'а влезают)
         i = FakeInteraction(g, g.members[MEMBER])
         run(actions.dispatch_action(i, "build.trigger", str(bid), creator_id=STAFF))
         self.assertEqual(i.response.sent, ["текст"])
-        self.assertEqual(len(i.followups), 1)
+        self.assertEqual(len(i.followups), 0)
         # чужой приватный build создатель кнопки не видит — и нажавший тоже
         other = database.save_message_build(GUILD, ADMIN, "secret", "x", "[]", "[]")
         i = FakeInteraction(g, g.members[MEMBER])
@@ -578,6 +578,42 @@ class SendThenSaveTests(unittest.TestCase):
 
         run(check())
         self.assertEqual(len(database.get_message_builds(GUILD, include_hidden=True)), before)
+
+    def test_layout_single_or_split(self):
+        em = self.em
+        channel = FakeChannel(self.guild, 9300)
+        state = em.EmbedState(GUILD, STAFF)
+        state.embeds = [{"title": "Первый"}, {"title": "Второй"}, {"title": "Третий"}]
+
+        async def check():
+            hub = em.InteractiveHubView(state, back_target=None)
+            # шаг выбора: «одним сообщением»
+            view = em.LayoutChoiceView(state, back_target=None)
+            await view.single.callback(self.interaction())
+            self.assertEqual(state.layout, "single")
+            await em.send_from_editor(self.interaction(), state, [channel], hub)
+            self.assertEqual(len(channel.sent), 1)
+            self.assertEqual([e.title for e in channel.sent[0]["embeds"]], ["Первый", "Второй", "Третий"])
+            self.assertEqual(database.get_message_build(state.build_id)[14], "single")
+            # «разными сообщениями» — три сообщения одной пачкой
+            state.layout = "split"
+            await em.send_from_editor(self.interaction(), state, [channel], hub)
+            self.assertEqual(len(channel.sent), 4)
+            # по кнопке — всегда одно сообщение
+            parts = actions.message_parts(state.build_id)
+            self.assertEqual(len(parts), 3)
+            self.assertEqual(len(actions.button_message(parts)["embeds"]), 3)
+
+        run(check())
+
+    def test_single_layout_respects_discord_limit(self):
+        em = self.em
+        state = em.EmbedState(GUILD, STAFF)
+        state.embeds = [{"description": "x" * 3500}, {"description": "y" * 3500}]
+        state.layout = "single"
+        self.assertEqual(em.state_problem(state)[0], "embed.layout.too_long")
+        state.layout = "split"
+        self.assertIsNone(em.state_problem(state))
 
     def test_plain_save_is_listed(self):
         em = self.em

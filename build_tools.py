@@ -287,6 +287,7 @@ def sanitize_payload(interaction, payload):
         interactive = None
 
     return {
+        "layout": payload.get("layout") if payload.get("layout") in ("single", "split") else "single",
         "content": str(payload.get("content") or "")[:2000],
         "embeds": embeds,
         "buttons": buttons,
@@ -314,6 +315,7 @@ def export_build(row):
         "embeds": json.loads(row[5] or "[]"),
         "buttons": json.loads(row[6] or "[]"),
         "interactive": json.loads(row[11] or "null"),
+        "layout": row[14] if len(row) > 14 else "split",
     }
     safe_name = re.sub(r"[^\w-]+", "_", payload["name"], flags=re.UNICODE).strip("_")[:40] or "build"
     data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")

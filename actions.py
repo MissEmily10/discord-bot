@@ -206,6 +206,7 @@ def load_source(src, source_id):
             "guild_id": row[1], "owner_id": row[2], "content": row[4] or "",
             "embeds": embeds, "buttons": _json(row[6], []),
             "interactive": _json(row[11], None), "row": row, "settings": settings,
+            "layout": row[14] if len(row) > 14 and row[14] in ("single", "split") else "split",
         }
     if src == "s":
         row = get_button_set(source_id)
@@ -433,7 +434,12 @@ def message_parts(build_id, variables=None, data=None):
     if not data:
         return None
     content, embeds, view = render_source("b", build_id, data, variables)
-    parts = [{"embed": embed} for embed in embeds] or [{}]
+    if data.get("layout") == "single" and len(embeds) > 1 \
+            and sum(len(embed) for embed in embeds) <= EMBED_TOTAL_LIMIT:
+        # все embed'ы одним сообщением (Discord: до 10 штук и 6000 символов на всё сообщение)
+        parts = [{"embeds": embeds}]
+    else:
+        parts = [{"embed": embed} for embed in embeds] or [{}]
     if content:
         parts[0]["content"] = content
     if view is not None:
@@ -441,11 +447,18 @@ def message_parts(build_id, variables=None, data=None):
     return [] if parts == [{}] else parts
 
 
+def part_embeds(part):
+    """Embed'ы одной части сообщения: {"embed": …} или {"embeds": […]}."""
+    if part.get("embeds"):
+        return list(part["embeds"])
+    return [part["embed"]] if part.get("embed") else []
+
+
 def single_message(parts):
     """Склеить части в одно сообщение (для правки на месте). None — не влезает."""
     if not parts:
         return None
-    embeds = [part["embed"] for part in parts if "embed" in part]
+    embeds = [embed for part in parts for embed in part_embeds(part)]
     if sum(len(embed) for embed in embeds) > EMBED_TOTAL_LIMIT:
         return None
     message = {"content": parts[0].get("content"), "embeds": embeds, "view": parts[-1].get("view")}
@@ -911,6 +924,15 @@ async def _resolve_build(interaction, value, creator_id):
     return variant_for(interaction, row)
 
 
+def button_message(parts):
+    """
+    По кнопке build показывается ОДНИМ сообщением: все embed'ы вместе, если
+    влезают в лимиты Discord, иначе только первая часть. Об этом предупреждаем
+    при выборе «разными сообщениями» в конструкторе.
+    """
+    return single_message(parts) or dict(parts[0])
+
+
 async def _send_parts(interaction, parts):
     # Как при обычной отправке: каждый embed отдельным сообщением, иначе
     # большой build упрётся в лимит Discord 6000 символов на сообщение.
@@ -931,7 +953,7 @@ async def _build_trigger(interaction, value, creator_id=None, **_):
     if not parts:
         await reply(interaction, "embed.build_empty")
         return
-    await _send_parts(interaction, parts)
+    await _send_parts(interaction, [button_message(parts)])
 
 
 async def _build_goto(interaction, value, creator_id=None, **_):
@@ -950,11 +972,11 @@ async def _build_goto(interaction, value, creator_id=None, **_):
         await reply(interaction, "embed.build_empty")
         return
     message = interaction.message
-    single = single_message(parts)
-    if message is not None and message.flags.ephemeral and single is not None:
-        await interaction.response.edit_message(**single)
+    single = button_message(parts)
+    if message is not None and message.flags.ephemeral:
+        await interaction.response.edit_message(**{"content": None, "embeds": [], "view": None, **single})
         return
-    await _send_parts(interaction, parts)
+    await _send_parts(interaction, [single])
 
 
 _REFRESH_COOLDOWN = 30
