@@ -28,15 +28,17 @@ pages: ◀ «стр. 1/2» ▶). Details: [docs/STRUCTURE.md](docs/STRUCTURE.md)
 
 | Command | What |
 |---|---|
-| `/embed` | message builder; send from the bot or through a saved webhook |
+| `/embed` | message builder; send from the bot or "through a webhook": the bot creates a temporary webhook with the chosen name and avatar, sends and deletes it right away |
 | `/library` | saved messages and templates |
 | `/interactive` | button sets, role menus, application forms |
 | `/forms` | review submissions |
 | `/logo` | role icons for staff: `brief:` from scratch, `image:` from a mockup |
-| `/eminemovna` | settings: access, design, webhooks, icon styles, web panel, bunker; `file:` + `style:` add icon style references |
+| `/eminemovna` | settings: access, design, icon styles, web panel, bunker; `file:` + `style:` add icon style references |
+| `/webhook` | create a webhook and get its URL (`channel:` `name:` `avatar:`); no args — list of webhooks. admin+ by default, can be granted per role/user |
 
 Personal grants for the old commands (`/buttons`, `/select`, `/messages`,
 `/templates`, `/access`, `/webhooks`) are copied to the new ones on start.
+Sending through a webhook needs discord.py 2.7+ (avatar upload in the form).
 
 ## Web panel
 

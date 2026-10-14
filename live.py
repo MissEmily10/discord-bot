@@ -226,42 +226,63 @@ async def deliver(guild, author, build_id, channel, *, user=None, extra=None, tr
 
 
 def can_use_webhooks(guild, member):
-    """Отправка через вебхук — как и управление вебхуками: admin и выше."""
-    return core.level_value(core.member_level(guild, member)) >= core.level_value("admin")
+    """
+    Отправить «от другого имени» = выдать себя за кого угодно, поэтому — только
+    тем, кто и в Discord может управлять вебхуками (право «Управлять вебхуками»),
+    или admin+ в боте. Право в конкретном канале проверяется при отправке.
+    """
+    if core.level_value(core.member_level(guild, member)) >= core.level_value("admin"):
+        return True
+    perms = getattr(member, "guild_permissions", None)
+    return bool(perms and perms.manage_webhooks)
 
 
-async def deliver_webhook(guild, author, build_id, record, *, user=None):
+async def deliver_temp_webhook(guild, author, build_id, channel, name, avatar=None, *, user=None):
     """
-    Отправить build через сохранённый вебхук (своё имя и аватарка).
-    record — строка get_webhook. -> (первое сообщение, None) или (None, текст ошибки).
-    Такие сообщения не обновляются потом «Обновить отправленные»: править
-    сообщения вебхука может только сам вебхук.
+    Отправить build от имени временного вебхука: бот сам создаёт вебхук в канале
+    (имя и аватарка — от автора), отправляет и сразу удаляет. Ссылка на вебхук
+    нигде не хранится. Кнопки в сообщении работают (вебхук — от имени бота).
+    Такие сообщения потом не обновляются: править их мог бы только сам вебхук.
+    -> (первое сообщение, None) или (None, текст ошибки).
     """
-    if not can_use_webhooks(guild, author):
-        return None, t("common.need_admin")
-    if record is None or record[1] != guild.id:
-        return None, t("actions.webhook_record_missing")
-    channel = guild.get_channel_or_thread(record[4])
-    if channel is None:
-        return None, t("embed.send.channel_missing", channel=f"<#{record[4]}>")
+    target = channel.parent if isinstance(channel, discord.Thread) else channel
+    is_admin = core.level_value(core.member_level(guild, author)) >= core.level_value("admin")
+    if not is_admin and not target.permissions_for(author).manage_webhooks:
+        return None, t("live.error.webhook_no_rights", channel=channel.mention)
     error = can_post(author, channel)
     if error:
         return None, t(error, channel=channel.mention)
+    if not target.permissions_for(guild.me).manage_webhooks:
+        return None, t("live.error.webhook_bot_rights", channel=target.mention)
+    row = get_message_build(build_id)
     parts = await parts_for(guild, build_id, user=user)
-    if not parts:
+    if not row or not parts:
         return None, t("embed.build_empty")
-    # client=бот: тогда через вебхук можно слать и кнопки (вебхук создан ботом)
-    webhook = discord.Webhook.from_url(record[6], client=_bot)
-    mentions = allowed_mentions_for(author, channel)
-    first = None
     try:
-        for part in parts:
-            message = await webhook.send(wait=True, allowed_mentions=mentions, **part)
+        webhook = await target.create_webhook(name=name[:80], avatar=avatar,
+                                              reason=f"Message Build #{build_id} by {author.id} (temporary)")
+    except discord.HTTPException as error:
+        return None, t("live.error.webhook_create", error=error)
+    mentions = allowed_mentions_for(author, channel)
+    first, thread = None, channel if isinstance(channel, discord.Thread) else None
+    try:
+        for index, part in enumerate(parts):
+            extra = {}
+            if thread is not None:
+                extra["thread"] = thread
+            elif isinstance(target, discord.ForumChannel) and index == 0:
+                extra["thread_name"] = (row[3] or t("embed.default_name"))[:100]
+            message = await webhook.send(wait=True, allowed_mentions=mentions, **extra, **part)
+            if isinstance(target, discord.ForumChannel) and thread is None:
+                thread = message.channel  # дальше — в созданный пост
             first = first or message
-    except discord.NotFound:
-        return first, t("live.error.webhook_gone", name=record[5])
     except discord.HTTPException as error:
         return first, t("embed.send.http_error", channel=channel.mention, error=error)
+    finally:
+        try:
+            await webhook.delete(reason="temporary webhook: message sent")
+        except discord.HTTPException:
+            _log.warning("temporary webhook %s was not deleted", webhook.id)
     return first, None
 
 

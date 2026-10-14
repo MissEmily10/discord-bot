@@ -1133,8 +1133,7 @@ class HubTests(unittest.TestCase):
             self.assertEqual(self.labels(hubs.InteractiveHome(lambda gid, uid: None))[:3],
                              ["Наборы кнопок", "Меню ролей", "Формы"])
             emin = self.labels(hubs.EminemovnaHome(bot=None))
-            self.assertEqual(emin[:5], ["Доступ", "Оформление", "Вебхуки", "Стили иконок", "Веб-панель"])
-            self.assertIn("стр. 1/2", emin)  # 6 разделов — второй страницей
+            self.assertEqual(emin, ["Доступ", "Оформление", "Стили иконок", "Веб-панель", "Бункер"])
             for context in ("library.home", "interactive.home", "eminemovna.home", "forms.review_home"):
                 self.assertTrue(core.panel_embed(i, context).title)
 
@@ -1175,39 +1174,51 @@ class HubTests(unittest.TestCase):
 
 
 class WebhookSendTests(unittest.TestCase):
-    def test_send_build_through_webhook(self):
+    def test_temporary_webhook_is_created_used_and_deleted(self):
         import live
         g = make_guild()
-        channel = FakeChannel(g, 9400)
-        sent = []
+        log = []
 
-        class FakeWebhook:
+        class Hook:
+            id = 42
+
             async def send(self, wait=False, **kwargs):
-                sent.append(kwargs)
-                return types.SimpleNamespace(id=len(sent), channel=channel)
+                log.append(("send", kwargs))
+                return types.SimpleNamespace(id=len(log), channel=channel)
 
-        old = discord.Webhook.from_url
-        discord.Webhook.from_url = staticmethod(lambda url, client=None, session=None: FakeWebhook())
+            async def delete(self, reason=None):
+                log.append(("delete", None))
+
+        class Channel(FakeChannel):
+            managers = {777, ADMIN}  # «Управлять вебхуками» — у бота и у админа
+
+            def permissions_for(self, who):
+                perms = super().permissions_for(who)
+                perms.manage_webhooks = who.id in self.managers
+                return perms
+
+            async def create_webhook(self, name, avatar=None, reason=None):
+                log.append(("create", name, avatar))
+                return Hook()
+
+        channel = Channel(g, 9500)
         buttons = json.dumps([{"label": "Ок", "style": "blue", "action_key": "message.send", "value": "hi"}])
         bid = database.save_message_build(GUILD, ADMIN, "wh", "Привет", "[]", buttons)
-        rid = database.save_webhook(GUILD, ADMIN, 555, channel.id, "Ведущий", "https://discord.com/api/webhooks/1/x", None)
-        other = database.save_webhook(GUILD + 1, ADMIN, 556, channel.id, "Чужой", "https://discord.com/api/webhooks/2/y", None)
-        try:
-            async def check():
-                # staff — нельзя (вебхуки — для admin+)
-                _, error = await live.deliver_webhook(g, g.members[STAFF], bid, database.get_webhook(rid))
-                self.assertEqual(error, core.t("common.need_admin"))
-                # вебхук другого сервера — нельзя
-                _, error = await live.deliver_webhook(g, g.members[ADMIN], bid, database.get_webhook(other))
-                self.assertIsNotNone(error)
-                message, error = await live.deliver_webhook(g, g.members[ADMIN], bid, database.get_webhook(rid))
-                self.assertIsNone(error)
-                self.assertEqual(sent[0]["content"], "Привет")
-                self.assertIn("view", sent[0])  # кнопки уходят и через вебхук
 
-            run(check())
-        finally:
-            discord.Webhook.from_url = old
+        async def check():
+            # нет права «Управлять вебхуками» и не admin — нельзя (иначе любой пишет от любого имени)
+            _, error = await live.deliver_temp_webhook(g, g.members[STAFF], bid, channel, "Ведущий")
+            self.assertIn("Управлять вебхуками", error)
+            self.assertEqual(log, [])
+            message, error = await live.deliver_temp_webhook(g, g.members[ADMIN], bid, channel, "Ведущий", b"png")
+            self.assertIsNone(error)
+            self.assertEqual(log[0], ("create", "Ведущий", b"png"))
+            self.assertEqual(log[1][1]["content"], "Привет")
+            self.assertIn("view", log[1][1])           # кнопки уходят и через вебхук
+            self.assertEqual(log[-1], ("delete", None))  # вебхук сразу удалён
+            self.assertEqual(database.get_sent_instances(bid), [])  # такие сообщения не обновляются
+
+        run(check())
 
 
 class HintsTests(unittest.TestCase):
@@ -1512,7 +1523,7 @@ class ViewSmokeTests(unittest.TestCase):
 
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
-        self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna"]))
+        self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook"]))
 
 
 if __name__ == "__main__":

@@ -22,6 +22,9 @@ from database import get_forms, get_form, get_form_submissions, count_pending_su
 
 for _name in ("library", "interactive", "forms", "eminemovna"):
     core.COMMAND_MIN_LEVELS.setdefault(_name, "staff")
+# Вебхук — это «писать от любого имени»: по умолчанию admin+, дальше — через
+# доступ по ролям/людям (/eminemovna → Доступ).
+core.COMMAND_MIN_LEVELS.setdefault("webhook", "admin")
 
 
 def open_with_back(view, back_target):
@@ -200,7 +203,7 @@ class SubmissionReviewView(PanelView):
 
 class EminemovnaHome(PanelView):
     texts = "eminemovna.home"
-    button_order = ("access", "design", "webhooks", "logo_styles", "web_panel", "bunker")
+    button_order = ("access", "design", "logo_styles", "web_panel", "bunker")
 
     def __init__(self, bot):
         super().__init__()
@@ -226,14 +229,6 @@ class EminemovnaHome(PanelView):
             return
         await show(interaction, design_embed(interaction), DesignView(back_target=self.back(interaction)))
 
-    @discord.ui.button(label="Вебхуки", emoji="🪝", style=discord.ButtonStyle.secondary)
-    async def webhooks(self, interaction, button):
-        from extended_modules import WebhookHome
-        if core.level_value(get_user_level(interaction)) < core.level_value("admin"):
-            await say(interaction, "common.need_admin")
-            return
-        await show(interaction, panel_embed(interaction, "webhooks.home"), WebhookHome(back_target=self.back(interaction)))
-
     @discord.ui.button(label="Стили иконок", emoji="🖌️", style=discord.ButtonStyle.secondary)
     async def logo_styles(self, interaction, button):
         from logo_module import StylesHome, can_manage_styles
@@ -256,6 +251,38 @@ class EminemovnaHome(PanelView):
             return
         await show(interaction, panel_embed(interaction, "access.settings"),
                    SettingsView(self.bot, back_target=self.back(interaction)))
+
+
+# ============================================================
+# /webhook — создать вебхук и получить ссылку
+# ============================================================
+
+WEBHOOK_AVATAR_MAX = 8 * 1024 * 1024
+
+
+async def create_webhook_for(interaction, channel, name, avatar):
+    from database import save_webhook
+    if not channel.permissions_for(interaction.guild.me).manage_webhooks:
+        await say(interaction, "webhook_cmd.bot_rights", channel=channel.mention)
+        return
+    data = None
+    if avatar is not None:
+        if not (avatar.content_type or "").startswith("image/") or avatar.size > WEBHOOK_AVATAR_MAX:
+            await say(interaction, "embed.webhook_modal.bad_avatar")
+            return
+        data = await avatar.read()
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        webhook = await channel.create_webhook(name=name[:80], avatar=data, reason=f"/webhook by {interaction.user.id}")
+    except discord.HTTPException as error:
+        await interaction.followup.send(t("live.error.webhook_create", error=error), ephemeral=True)
+        return
+    record_id = save_webhook(interaction.guild.id, interaction.user.id, webhook.id, channel.id, webhook.name,
+                             webhook.url, None)
+    core.audit(interaction, "webhook.created", "webhook", record_id, f"channel={channel.id}")
+    await interaction.followup.send(
+        t("webhook_cmd.created", name=webhook.name, channel=channel.mention, url=webhook.url), ephemeral=True,
+    )
 
 
 # ============================================================
@@ -288,6 +315,21 @@ def register_hubs(bot, make_button_sets):
             return
         await interaction.response.send_message(embed=panel_embed(interaction, "forms.review_home"),
                                                 view=ReviewHome(interaction), ephemeral=True)
+
+    @bot.tree.command(name="webhook", description="Создать вебхук и получить его ссылку (или открыть список)")
+    @app_commands.guild_only()
+    @app_commands.describe(channel="Канал вебхука", name="Имя, от которого он пишет",
+                           avatar="Аватарка (картинка)")
+    async def webhook(interaction, channel: discord.TextChannel = None, name: app_commands.Range[str, 1, 80] = None,
+                      avatar: discord.Attachment = None):
+        if not await core.require_command_access(interaction, "webhook"):
+            return
+        if channel is None:
+            from extended_modules import WebhookHome
+            await interaction.response.send_message(embed=panel_embed(interaction, "webhooks.home"),
+                                                    view=WebhookHome(), ephemeral=True)
+            return
+        await create_webhook_for(interaction, channel, name or interaction.guild.me.display_name, avatar)
 
     @bot.tree.command(name="eminemovna", description="Настройки бота: доступ, оформление, вебхуки, стили иконок")
     @app_commands.guild_only()

@@ -772,7 +772,8 @@ class InteractiveHubView(PanelView):
 
         select.callback = selected
         view.add_item(select)
-        add_webhook_option(interaction, view, lambda i, record: send_from_editor(i, self.state, [], self, record))
+        add_webhook_option(interaction, view,
+                           lambda i, channel, name, avatar: send_from_editor(i, self.state, [], self, (channel, name, avatar)))
         await interaction.response.edit_message(embed=panel_embed(interaction, "embed.send_pick"), view=view)
 
     @discord.ui.button(label="Сохранить", emoji="💾", style=discord.ButtonStyle.secondary, row=1)
@@ -1273,7 +1274,7 @@ async def finish_message_build(interaction, state):
     )
 
 
-async def send_from_editor(interaction, state, channels, hub, webhook_record=None):
+async def send_from_editor(interaction, state, channels, hub, webhook=None):
     """
     «Отправить» на последнем шаге конструктора: build записывается скрытым
     (если он новый), уходит в каналы, а потом бот спрашивает, сохранить ли его
@@ -1284,10 +1285,12 @@ async def send_from_editor(interaction, state, channels, hub, webhook_record=Non
     build_id = await persist_state(interaction, state, listed=False)
     if build_id is None:
         return
-    if webhook_record is not None:
+    if webhook is not None:
         import live
-        message, error = await live.deliver_webhook(interaction.guild, interaction.user, build_id, webhook_record)
-        sent = [t("embed.send.via_webhook", name=webhook_record[5], channel=message.channel.mention)] if message else []
+        channel, name, avatar = webhook
+        message, error = await live.deliver_temp_webhook(interaction.guild, interaction.user, build_id,
+                                                         channel, name, avatar)
+        sent = [t("embed.send.via_webhook", name=name, channel=message.channel.mention)] if message else []
         failed = [error] if error else []
     else:
         sent, failed = await send_build(interaction, build_id, channels)
@@ -1317,31 +1320,63 @@ async def send_from_editor(interaction, state, channels, hub, webhook_record=Non
     await interaction.edit_original_response(content=None, embed=embed, view=view)
 
 
-def add_webhook_option(interaction, view, on_pick):
+WEBHOOK_AVATAR_MAX = 8 * 1024 * 1024
+WEBHOOK_CHANNEL_TYPES = [
+    discord.ChannelType.text, discord.ChannelType.news, discord.ChannelType.forum,
+    discord.ChannelType.public_thread, discord.ChannelType.private_thread, discord.ChannelType.news_thread,
+]
+
+
+class WebhookIdentityModal(Modal, title="ОТ ЧЬЕГО ИМЕНИ"):
+    """Имя и аватарка временного вебхука. Аватарку можно просто прикрепить картинкой."""
+
+    def __init__(self, channel_id, on_ready, default_name=""):
+        super().__init__(title=t("embed.webhook_modal.title")[:45])
+        self.channel_id = channel_id
+        self.on_ready = on_ready
+        self.name_input = discord.ui.TextInput(default=default_name[:80] or None, min_length=1, max_length=80)
+        self.avatar_input = discord.ui.FileUpload(required=False, max_values=1)
+        self.add_item(discord.ui.Label(text=t("embed.webhook_modal.name")[:45], component=self.name_input))
+        self.add_item(discord.ui.Label(text=t("embed.webhook_modal.avatar")[:45],
+                                       description=t("embed.webhook_modal.avatar_hint")[:100], component=self.avatar_input))
+
+    async def on_submit(self, interaction):
+        avatar = None
+        files = list(self.avatar_input.values or [])
+        if files:
+            file = files[0]
+            if not (file.content_type or "").startswith("image/") or file.size > WEBHOOK_AVATAR_MAX:
+                await say(interaction, "embed.webhook_modal.bad_avatar")
+                return
+            avatar = await file.read()
+        channel = interaction.guild.get_channel_or_thread(self.channel_id)
+        if channel is None:
+            await say(interaction, "embed.send.channel_missing", channel=f"<#{self.channel_id}>")
+            return
+        await self.on_ready(interaction, channel, self.name_input.value.strip(), avatar)
+
+
+def add_webhook_option(interaction, view, on_ready):
     """
-    Кнопка «Через вебхук» на шаге отправки: только тем, кому доступны вебхуки
-    (admin+), и если на сервере есть сохранённые вебхуки (/eminemovna → Вебхуки).
+    Кнопка «Через вебхук» на шаге отправки: канал -> имя и аватарка -> бот сам
+    создаёт временный вебхук, отправляет и сразу удаляет его (live.deliver_temp_webhook).
+    Видна тем, кто может управлять вебхуками (или admin+).
     """
     import live
-    from database import get_webhooks, get_webhook
 
-    rows = get_webhooks(interaction.guild.id)
-    if not rows or not live.can_use_webhooks(interaction.guild, interaction.user):
+    if not live.can_use_webhooks(interaction.guild, interaction.user):
         return
     button = discord.ui.Button(label=t("embed.send_pick.via_webhook")[:80], emoji="🪝",
                                style=discord.ButtonStyle.secondary, row=1)
 
     async def choose(i):
         pick = PanelView(back_target=(core.screen(i), view), timeout=600)
-        select = discord.ui.Select(
-            placeholder=t("embed.send_pick.webhook_placeholder")[:150],
-            options=[discord.SelectOption(label=f"{(name or '—')[:70]} · #{rid}", value=str(rid),
-                                          description=t("embed.send_pick.webhook_option", channel_id=channel_id)[:100])
-                     for rid, owner, webhook_id, channel_id, name, *_ in rows[:25]],
-        )
+        select = discord.ui.ChannelSelect(placeholder=t("embed.send_pick.webhook_channel")[:150],
+                                          channel_types=WEBHOOK_CHANNEL_TYPES)
 
         async def picked(ci):
-            await on_pick(ci, get_webhook(int(select.values[0])))
+            name = getattr(ci.user, "display_name", "") or ""
+            await ci.response.send_modal(WebhookIdentityModal(select.values[0].id, on_ready, default_name=name))
 
         select.callback = picked
         pick.add_item(select)
@@ -1481,14 +1516,14 @@ class MessageBuildFinalView(PanelView):
                 lines.append(t("embed.send.failed", errors="\n".join(failed)))
             await i.followup.send("\n\n".join(lines), ephemeral=True)
 
-        async def via_webhook(i, record):
+        async def via_webhook(i, channel, name, avatar):
             import live
             await i.response.defer(ephemeral=True, thinking=True)
-            message, error = await live.deliver_webhook(i.guild, i.user, self.build_id, record)
-            text = (t("embed.send.sent", channels=t("embed.send.via_webhook", name=record[5], channel=message.channel.mention))
+            message, error = await live.deliver_temp_webhook(i.guild, i.user, self.build_id, channel, name, avatar)
+            text = (t("embed.send.sent", channels=t("embed.send.via_webhook", name=name, channel=message.channel.mention))
                     if message else "") + (("\n\n" + t("embed.send.failed", errors=error)) if error else "")
             if message:
-                core.audit(i, "build.sent", "build", self.build_id, f"webhook={record[0]}")
+                core.audit(i, "build.sent", "build", self.build_id, f"temporary webhook «{name}»")
             await i.followup.send(text.strip(), ephemeral=True)
 
         select.callback = selected

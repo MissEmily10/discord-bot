@@ -795,15 +795,22 @@ CATALOG = {
     "embed.layout.summary_split": "Embed'ов: **{count}** — разными сообщениями пачкой",
     "embed.send_pick.title": "КУДА ОТПРАВИТЬ",
     "embed.send_pick.via_webhook": "Через вебхук",
-    "embed.send_pick.webhook_placeholder": "Выбери вебхук",
-    "embed.send_pick.webhook_option": "канал {channel_id}",
     "embed.send_webhook.title": "ЧЕРЕЗ ВЕБХУК",
     "embed.send_webhook.text": (
-        "Сообщение уйдёт от имени вебхука — с его именем и аватаркой, в его канал. Кнопки работают.\n"
-        "⚠️ Такое сообщение потом не обновится кнопкой «Обновить отправленные»: править его может только сам вебхук."
+        "Сообщение уйдёт от другого имени и с другой аватаркой. Выбери канал — дальше спрошу имя и картинку.\n"
+        "Бот сам создаст вебхук, отправит сообщение и сразу удалит вебхук — ссылка нигде не останется. Кнопки работают.\n"
+        "⚠️ Такое сообщение потом не обновится кнопкой «Обновить отправленные»."
     ),
+    "embed.send_pick.webhook_channel": "Куда отправить",
+    "embed.webhook_modal.title": "ОТ ЧЬЕГО ИМЕНИ",
+    "embed.webhook_modal.name": "Имя",
+    "embed.webhook_modal.avatar": "Аватарка",
+    "embed.webhook_modal.avatar_hint": "Прикрепи картинку (PNG, JPG, GIF). Пусто — аватарка бота.",
+    "embed.webhook_modal.bad_avatar": "Аватарка должна быть картинкой до 8 МБ.",
+    "live.error.webhook_no_rights": "в {channel} у тебя нет права «Управлять вебхуками»",
+    "live.error.webhook_bot_rights": "у бота нет права «Управлять вебхуками» в {channel}",
+    "live.error.webhook_create": "Discord не дал создать вебхук: `{error}` (имя не может содержать «discord» или «clyde»)",
     "embed.send.via_webhook": "через вебхук «{name}» в {channel}",
-    "live.error.webhook_gone": "вебхук «{name}» удалён в Discord — создай новый в /eminemovna → Вебхуки",
     "embed.send_pick.text": "Выбери до 5 каналов, веток или форумов — или «Через вебхук» (от имени вебхука). После отправки спрошу, сохранить ли сообщение в «Мои сохранённые».",
     "embed.send_failed.title": "НЕ ОТПРАВЛЕНО",
     "embed.send_failed.text": "{result}\n\nСообщение не сохранено. Вернись назад, чтобы выбрать другой канал.",
@@ -991,6 +998,11 @@ CATALOG = {
     "forms.review_card.text": "От {user}, {when}.",
     "forms.review_card.approve": "Одобрить",
     "forms.review_card.reject": "Отклонить",
+    "webhook_cmd.created": (
+        "🪝 Вебхук **{name}** создан в {channel}.\n\nСсылка (держи в секрете — кто её знает, пишет от этого имени):\n"
+        "||{url}||\n\nСписок и удаление — `/webhook` без параметров."
+    ),
+    "webhook_cmd.bot_rights": "У бота нет права «Управлять вебхуками» в {channel}.",
     "eminemovna.home.title": "EMINEMOVNA",
     "eminemovna.home.text": (
         "Настройки бота. Каждый раздел проверяет свои права: что тебе недоступно — бот скажет.\n"
@@ -998,7 +1010,6 @@ CATALOG = {
     ),
     "eminemovna.home.access": "Доступ",
     "eminemovna.home.design": "Оформление",
-    "eminemovna.home.webhooks": "Вебхуки",
     "eminemovna.home.logo_styles": "Стили иконок",
     "eminemovna.home.web_panel": "Веб-панель",
     "eminemovna.home.bunker": "Бункер",
@@ -1025,7 +1036,6 @@ CATALOG = {
     "forms.review_card.reject.hint": "отказать — можно указать причину",
     "eminemovna.home.access.hint": "кто что может: уровни, роли, запреты, журнал",
     "eminemovna.home.design.hint": "цвета и подписи бота",
-    "eminemovna.home.webhooks.hint": "сообщения от имени «другого бота»",
     "eminemovna.home.logo_styles.hint": "стили иконок для /logo: описание, LoRA",
     "eminemovna.home.web_panel.hint": "ссылка на веб-панель (тексты и картинки)",
     "eminemovna.home.bunker.hint": "бэкап, реестр действий кнопок (владелец)",

@@ -1630,7 +1630,7 @@ def count_pending_submissions(form_id):
 COMMAND_RENAMES = {
     "buttons": "interactive", "select": "interactive",
     "messages": "library", "templates": "library",
-    "access": "eminemovna", "webhooks": "eminemovna",
+    "access": "eminemovna", "webhooks": "webhook",
 }
 
 
