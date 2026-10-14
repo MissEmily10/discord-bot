@@ -214,6 +214,7 @@ def init_database():
     connection.close()
 
     _ensure_extended_tables()
+    migrate_command_grants()
 
 
 # =========================
@@ -1599,3 +1600,47 @@ def get_submission_stats(guild_id, form_id=None):
         "rejected": counts.get("rejected", 0),
         "last": last,
     }
+
+
+def get_form_submissions(form_id, status="pending", limit=25):
+    """-> [(id, applicant_id, answers_json, created_at)], новые первыми."""
+    _ensure_extended_tables()
+    connection = get_connection()
+    rows = connection.execute(
+        "SELECT id, applicant_id, answers_json, created_at FROM form_submissions "
+        "WHERE form_id = ? AND status = ? ORDER BY id DESC LIMIT ?",
+        (form_id, status, limit),
+    ).fetchall()
+    connection.close()
+    return rows
+
+
+def count_pending_submissions(form_id):
+    _ensure_extended_tables()
+    connection = get_connection()
+    count = connection.execute(
+        "SELECT COUNT(*) FROM form_submissions WHERE form_id = ? AND status = 'pending'", (form_id,)
+    ).fetchone()[0]
+    connection.close()
+    return count
+
+
+# Команды объединены (docs/STRUCTURE.md): личные доступы к старым командам
+# переезжают к новым, чтобы никто не потерял то, что ему выдали.
+COMMAND_RENAMES = {
+    "buttons": "interactive", "select": "interactive",
+    "messages": "library", "templates": "library",
+    "access": "eminemovna", "webhooks": "eminemovna",
+}
+
+
+def migrate_command_grants():
+    connection = get_connection()
+    for old, new in COMMAND_RENAMES.items():
+        connection.execute(
+            "INSERT OR IGNORE INTO command_access (guild_id, command_name, user_id, expires_at) "
+            "SELECT guild_id, ?, user_id, expires_at FROM command_access WHERE command_name = ?",
+            (new, old),
+        )
+    connection.commit()
+    connection.close()

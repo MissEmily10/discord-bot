@@ -844,22 +844,5 @@ class ActionEditView(PanelView):
 # ============================================================
 
 def register_access(bot):
-    @bot.tree.command(name="design", description="Настройка оформления бота")
-    async def design(interaction):
-        if not is_owner(interaction):
-            await deny(interaction, "common.owner_only")
-            return
-        await interaction.response.send_message(embed=design_embed(interaction), view=DesignView(), ephemeral=True)
+    """/access и /design переехали в /eminemovna (hubs.py)."""
 
-    @bot.tree.command(name="access", description="Управление доступом к функциям бота")
-    @discord.app_commands.guild_only()
-    async def access(interaction):
-        if interaction.guild is None:
-            await deny(interaction, "common.only_in_guild")
-            return
-        if not can_view_access(interaction):
-            await deny(interaction, "text_access_denied")
-            return
-
-        embed = panel_embed(interaction, "access.home", level=level_label(get_user_level(interaction)))
-        await interaction.response.send_message(embed=embed, view=AccessHomeView(bot), ephemeral=True)

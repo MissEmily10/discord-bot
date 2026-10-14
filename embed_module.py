@@ -1607,13 +1607,3 @@ def register_embed(bot):
             ephemeral=True,
         )
 
-    @bot.tree.command(name="messages", description="Управление сохранёнными Message Build")
-    @discord.app_commands.guild_only()
-    async def messages_command(interaction):
-        if not await core.require_command_access(interaction, "messages"):
-            return
-        await interaction.response.send_message(
-            embed=panel_embed(interaction, "messages.home"),
-            view=SavedBuildsListView(interaction),
-            ephemeral=True,
-        )

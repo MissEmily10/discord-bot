@@ -1279,30 +1279,5 @@ DYNAMIC_ITEMS = [FormApplyButton, ReviewButton, RoleMenuSelect]
 # ============================================================
 
 def register_extended(bot, require_access):
-    @bot.tree.command(name="forms", description="Создание и управление формами")
-    @discord.app_commands.guild_only()
-    async def forms(i):
-        if not await require_access(i, "forms"):
-            return
-        await i.response.send_message(embed=panel_embed(i, "forms.home"), view=FormStartView(i.guild.id, i.user.id), ephemeral=True)
+    """/forms, /select, /templates, /webhooks переехали в хабы (hubs.py)."""
 
-    @bot.tree.command(name="select", description="Меню ролей и выборы")
-    @discord.app_commands.guild_only()
-    async def select(i):
-        if not await require_access(i, "select"):
-            return
-        await i.response.send_message(embed=panel_embed(i, "select.home"), view=SelectHome(), ephemeral=True)
-
-    @bot.tree.command(name="templates", description="Библиотека публичных и приватных шаблонов")
-    @discord.app_commands.guild_only()
-    async def templates(i):
-        if not await require_access(i, "templates"):
-            return
-        await i.response.send_message(embed=panel_embed(i, "templates.home"), view=TemplateHome(), ephemeral=True)
-
-    @bot.tree.command(name="webhooks", description="Полноценное управление вебхуками")
-    @discord.app_commands.guild_only()
-    async def webhooks(i):
-        if not await require_access(i, "webhooks"):
-            return
-        await i.response.send_message(embed=panel_embed(i, "webhooks.home"), view=WebhookHome(), ephemeral=True)

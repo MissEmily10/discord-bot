@@ -660,88 +660,113 @@ async def _precheck(interaction):
     return True
 
 
-def register_logo(bot):
-    group = app_commands.Group(name="logo", description="Иконки для ролей в твоём стиле", guild_only=True)
-
-    @group.command(name="generate", description="Сгенерировать иконку с нуля по короткому ТЗ")
-    @app_commands.describe(brief="Что изобразить, коротко", style="Стиль (по умолчанию — основной)")
-    @app_commands.autocomplete(style=style_autocomplete)
-    async def generate(interaction, brief: app_commands.Range[str, 2, 300], style: int = None):
-        if not await _precheck(interaction):
-            return
-        style_row = pick_style(interaction.guild.id, style)
+async def run_generate(interaction, brief, style=None):
+    """Сгенерировать иконку с нуля (из /logo brief: или из панели /logo)."""
+    if not await _precheck(interaction):
+        return
+    style_row = pick_style(interaction.guild.id, style)
+    if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            png = await generate_image("generate", style_row, brief)
-        except Exception as error:  # noqa: BLE001
-            _log.warning("logo generation failed: %s", error)
-            await interaction.followup.send(t("logo.failed", error=str(error)[:300]), ephemeral=True)
-            return
-        await send_result(interaction, style_row, "generate", brief, png)
+    try:
+        png = await generate_image("generate", style_row, brief)
+    except Exception as error:  # noqa: BLE001
+        _log.warning("logo generation failed: %s", error)
+        await interaction.followup.send(t("logo.failed", error=str(error)[:300]), ephemeral=True)
+        return
+    await send_result(interaction, style_row, "generate", brief, png)
 
-    @group.command(name="stylize", description="Перерисовать твой макет иконки в выбранном стиле")
-    @app_commands.describe(image="Макет или набросок иконки", brief="Что важно сохранить/добавить", style="Стиль")
-    @app_commands.autocomplete(style=style_autocomplete)
-    async def stylize(interaction, image: discord.Attachment, brief: str = "", style: int = None):
-        if not await _precheck(interaction):
+
+async def run_stylize(interaction, image, brief="", style=None):
+    """Перерисовать макет в стиле (из /logo image:)."""
+    if not await _precheck(interaction):
+        return
+    data, error = await read_attachment(image)
+    if error:
+        await say(interaction, error)
+        return
+    style_row = pick_style(interaction.guild.id, style)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    source = to_icon_png(open_image(data), 1024)
+    try:
+        png = await generate_image("stylize", style_row, brief[:300], source_bytes=source)
+    except Exception as error:  # noqa: BLE001
+        _log.warning("logo stylize failed: %s", error)
+        await interaction.followup.send(t("logo.failed", error=str(error)[:300]), ephemeral=True)
+        return
+    await send_result(interaction, style_row, "stylize", brief[:300], png, source_bytes=source)
+
+
+async def add_references_from(interaction, style, file):
+    """Референсы в стиль (картинка или zip) — из /eminemovna file: style:. Только для управляющих стилями."""
+    if not can_manage_styles(interaction):
+        await say(interaction, "common.need_admin")
+        return
+    row = pick_style(interaction.guild.id, style)
+    if row is None:
+        await say(interaction, "logo.style_missing")
+        return
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        await say(interaction, "logo.no_packages")
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    if file.filename.lower().endswith(".zip"):
+        if file.size > 50 * 1024 * 1024:
+            await interaction.followup.send(t("logo.image_too_large"), ephemeral=True)
             return
-        data, error = await read_attachment(image)
+        try:
+            added, skipped = await asyncio.to_thread(import_zip, row, await file.read())
+        except zipfile.BadZipFile:
+            await interaction.followup.send(t("logo.bad_image"), ephemeral=True)
+            return
+    else:
+        data, error = await read_attachment(file)
         if error:
-            await say(interaction, error)
+            await interaction.followup.send(t(error), ephemeral=True)
             return
-        style_row = pick_style(interaction.guild.id, style)
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        source = to_icon_png(open_image(data), 1024)
-        try:
-            png = await generate_image("stylize", style_row, brief[:300], source_bytes=source)
-        except Exception as error:  # noqa: BLE001
-            _log.warning("logo stylize failed: %s", error)
-            await interaction.followup.send(t("logo.failed", error=str(error)[:300]), ephemeral=True)
-            return
-        await send_result(interaction, style_row, "stylize", brief[:300], png, source_bytes=source)
+        added, skipped = (1, 0) if add_reference(row, data) else (0, 1)
+    total = len(references_of(get_logo_style(row[0])))
+    core.audit(interaction, "logo.references_added", "logo_style", row[0], f"+{added}")
+    await interaction.followup.send(t("logo.references_added", added=added, skipped=skipped, total=total, max=MAX_REFERENCES), ephemeral=True)
 
-    @group.command(name="styles", description="Стили иконок: создать, описать, датасет для LoRA")
-    async def styles(interaction):
-        if not await core.require_command_access(interaction, "logo"):
-            return
-        await interaction.response.send_message(embed=panel_embed(interaction, "logo.styles"), view=StylesHome(interaction), ephemeral=True)
 
-    @group.command(name="reference", description="Добавить иконку-референс в стиль (можно zip-архив)")
-    @app_commands.describe(style="Стиль", file="PNG/JPG/WEBP или zip с иконками")
+class LogoBriefModal(Modal, title="НОВАЯ ИКОНКА"):
+    texts = "logo.brief_modal"
+
+    brief = discord.ui.TextInput(label="Что изобразить, коротко", min_length=2, max_length=300)
+
+    async def on_submit(self, interaction):
+        await run_generate(interaction, self.brief.value.strip())
+
+
+class LogoHome(PanelView):
+    """/logo без параметров: генерация для staff; стили и референсы — в /eminemovna."""
+
+    texts = "logo.home"
+
+    @discord.ui.button(label="Сгенерировать", emoji="✨", style=discord.ButtonStyle.primary)
+    async def generate(self, interaction, button):
+        await interaction.response.send_modal(LogoBriefModal())
+
+
+def register_logo(bot):
+    @bot.tree.command(name="logo", description="Иконки для ролей в стиле сервера")
+    @app_commands.guild_only()
+    @app_commands.describe(
+        brief="Что изобразить (без картинки — с нуля)",
+        image="Твой макет или набросок — перерисую в стиле",
+        style="Стиль (по умолчанию — основной)",
+    )
     @app_commands.autocomplete(style=style_autocomplete)
-    async def reference(interaction, style: int, file: discord.Attachment):
-        if not await core.require_command_access(interaction, "logo"):
-            return
-        if not can_manage_styles(interaction):
-            await say(interaction, "common.need_admin")
-            return
-        row = pick_style(interaction.guild.id, style)
-        if row is None:
-            await say(interaction, "logo.style_missing")
-            return
-        try:
-            import PIL  # noqa: F401
-        except ImportError:
-            await say(interaction, "logo.no_packages")
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        if file.filename.lower().endswith(".zip"):
-            if file.size > 50 * 1024 * 1024:
-                await interaction.followup.send(t("logo.image_too_large"), ephemeral=True)
-                return
-            try:
-                added, skipped = await asyncio.to_thread(import_zip, row, await file.read())
-            except zipfile.BadZipFile:
-                await interaction.followup.send(t("logo.bad_image"), ephemeral=True)
-                return
+    async def logo(interaction, brief: app_commands.Range[str, 0, 300] = "", image: discord.Attachment = None,
+                   style: int = None):
+        if image is not None:
+            await run_stylize(interaction, image, brief or "", style)
+        elif brief and len(brief.strip()) >= 2:
+            await run_generate(interaction, brief.strip(), style)
         else:
-            data, error = await read_attachment(file)
-            if error:
-                await interaction.followup.send(t(error), ephemeral=True)
+            if not await core.require_command_access(interaction, "logo"):
                 return
-            added, skipped = (1, 0) if add_reference(row, data) else (0, 1)
-        total = len(references_of(get_logo_style(row[0])))
-        core.audit(interaction, "logo.references_added", "logo_style", row[0], f"+{added}")
-        await interaction.followup.send(t("logo.references_added", added=added, skipped=skipped, total=total, max=MAX_REFERENCES), ephemeral=True)
-
-    bot.tree.add_command(group)
+            await interaction.response.send_message(embed=panel_embed(interaction, "logo.home"),
+                                                    view=LogoHome(), ephemeral=True)

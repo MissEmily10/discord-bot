@@ -25,6 +25,7 @@ import extended_modules
 import logo_module
 import automation
 import media
+import hubs
 import web_panel
 from extended_modules import register_extended
 
@@ -100,23 +101,6 @@ async def on_ready():
         print(f"Синхронизировано команд: {len(synced)}")
     except Exception as error:
         print(f"Ошибка синхронизации: {error}")
-
-
-# =========================
-# PING
-# =========================
-
-@bot.tree.command(
-    name="ping",
-    description="Проверка работы бота"
-)
-async def ping(interaction):
-    if not await require_command_access(interaction, "ping"):
-        return
-
-    await interaction.response.send_message(
-        t("ping.reply_latency", ms=round(bot.latency * 1000)), ephemeral=True
-    )
 
 
 # ============================================================
@@ -420,20 +404,6 @@ class ButtonSetListView(PanelView):
             self.add_item(discord.ui.Button(label=t("buttons.list.empty")[:80], disabled=True))
 
 
-@bot.tree.command(
-    name="buttons",
-    description="Создать и управлять наборами кнопок"
-)
-@discord.app_commands.guild_only()
-async def buttons_command(interaction):
-    if not await require_command_access(interaction, "buttons"):
-        return
-
-    await interaction.response.send_message(
-        embed=panel_embed(interaction, "buttons.home", max=actions.MAX_BUTTONS),
-        view=StandaloneButtonStartView(interaction.guild.id, interaction.user.id),
-        ephemeral=True
-    )
 
 
 # ============================================================
@@ -445,6 +415,8 @@ embed_module.register_embed(bot)
 register_extended(bot, require_command_access)
 logo_module.register_logo(bot)
 web_panel.register_panel(bot)
+# /library, /interactive, /forms, /eminemovna (docs/STRUCTURE.md)
+hubs.register_hubs(bot, make_button_sets=StandaloneButtonStartView)
 
 
 # =========================

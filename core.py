@@ -43,15 +43,11 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 # Минимальный уровень для встроенных команд. Команды, добавленные модулями,
 # могут дополнять этот словарь через core.COMMAND_MIN_LEVELS[name] = level.
 COMMAND_MIN_LEVELS = {
-    "ping": "staff",
-    "access": "staff",
     "embed": "staff",
-    "buttons": "staff",
+    "library": "staff",
+    "interactive": "staff",
     "forms": "staff",
-    "select": "staff",
-    "templates": "staff",
-    "messages": "staff",
-    "webhooks": "admin",
+    "eminemovna": "staff",
 }
 
 
@@ -373,7 +369,8 @@ COMMAND_OF = {
     "design": "access", "actions": "embed",
 }
 # Команды, у которых есть своя общая картинка (thumbnail.<команда> / banner.<команда>).
-BRANDED_COMMANDS = ("embed", "forms", "access", "buttons", "templates", "webhooks", "select", "logo")
+BRANDED_COMMANDS = ("embed", "forms", "access", "buttons", "templates", "webhooks", "select", "logo",
+                    "library", "interactive", "eminemovna")
 
 
 def command_of(context):

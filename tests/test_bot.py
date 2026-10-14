@@ -1119,6 +1119,61 @@ class PaginationTests(unittest.TestCase):
         run(check())
 
 
+class HubTests(unittest.TestCase):
+    def labels(self, view):
+        return [c.get("label") for row in view.to_components() for c in row["components"]]
+
+    def test_hub_panels_render(self):
+        import hubs
+
+        async def check():
+            g = make_guild()
+            i = FakeInteraction(g, g.members[STAFF])
+            self.assertEqual(self.labels(hubs.LibraryHome())[:2], ["Сообщения", "Шаблоны"])
+            self.assertEqual(self.labels(hubs.InteractiveHome(lambda gid, uid: None))[:3],
+                             ["Наборы кнопок", "Меню ролей", "Формы"])
+            emin = self.labels(hubs.EminemovnaHome(bot=None))
+            self.assertEqual(emin[:5], ["Доступ", "Оформление", "Вебхуки", "Стили иконок", "Веб-панель"])
+            self.assertIn("стр. 1/2", emin)  # 6 разделов — второй страницей
+            for context in ("library.home", "interactive.home", "eminemovna.home", "forms.review_home"):
+                self.assertTrue(core.panel_embed(i, context).title)
+
+        run(check())
+
+    def test_forms_review_flow(self):
+        import hubs
+        g = make_guild()
+        form_id = database.save_form(GUILD, STAFF, "Набор в модераторы", "", json.dumps([{"label": "Возраст"}]),
+                                     reviewer_user_ids_json=json.dumps([STAFF]))
+        sid = database.save_submission(form_id, GUILD, MEMBER, json.dumps({"Возраст": "20"}))
+
+        async def check():
+            reviewer = FakeInteraction(g, g.members[STAFF])
+            forms = hubs.reviewable_forms(reviewer)
+            self.assertEqual([(f[0], n) for f, n in forms if f[0] == form_id], [(form_id, 1)])
+            # обычный участник чужие заявки не видит
+            self.assertFalse(any(f[0] == form_id for f, _ in hubs.reviewable_forms(FakeInteraction(g, g.members[MEMBER]))))
+            card = hubs.submission_embed(reviewer, sid)
+            self.assertEqual(card.fields[0].value, "20")
+            view = hubs.SubmissionReviewView(sid, back_target=None)
+            await view.approve.callback(reviewer)
+            self.assertEqual(database.get_submission(sid)[5], "approved")
+            self.assertEqual(database.count_pending_submissions(form_id), 0)
+
+        run(check())
+
+    def test_old_grants_move_to_new_commands(self):
+        database.grant_command_access(GUILD, "buttons", MEMBER) if hasattr(database, "grant_command_access") else None
+        connection = database.get_connection()
+        connection.execute("INSERT OR IGNORE INTO command_access (guild_id, command_name, user_id, expires_at) VALUES (?, 'templates', ?, NULL)", (GUILD, ADMIN2))
+        connection.commit(); connection.close()
+        database.migrate_command_grants()
+        connection = database.get_connection()
+        rows = connection.execute("SELECT command_name FROM command_access WHERE guild_id = ? AND user_id = ?", (GUILD, ADMIN2)).fetchall()
+        connection.close()
+        self.assertIn(("library",), rows)
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
@@ -1420,8 +1475,8 @@ class ViewSmokeTests(unittest.TestCase):
         import bot
 
         names = sorted(c.name for c in bot.bot.tree.get_commands())
-        self.assertEqual(names, sorted(["access", "buttons", "design", "embed", "forms", "logo", "messages",
-                                        "panel", "ping", "select", "templates", "webhooks"]))
+        # docs/STRUCTURE.md: 6 команд вместо 12
+        self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna"]))
 
 
 if __name__ == "__main__":

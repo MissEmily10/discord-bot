@@ -406,16 +406,19 @@ async def start(bot):
 # /panel
 # =========================
 
+async def send_panel_link(interaction):
+    """Одноразовая ссылка на веб-панель (кнопка «Веб-панель» в /eminemovna). Только владелец."""
+    if not core.is_owner(interaction):
+        await interaction.response.send_message(core.t("common.owner_only"), ephemeral=True)
+        return
+    if panel_port() is None or not panel_url():
+        await interaction.response.send_message(core.t("panel.disabled"), ephemeral=True)
+        return
+    link = create_login_link()
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label=core.t("panel.open")[:80], url=link))
+    await interaction.response.send_message(core.t("panel.link"), view=view, ephemeral=True)
+
+
 def register_panel(bot):
-    @bot.tree.command(name="panel", description="Ссылка на веб-панель настроек бота")
-    async def panel(interaction):
-        if not core.is_owner(interaction):
-            await interaction.response.send_message(core.t("common.owner_only"), ephemeral=True)
-            return
-        if panel_port() is None or not panel_url():
-            await interaction.response.send_message(core.t("panel.disabled"), ephemeral=True)
-            return
-        link = create_login_link()
-        view = discord.ui.View()
-        view.add_item(discord.ui.Button(label=core.t("panel.open")[:80], url=link))
-        await interaction.response.send_message(core.t("panel.link"), view=view, ephemeral=True)
+    """/panel переехала в /eminemovna → «Веб-панель»."""
