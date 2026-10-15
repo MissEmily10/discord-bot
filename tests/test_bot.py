@@ -1438,6 +1438,30 @@ class LiveCardTests(unittest.TestCase):
         self.assertEqual(message["embed"].image.url, "attachment://card.png")
 
 
+class UiEmojiTests(unittest.TestCase):
+    def test_panel_buttons_get_doodles(self):
+        import ui_emoji
+        import embed_module as em
+        ui_emoji._loaded.update({name: discord.PartialEmoji(name=name, id=100000000000000000 + n)
+                                 for n, name in enumerate(sorted(set(ui_emoji.MAP.values())))})
+        try:
+            view = em.EmbedEditorView(em.EmbedState(GUILD, STAFF), back_target=([], None))
+            rows = view.to_components()
+            buttons = [c for row in rows for c in row["components"] if c["type"] == 2]
+            back = next(c for c in buttons if c.get("label") == "Назад")
+            self.assertEqual(back["emoji"]["name"], "ui_back")
+            arrows = [c["emoji"]["name"] for c in buttons if c.get("emoji") and c["emoji"]["name"] in ("ui_prev", "ui_next")]
+            self.assertEqual(arrows, ["ui_prev", "ui_next"])
+            self.assertTrue(any(c.get("emoji", {}).get("name") == "ui_edit" for c in buttons))
+            core.set_setting("ui_emoji_style", "standard")
+            view = em.EmbedEditorView(em.EmbedState(GUILD, STAFF), back_target=([], None))
+            names = [c.get("emoji", {}).get("name") for row in view.to_components() for c in row["components"]]
+            self.assertNotIn("ui_back", names)
+        finally:
+            core.reset_setting("ui_emoji_style")
+            ui_emoji._loaded.clear()
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

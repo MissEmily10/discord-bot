@@ -20,6 +20,7 @@ import discord
 from PIL import Image, ImageDraw, ImageFont
 
 import core
+import ui_emoji
 from core import PanelView, Modal, t, panel_embed
 from actions import reply
 from database import get_connection
@@ -291,7 +292,7 @@ def can_manage(interaction, card):
 class CardEditButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rb:cd:(?P<cid>\d+)"):
     def __init__(self, card_id, *, item=None):
         super().__init__(item or discord.ui.Button(
-            label=t("cards.edit_button")[:80], emoji="✏️", style=discord.ButtonStyle.secondary,
+            label=t("cards.edit_button")[:80], emoji=ui_emoji.swap("✏️"), style=discord.ButtonStyle.secondary,
             custom_id=f"rb:cd:{card_id}",
         ))
         self.card_id = card_id

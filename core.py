@@ -681,6 +681,8 @@ class PanelView(discord.ui.View):
 
     def to_components(self):
         self._apply_pages()
+        import ui_emoji  # дудл-эмодзи на кнопках вместо обычных
+        ui_emoji.apply(self)
         return super().to_components()
 
     def _nav(self, item):
@@ -746,6 +748,7 @@ class PanelView(discord.ui.View):
             style=discord.ButtonStyle.secondary,
             row=4,
         ))
+        button._ui_back = True  # эмодзи из подписи станет дудлом «Назад»
 
         async def callback(interaction):
             embed, view = self.back_target

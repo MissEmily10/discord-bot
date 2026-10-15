@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -28,6 +29,7 @@ import media
 import hubs
 import form_packs
 import cards
+import ui_emoji
 import web_panel
 from extended_modules import register_extended
 
@@ -79,7 +81,9 @@ async def setup_hook():
     await web_panel.start(bot)
     automation.setup(bot)  # расписание, триггеры, живое обновление
     await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)
-    await form_packs.load_doodles(bot)  # дудл-эмодзи для меню паков форм
+    # дудл-эмодзи (меню паков форм и кнопки панелей) — в фоне: первая заливка долгая
+    asyncio.create_task(form_packs.load_doodles(bot))
+    ui_emoji.start(bot)
 
 bot.setup_hook = setup_hook
 

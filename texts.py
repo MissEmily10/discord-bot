@@ -55,6 +55,8 @@ CATALOG = {
     "nav_prev_emoji": "◀️",
     "nav_next_emoji": "▶️",
     "nav_page": "стр. {page}/{pages}",
+    # эмодзи на кнопках панелей: doodle — свои дудлы бота (panel_art/emoji/ui), standard — обычные
+    "ui_emoji_style": "doodle",
 
     # ================= ОБЩЕЕ =================
     "common.only_in_guild": "Эта функция работает только на сервере.",

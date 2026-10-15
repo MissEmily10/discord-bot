@@ -19,6 +19,7 @@ import discord
 
 import core
 import live
+import ui_emoji
 from core import PanelView, Modal, t, panel_embed, embed_color, fetch_bytes, get_user_level
 from actions import say, normalize_url, render_source, template_visible, form_visible
 from database import (
@@ -347,7 +348,7 @@ class FormApplyButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rb:f
 
     def __init__(self, form_id, *, item=None):
         super().__init__(item or discord.ui.Button(
-            label=t("forms.use.apply")[:80], emoji="📝", style=discord.ButtonStyle.primary,
+            label=t("forms.use.apply")[:80], emoji=ui_emoji.swap("📝"), style=discord.ButtonStyle.primary,
             custom_id=f"rb:fa:{form_id}",
         ))
         self.form_id = form_id

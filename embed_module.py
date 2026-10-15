@@ -247,6 +247,8 @@ class PicturePreviewView(discord.ui.View):
             real.callback = self.send_real
             self.add_item(real)
         self.real_parts = real_parts
+        import ui_emoji
+        ui_emoji.apply(self)
 
     async def switch_theme(self, interaction):
         await interaction.response.defer()
