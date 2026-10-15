@@ -282,7 +282,17 @@ class ButtonSetActions(PanelView):
 
         select.callback = picked
         view.add_item(select)
-        await interaction.response.send_message(t("embed.send.prompt"), view=view, ephemeral=True)
+        # главное — прикрепить к уже существующему сообщению (своему, чужому, бота)
+        attach = discord.ui.Button(label=t("attach.button")[:80], emoji="📎", style=discord.ButtonStyle.primary, row=1)
+
+        async def attach_clicked(ci):
+            if await self._row(ci):
+                import attach_buttons
+                await attach_buttons.open_attach(ci, self.set_id)
+
+        attach.callback = attach_clicked
+        view.add_item(attach)
+        await interaction.response.send_message(t("attach.prompt"), view=view, ephemeral=True)
 
     @discord.ui.button(label="Удалить", emoji="🗑️", style=discord.ButtonStyle.danger)
     async def delete(self, interaction, button):

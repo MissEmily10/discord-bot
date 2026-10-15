@@ -1612,6 +1612,50 @@ class ButtonSetFlowTests(unittest.TestCase):
         self.assertEqual(state.buttons[0]["value"], "https://example.com")
 
 
+class AttachButtonsTests(unittest.TestCase):
+    """Набор кнопок — к своему сообщению бота или переотправкой чужого."""
+
+    def setUp(self):
+        self.g = make_guild()
+        self.set_id = database.save_button_set(GUILD, STAFF, "Набор", json.dumps(
+            [{"label": "Сайт", "style": "link", "value": "https://example.com"}]))
+        self.channel = FakeChannel(self.g, 9700)
+
+    def message(self, author, mid):
+        edits, deleted = [], []
+
+        async def edit(**kwargs):
+            edits.append(kwargs)
+
+        async def delete():
+            deleted.append(True)
+
+        msg = types.SimpleNamespace(id=mid, author=author, webhook_id=None, components=[], content="Привет",
+                                    embeds=[], attachments=[], channel=self.channel, guild=self.g,
+                                    jump_url=f"https://discord.com/channels/{GUILD}/9700/{mid}", edit=edit, delete=delete)
+        return msg, edits, deleted
+
+    def test_own_message_gets_buttons(self):
+        import attach_buttons as ab
+        msg, edits, _ = self.message(self.g.me, 5001)
+        _, _, view = actions.render_source("s", self.set_id)
+        run(ab.attach_to_own(FakeInteraction(self.g, self.g.members[STAFF]), msg, view))
+        self.assertEqual(edits[0]["view"].children[0].label, "Сайт")
+
+    def test_foreign_message_reposted(self):
+        import attach_buttons as ab
+        author = self.g.members[STAFF]
+        msg, _, deleted = self.message(author, 5002)
+        i = FakeInteraction(self.g, author)
+        run(ab.repost(i, self.set_id, msg, as_author=False))
+        self.assertEqual(self.channel.sent[0]["content"], "Привет")
+        self.assertEqual(self.channel.sent[0]["view"].children[0].label, "Сайт")
+        self.assertEqual(deleted, [True])  # своё сообщение — оригинал удалён
+        # чужое — от имени автора нельзя участнику без прав
+        other, _, _ = self.message(self.g.members[ADMIN], 5003)
+        self.assertFalse(ab.may_impersonate(FakeInteraction(self.g, self.g.members[MEMBER]), other))
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
