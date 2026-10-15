@@ -45,8 +45,10 @@ TEMPLATES = {
         # надпись сверху — своя у пака («набор! набор!…», «напиши нам!…»), у формы можно задать свою
         {"text": "{tagline}", "font": "drunk", "size": 22, "x": 48, "y": 31 + 11, "max_width": 660,
          "color": (90, 82, 84)},
+        # below_previous: значки над буквами (й, ё) и сами буквы не касаются надписи сверху
         {"text": "{name}", "font": "coolvetica", "size": 166, "min_size": 56,
-         "x": 40, "y": 36 + 58, "two_line_y": 116, "max_width": 670, "color": (32, 28, 30), "lower": True},
+         "x": 40, "y": 36 + 58, "two_line_y": 116, "max_width": 670, "color": (32, 28, 30), "lower": True,
+         "below_previous": True},
     ],
 }
 
@@ -145,22 +147,137 @@ def _cut(text, font, width):
     return text
 
 
+GAP = 7  # px между надписью сверху и заголовком (и между строками заголовка)
+
+
+def _box(draw, piece, font):
+    (x, y), text = piece
+    return draw.textbbox((x, y), text, font=font, anchor="lm")
+
+
+def _ink(draw, pieces, font):
+    boxes = [_box(draw, piece, font) for piece in pieces]
+    return min(b[1] for b in boxes), max(b[3] for b in boxes)
+
+
+def _layout(draw, spec, lines, font):
+    """Строки как в макете; вторая строка не налезает на хвосты первой (д, щ, у)."""
+    step = font.size * 0.8
+    center = spec.get("two_line_y", spec["y"]) if len(lines) > 1 else spec["y"]
+    ys = [center - step * (len(lines) - 1) / 2]
+    for number in range(1, len(lines)):
+        y = ys[-1] + step
+        above = draw.textbbox((spec["x"], ys[-1]), lines[number - 1], font=font, anchor="lm")[3]
+        top = draw.textbbox((spec["x"], y), lines[number], font=font, anchor="lm")[1]
+        ys.append(y + max(0, above + GAP / 2 - top))
+    return [((spec["x"], y), line) for y, line in zip(ys, lines)]
+
+
+def _sticking_up(draw, piece, font, limit):
+    """Горизонтальные отрезки букв первой строки, которые поднимаются выше limit (значок й, ё…)."""
+    (x, y), line = piece
+    spans = []
+    for index, char in enumerate(line):
+        if char.isspace():
+            continue
+        left = x + font.getlength(line[:index])
+        box = draw.textbbox((left, y), char, font=font, anchor="lm")
+        if box[1] < limit:
+            spans.append((box[0] - GAP, box[2] + GAP, box[1]))
+    return spans
+
+
+def _words(draw, piece, font):
+    """Надпись сверху -> слова с их x (лишние пробелы макета сохраняются)."""
+    (x, y), line = piece
+    words, index = [], 0
+    for word in line.split(" "):
+        if word:
+            words.append([x + font.getlength(line[:index]), word])
+        index += len(word) + 1
+    return words, y
+
+
+def respace_tagline(draw, tagline, font, spans, max_right):
+    """
+    Раздвинуть пробелы надписи сверху так, чтобы торчащие вверх части заголовка
+    (значок над «й» и т. п.) встали в просветы между словами. -> куски | None.
+    """
+    if len(tagline) != 1:
+        return None
+    words, y = _words(draw, tagline[0], font)
+    shift = 0
+    for word in words:
+        word[0] += shift
+        moved = True
+        while moved:
+            moved = False
+            right = word[0] + font.getlength(word[1])
+            for left_edge, right_edge, _ in spans:
+                if word[0] < right_edge and right > left_edge:
+                    shift += right_edge - word[0]
+                    word[0] = right_edge
+                    moved = True
+                    break
+    if not words or words[-1][0] + font.getlength(words[-1][1]) > max_right:
+        return None
+    return [((x, y), word) for x, word in words]
+
+
+def place_title(draw, spec, lines, font, tagline, tagline_font, bottom_limit):
+    """
+    Заголовок под надписью сверху. Если значок над буквой (й, ё) или буква
+    задевает надпись:
+    1) раздвигаем пробелы надписи, чтобы значок встал между словами;
+    2) иначе сдвигаем заголовок вниз, если снизу есть место;
+    3) иначе понемногу уменьшаем шрифт, но не мельче min_size — чтобы читалось.
+    -> (куски заголовка, шрифт, куски надписи)
+    """
+    min_size = spec.get("min_size", font.size)
+    tag_top, tag_bottom = _ink(draw, tagline, tagline_font)
+    limit = tag_bottom + GAP
+    max_right = spec["x"] + spec["max_width"]
+    while True:
+        placed = _layout(draw, spec, lines, font)
+        top, bottom = _ink(draw, placed, font)
+        if top >= limit:
+            return placed, font, tagline
+        spans = _sticking_up(draw, placed[0], font, limit)
+        if spans and min(s[2] for s in spans) >= GAP:  # торчит, но в картинку влезает
+            respaced = respace_tagline(draw, tagline, tagline_font, spans, max_right)
+            if respaced:
+                return placed, font, respaced
+        need = limit - top
+        if bottom + need <= bottom_limit:
+            return [((x, y + need), line) for (x, y), line in placed], font, tagline
+        if font.size <= min_size:
+            # мельче нельзя: лучше чуть срезать хвосты снизу, чем налезть на надпись
+            return [((x, y + need), line) for (x, y), line in placed], font, tagline
+        font = font.font_variant(size=max(min_size, int(font.size * 0.95)))
+
+
 def render(screen, **values):
     """-> PNG (bytes) баннера с подставленным текстом."""
     layers = TEMPLATES[screen]
     picture = Image.open(base_path(screen)).convert("RGBA")
     draw = ImageDraw.Draw(picture)
     values = {"tagline": core.t("packs.tagline_default"), **values}
+    drawn = []  # [(куски, шрифт, цвет)]
     for spec in layers if isinstance(layers, list) else [layers]:
         text = spec["text"].format_map({k: str(v) for k, v in values.items()})
         if spec.get("lower"):
             text = text.lower()
         lines, font = fit_text(spec, text)
-        step = font.size * 0.8
-        center = spec.get("two_line_y", spec["y"]) if len(lines) > 1 else spec["y"]
-        top = center - step * (len(lines) - 1) / 2
-        for number, line in enumerate(lines):
-            draw.text((spec["x"], top + number * step), line, font=font, fill=spec["color"], anchor="lm")
+        if spec.get("below_previous") and drawn:
+            above, above_font, above_color = drawn[-1]
+            placed, font, above = place_title(draw, spec, lines, font, above, above_font, picture.height - 4)
+            drawn[-1] = (above, above_font, above_color)
+        else:
+            placed = _layout(draw, spec, lines, font)
+        drawn.append((placed, font, spec["color"]))
+    for pieces, font, color in drawn:
+        for (x, y), text in pieces:
+            draw.text((x, y), text, font=font, fill=color, anchor="lm")
     output = io.BytesIO()
     picture.save(output, "PNG", optimize=True)
     return output.getvalue()

@@ -1955,6 +1955,26 @@ class BannerFontTests(unittest.TestCase):
         self.assertTrue(b.kind_for("drunk", "набор! набор!").startswith("fallback:"))
         self.assertEqual(b.kind_for("coolvetica", "модератор"), "coolvetica")
 
+    def test_title_accent_never_touches_tagline(self):
+        import banner_render as b
+        from PIL import Image, ImageDraw
+        draw = ImageDraw.Draw(Image.new("RGBA", (1200, 200)))
+        tag_spec, title_spec = b.TEMPLATES["forms.public_card"]
+        tag_lines, tag_font = b.fit_text(tag_spec, "набор! набор! набоооор!     подавай заявку!")
+        tagline = b._layout(draw, tag_spec, tag_lines, tag_font)
+        for name in ("дизайнер", "ёлка", "айтишник", "ведущий ивентов клана"):
+            lines, font = b.fit_text(title_spec, name)
+            placed, font, tag = b.place_title(draw, title_spec, lines, font, tagline, tag_font, 196)
+            tag_boxes = [b._box(draw, piece, tag_font) for piece in tag]
+            for (x, y), line in placed:
+                for i, ch in enumerate(line.strip() and line):
+                    if ch.isspace():
+                        continue
+                    box = draw.textbbox((x + font.getlength(line[:i]), y), ch, font=font, anchor="lm")
+                    for t in tag_boxes:
+                        overlap = box[0] < t[2] and box[2] > t[0] and box[1] < t[3] and box[3] > t[1]
+                        self.assertFalse(overlap, f"{name}: «{ch}» задевает надпись")
+
 
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
