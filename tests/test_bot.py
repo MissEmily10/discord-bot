@@ -1107,7 +1107,7 @@ class PaginationTests(unittest.TestCase):
             self.assertIn("стр. 1/3", rows[-1])
             self.assertIn(core.t("nav_back"), rows[-1])  # «Назад» — в ряду навигации, не в лимите
             # ▶ листает дальше, ◀ с первой — на последнюю
-            nav = [c for c in view.children if getattr(c, "_panel_nav", False) and c.emoji]
+            nav = [c for c in view.children if getattr(c, "_panel_nav", False) and c.emoji and not c.label]
             i = FakeInteraction(make_guild(), make_guild().members[STAFF])
             edits = []
 
@@ -1449,9 +1449,9 @@ class UiEmojiTests(unittest.TestCase):
             rows = view.to_components()
             buttons = [c for row in rows for c in row["components"] if c["type"] == 2]
             back = next(c for c in buttons if c.get("label") == "Назад")
-            self.assertEqual(back["emoji"]["name"], "ui_back")
+            self.assertEqual(back["emoji"]["name"], "ui_prev")  # «Назад» — дудл-стрелка перелистывания
             arrows = [c["emoji"]["name"] for c in buttons if c.get("emoji") and c["emoji"]["name"] in ("ui_prev", "ui_next")]
-            self.assertEqual(arrows, ["ui_prev", "ui_next"])
+            self.assertEqual(arrows, ["ui_prev", "ui_prev", "ui_next"])  # «Назад», ◀ и ▶ перелистывания
             self.assertTrue(any(c.get("emoji", {}).get("name") == "ui_edit" for c in buttons))
             core.set_setting("ui_emoji_style", "standard")
             view = em.EmbedEditorView(em.EmbedState(GUILD, STAFF), back_target=([], None))

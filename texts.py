@@ -51,9 +51,9 @@ CATALOG = {
     "logo.home.banner": "art:logo.home.banner.png",
     "eminemovna.home.banner": "art:eminemovna.home.banner.png",
     "webhooks.home.banner": "art:webhooks.home.banner.png",
-    "nav_back": "◀️ Назад",
+    "nav_back": "Назад",
     "nav_next": "▶️ Далее",
-    "nav_cancel": "❌ Отмена",
+    "nav_cancel": "Отмена",
     "nav_prev_emoji": "◀️",
     "nav_next_emoji": "▶️",
     "nav_page": "стр. {page}/{pages}",
@@ -1004,7 +1004,7 @@ CATALOG = {
     "design.text": (
         "Настройки оформления бота.\n\n"
         "Основной цвет: `{embed_color}`\nОпасный цвет: `{danger_color}`\n"
-        "Отказ в доступе: {text_access_denied}\nНазад: {nav_back}\nОтмена: {nav_cancel}"
+        "Отказ в доступе: {text_access_denied}"
     ),
     "design.edit": "Изменить",
     "design.profile": "Профиль бота",
@@ -1051,8 +1051,6 @@ CATALOG = {
     "design.modal.embed_color_input": "Основной HEX цвет",
     "design.modal.danger_color_input": "Опасный HEX цвет",
     "design.modal.denied_input": "Текст отказа",
-    "design.modal.back_input": "Текст кнопки Назад",
-    "design.modal.cancel_input": "Текст кнопки Отмена",
 
     # ================= ХАБЫ (docs/STRUCTURE.md) =================
     "thumbnail.library": "art:thumbnail.templates.png",

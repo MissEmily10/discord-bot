@@ -640,7 +640,17 @@ def apply_texts(component, prefix):
         if prefix and has_text(f"{prefix}.{attr}"):
             item.label = t(f"{prefix}.{attr}")[:80]
         elif attr == "cancel":
-            item.label = t("nav_cancel")[:80]
+            item.label = nav_label("nav_cancel")
+            item.emoji = item.emoji or "❌"  # станет дудлом-крестиком (ui_emoji)
+
+
+def nav_label(key):
+    """Подпись «Назад»/«Отмена» без эмодзи в начале (эмодзи бот ставит сам — дудлом)."""
+    text = (t(key) or "").strip()
+    head, _, rest = text.partition(" ")
+    if rest and not any(ch.isalnum() for ch in head):
+        text = rest.strip()
+    return text[:80]
 
 
 class Modal(discord.ui.Modal):
@@ -762,11 +772,11 @@ class PanelView(discord.ui.View):
 
     def _insert_back_button(self):
         button = self._nav(discord.ui.Button(
-            label=t("nav_back")[:80],
+            label=nav_label("nav_back"),
+            emoji="◀️",  # ui_emoji заменит на дудл-стрелку перелистывания
             style=discord.ButtonStyle.secondary,
             row=4,
         ))
-        button._ui_back = True  # эмодзи из подписи станет дудлом «Назад»
 
         async def callback(interaction):
             embed, view = self.back_target

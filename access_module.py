@@ -631,7 +631,7 @@ class SettingsView(PanelView):
 # /design
 # ============================================================
 
-DESIGN_KEYS = ("embed_color", "danger_color", "text_access_denied", "nav_back", "nav_cancel")
+DESIGN_KEYS = ("embed_color", "danger_color", "text_access_denied")
 
 
 def design_embed(interaction):
@@ -645,16 +645,12 @@ class DesignModal(Modal, title="DESIGN SETTINGS"):
     embed_color_input = discord.ui.TextInput(label="Основной HEX цвет", max_length=8)
     danger_color_input = discord.ui.TextInput(label="Опасный HEX цвет", max_length=8)
     denied_input = discord.ui.TextInput(label="Текст отказа", max_length=200)
-    back_input = discord.ui.TextInput(label="Текст кнопки Назад", max_length=80)
-    cancel_input = discord.ui.TextInput(label="Текст кнопки Отмена", max_length=80)
 
     def __init__(self):
         super().__init__()
         self.embed_color_input.default = get_setting("embed_color")
         self.danger_color_input.default = get_setting("danger_color")
         self.denied_input.default = get_setting("text_access_denied")
-        self.back_input.default = get_setting("nav_back")
-        self.cancel_input.default = get_setting("nav_cancel")
 
     @staticmethod
     def valid_color(value):
@@ -680,8 +676,6 @@ class DesignModal(Modal, title="DESIGN SETTINGS"):
         # пустое поле = вернуть фразу по умолчанию
         for key, field in (
             ("text_access_denied", self.denied_input),
-            ("nav_back", self.back_input),
-            ("nav_cancel", self.cancel_input),
         ):
             if field.value.strip():
                 set_setting(key, field.value.strip())

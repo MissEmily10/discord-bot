@@ -101,7 +101,7 @@ def apply(view):
             continue
         label = child.label or ""
         head, _, rest = label.partition(" ")
-        name = "ui_back" if getattr(child, "_ui_back", False) and _key(head) in MAP else MAP.get(_key(head))
+        name = MAP.get(_key(head))
         if name in _loaded and rest:
             child.emoji = _loaded[name]
             child.label = rest
