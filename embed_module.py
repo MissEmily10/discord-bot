@@ -148,6 +148,9 @@ def interactive_summary(state):
         extra = t("embed.interactive.summary_list", count=len(interactive.get("options") or []))
     elif interactive.get("type") == "native_select":
         extra = t("embed.interactive.summary_native", kind=interactive.get("kind"))
+    elif interactive.get("type") == "form_packs":
+        from form_packs import packs_summary
+        extra = packs_summary(interactive)
     else:
         extra = t("embed.interactive.summary_none")
     if len(state.embeds) > 1:
@@ -827,7 +830,7 @@ class BuildMetaModal(Modal, title="НАЗВАНИЕ И ТЕКСТ"):
 
 class InteractiveHubView(PanelView):
     texts = "embed.interactive"
-    button_order = ('send_now', 'preview', 'buttons', 'list', 'save', 'form', 'native', 'clear_interactive')
+    button_order = ('send_now', 'preview', 'buttons', 'list', 'save', 'form', 'packs', 'native', 'clear_interactive')
 
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
@@ -855,6 +858,18 @@ class InteractiveHubView(PanelView):
         await interaction.response.edit_message(
             embed=panel_embed(interaction, "embed.native_select"),
             view=NativeSelectTypeView(self.state, hub=self, back_target=self.hub_target(interaction))
+        )
+
+    @discord.ui.button(label="Паки форм", emoji="🗂️", style=discord.ButtonStyle.secondary)
+    async def packs(self, interaction, button):
+        import form_packs
+        if not form_packs.get_packs(interaction.guild.id):
+            await say(interaction, "packs.picker.none")
+            return
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "packs.picker"),
+            view=form_packs.packs_picker(interaction, self.state, lambda i: back_to_hub(i, self),
+                                         back_target=self.hub_target(interaction)),
         )
 
     @discord.ui.button(label="Кнопка формы", emoji="📝", style=discord.ButtonStyle.secondary)

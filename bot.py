@@ -26,6 +26,7 @@ import logo_module
 import automation
 import media
 import hubs
+import form_packs
 import web_panel
 from extended_modules import register_extended
 
@@ -72,10 +73,12 @@ async def setup_hook():
     core.reload_settings()
     core.ensure_default_actions()
     # кнопки/списки в уже отправленных сообщениях работают после рестарта
-    bot.add_dynamic_items(*actions.DYNAMIC_ITEMS, *extended_modules.DYNAMIC_ITEMS, *logo_module.DYNAMIC_ITEMS)
+    bot.add_dynamic_items(*actions.DYNAMIC_ITEMS, *extended_modules.DYNAMIC_ITEMS, *logo_module.DYNAMIC_ITEMS,
+                          *form_packs.DYNAMIC_ITEMS)
     await web_panel.start(bot)
     automation.setup(bot)  # расписание, триггеры, живое обновление
     await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)
+    await form_packs.load_doodles(bot)  # дудл-эмодзи для меню паков форм
 
 bot.setup_hook = setup_hook
 

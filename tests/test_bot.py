@@ -1302,6 +1302,88 @@ class PreviewPictureTests(unittest.TestCase):
         run(check())
 
 
+class FormPackTests(unittest.TestCase):
+    """Паки форм: меню в сообщении, карточка формы, баннеры с должностью."""
+
+    def test_english_names(self):
+        import form_packs as fp
+        self.assertEqual(fp.quick_english("Модератор"), "moderator")
+        self.assertEqual(fp.quick_english("Старший модератор"), "senior moderator")
+        self.assertEqual(fp.quick_english("Ивентер"), "eventer")
+        self.assertEqual(fp.quick_english("Шашлычник"), "shashlychnik")
+        self.assertEqual(fp.quick_english("Support"), "support")
+        self.assertEqual(run(fp.to_english("Хелпер")), "helper")
+
+    def test_template_banners(self):
+        import banner_render as br
+        for screen in br.TEMPLATES:
+            self.assertTrue(br.is_template(screen), screen)
+        short = PILImage.open(io.BytesIO(br.render("forms.public_card", name="Модератор")))
+        self.assertEqual(short.size, (1200, 200))
+        long_png = br.render("forms.public_card", name="Очень длинное название должности на сервере")
+        self.assertEqual(PILImage.open(io.BytesIO(long_png)).size, (1200, 200))
+        core.set_setting("forms.approved.banner", "https://cdn/own.png")
+        try:
+            self.assertFalse(br.is_template("forms.approved"))  # своя картинка — без текста
+        finally:
+            core.reset_setting("forms.approved.banner")
+
+    def test_pack_menu_card_and_review_banner(self):
+        import form_packs as fp
+        from extended_modules import decide
+        g = make_guild()
+        form_id = database.save_form(GUILD, STAFF, "Модератор", "Следит за чатами", json.dumps([{"label": "Возраст"}]),
+                                     reviewer_user_ids_json=json.dumps([STAFF]))
+        pack_id = fp.save_pack(GUILD, STAFF, "Служебные роли", "Куда подать заявку")
+        fp._doodles["doodle_star"] = "<:doodle_star:123456789012345678>"
+        fp.set_meta(form_id, name_en="moderator", emoji=fp.pick_emoji(GUILD))
+        fp.set_item(pack_id, form_id, "порядок в чатах")
+        # меню в сообщении
+        data = {"content": "", "embeds": [{"title": "Куда подать заявку"}], "buttons": [],
+                "interactive": {"type": "form_packs", "packs": [pack_id]}, "layout": "single"}
+        parts = actions.message_parts(0, None, data)
+        rows = parts[-1]["view"].to_components()
+        select = rows[0]["components"][0]
+        self.assertEqual(select["custom_id"], f"rb:fp:{pack_id}")
+        self.assertEqual(select["placeholder"], "Служебные роли")
+        self.assertEqual(select["options"][0]["label"], "Модератор")
+        self.assertEqual(select["options"][0]["description"], "порядок в чатах")
+        self.assertEqual(select["options"][0]["emoji"]["name"], "doodle_star")
+        # выбор формы -> карточка с баннером и «Подать заявку»
+        i = FakeInteraction(g, g.members[MEMBER])
+        shown = {}
+
+        async def send_message(**kwargs):
+            shown.update(kwargs)
+
+        i.response.send_message = send_message
+        item = fp.FormPackSelect(pack_id, select=discord.ui.Select(custom_id=f"rb:fp:{pack_id}",
+                                                                  options=[discord.SelectOption(label="x")]))
+        item.item._values = [str(form_id)]
+        run(item.callback(i))
+        self.assertEqual(shown["file"].filename, "banner.png")
+        self.assertEqual(shown["embeds"][0].image.url, "attachment://banner.png")
+        self.assertEqual(shown["embeds"][1].title, "Модератор")
+        self.assertEqual(shown["view"].children[0].custom_id, f"rb:fa:{form_id}")
+        self.assertTrue(shown["ephemeral"])
+        # итог проверки: баннер с должностью по-английски вложением
+        sid = database.save_submission(form_id, GUILD, MEMBER, json.dumps({"Возраст": "20"}))
+        edits = []
+
+        async def edit(**kwargs):
+            edits.append(kwargs)
+
+        reviewer = FakeInteraction(g, g.members[STAFF])
+        reviewer.response.done = True
+        card = core.panel_embed(reviewer, "forms.submission", form="Модератор", user="<@1>", id=sid)
+        run(decide(reviewer, sid, "rejected", "мало опыта", types.SimpleNamespace(embeds=[card], edit=edit)))
+        self.assertEqual(edits[0]["attachments"][0].filename, "banner.png")
+        self.assertEqual(edits[0]["embeds"][0].image.url, "attachment://banner.png")
+        # чужой сервер не может подсунуть пак в импорт
+        self.assertIsNone(fp.clean_interactive(GUILD + 1, {"type": "form_packs", "packs": [pack_id]}))
+        fp._doodles.clear()
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
@@ -1470,8 +1552,8 @@ class WebPanelTests(unittest.TestCase):
             banner, result = edits[0]["embeds"]
             self.assertEqual(banner.image.url, "https://cdn/ok.png")
             self.assertEqual(result.title, card.title)
-            self.assertEqual(dms[0]["embed"].banner_url, "https://cdn/ok.png")
-            self.assertIn("Набор", dms[0]["embed"].description)
+            self.assertEqual(dms[0]["embeds"][0].image.url, "https://cdn/ok.png")
+            self.assertIn("Набор", dms[0]["embeds"][1].description)
         finally:
             for key in ("forms.submission.banner", "forms.approved.banner"):
                 core.reset_setting(key)

@@ -389,6 +389,14 @@ def build_components(src, source_id, buttons, interactive):
         elif itype == "native_select" and interactive.get("kind") in NATIVE_SELECT_CLASSES:
             view.add_item(NativeSelect(interactive["kind"], row=0))
             first_row = 1
+        elif itype == "form_packs":
+            # меню на каждый пак форм (form_packs.py), кнопки — в рядах ниже
+            from form_packs import pack_select, MAX_PACKS_IN_MESSAGE
+            for pack_id in (interactive.get("packs") or [])[:MAX_PACKS_IN_MESSAGE]:
+                select = pack_select(pack_id, row=first_row)
+                if select is not None:
+                    view.add_item(select)
+                    first_row += 1
     slots = (5 - first_row) * 5
     for index, raw in enumerate((buttons or [])[:min(MAX_BUTTONS, slots)]):
         button = normalize_button(raw)

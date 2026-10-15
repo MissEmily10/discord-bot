@@ -88,6 +88,12 @@ class InteractiveHome(PanelView):
         await show(interaction, panel_embed(interaction, "forms.home"),
                    FormStartView(interaction.guild.id, interaction.user.id, back_target=(core.screen(interaction), self)))
 
+    @discord.ui.button(label="Паки форм", emoji="🗂️", style=discord.ButtonStyle.secondary)
+    async def form_packs(self, interaction, button):
+        import form_packs
+        await show(interaction, form_packs.home_embed(interaction),
+                   form_packs.PacksHome(interaction, back_target=(core.screen(interaction), self)))
+
 
 # ============================================================
 # /forms — проверка заявок

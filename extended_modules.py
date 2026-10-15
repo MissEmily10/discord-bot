@@ -316,10 +316,14 @@ class FormUseView(PanelView):
             if not core.bot_can_post(channel):
                 await say(ci, "embed.send.no_perm_bot", channel=channel.mention)
                 return
+            from banner_render import banner_parts
             embed = panel_embed(ci, "forms.public_card", title=row[3], description=row[4] or t("forms.no_description"))
+            embed.banner_url = None  # баннер — с названием формы, рисуется отдельно
+            banner, file = banner_parts(ci, "forms.public_card", name=row[3])
             apply_view = discord.ui.View(timeout=None)
             apply_view.add_item(FormApplyButton(self.form_id))
-            await channel.send(embed=embed, view=apply_view)
+            await channel.send(embeds=[banner, embed] if banner else [embed], view=apply_view,
+                               **({"file": file} if file else {}))
             core.audit(ci, "form.published", "form", self.form_id, f"channel={channel.id}")
             await say(ci, "forms.published", channel=channel.mention)
 
@@ -531,14 +535,18 @@ async def decide(i, sid, status, reason, message):
         embed.color = discord.Color.green()
     else:
         embed.color = core.danger_color()
-    # баннер «одобрена/отклонена» заменяет баннер «новая заявка»; если его нет — прежний остаётся
-    banner = core.resolve_banner(i, f"forms.{status}")
-    above = [discord.Embed(color=embed.color).set_image(url=banner)] if banner \
-        else (list(message.embeds[:-1]) if message and message.embeds else [])
+    # баннер «одобрена/отклонена» (с должностью по-английски) заменяет баннер
+    # «новая заявка»; если его нет — прежний остаётся
+    from banner_render import banner_parts
+    from form_packs import english_name
+    role_en = english_name(form)
+    banner, file = banner_parts(i, f"forms.{status}", role=role_en)
+    above = [banner] if banner else (list(message.embeds[:-1]) if message and message.embeds else [])
+    extra = {"attachments": [file]} if file else {}
     if i.response.is_done():
-        await message.edit(embeds=above + [embed], view=None)
+        await message.edit(embeds=above + [embed], view=None, **extra)
     else:
-        await i.response.edit_message(embeds=above + [embed], view=None)
+        await i.response.edit_message(embeds=above + [embed], view=None, **extra)
 
     if form[16]:  # уведомить заявителя — карточкой со своим баннером
         applicant = i.guild.get_member(row[3])
@@ -547,10 +555,13 @@ async def decide(i, sid, status, reason, message):
             card = panel_embed(i, f"forms.{status}", hints=False, danger=status != "approved",
                                description=t(key, form=form[3], guild=i.guild.name,
                                              reason=reason or t("forms.dm.no_reason")))
+            card.banner_url = None  # баннер — свой, с должностью
             if status == "approved":
                 card.color = discord.Color.green()
+            dm_banner, dm_file = banner_parts(i, f"forms.{status}", role=role_en)
             try:
-                await applicant.send(embed=card)
+                await applicant.send(embeds=[dm_banner, card] if dm_banner else [card],
+                                     **({"file": dm_file} if dm_file else {}))
             except discord.HTTPException:
                 pass  # закрытые ЛС — не ошибка
 

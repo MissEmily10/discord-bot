@@ -283,6 +283,9 @@ def sanitize_payload(interaction, payload):
     elif isinstance(interactive, dict) and interactive.get("type") == "native_select" \
             and interactive.get("kind") in NATIVE_SELECT_CLASSES:
         interactive = {"type": "native_select", "kind": interactive["kind"]}
+    elif isinstance(interactive, dict) and interactive.get("type") == "form_packs":
+        from form_packs import clean_interactive  # только паки этого сервера
+        interactive = clean_interactive(interaction.guild.id, interactive)
     else:
         interactive = None
 
