@@ -374,6 +374,8 @@ logo_module.register_logo(bot)
 web_panel.register_panel(bot)
 # /library, /interactive, /forms, /eminemovna (docs/STRUCTURE.md)
 hubs.register_hubs(bot, make_button_sets=StandaloneButtonStartView)
+import emoji_cmd  # noqa: E402
+emoji_cmd.register(bot)
 
 
 # =========================

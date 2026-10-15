@@ -1851,6 +1851,17 @@ class DiagnosticsTests(unittest.TestCase):
                 os.environ["WEB_PANEL_URL"] = old
 
 
+class EmojiCommandTests(unittest.TestCase):
+    def test_parse_and_zip(self):
+        import emoji_cmd
+        items = emoji_cmd.parse("<a:dance:123456789012345678> привет 😀 <:pepe:223456789012345678> <a:dance:123456789012345678>")
+        self.assertEqual([name for name, _ in items], ["dance.gif", "emoji_1f600.png", "pepe.png"])
+        self.assertIn("123456789012345678.gif", items[0][1])
+        self.assertTrue(emoji_cmd.parse("<a:dance:123456789012345678>", as_png=True)[0][0].endswith(".png"))
+        archive = emoji_cmd.zip_bytes([("a.png", b"1"), ("a.png", b"2")])
+        self.assertEqual(sorted(zipfile.ZipFile(io.BytesIO(archive)).namelist()), ["a.png", "a_2.png"])
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
@@ -2218,7 +2229,8 @@ class ViewSmokeTests(unittest.TestCase):
 
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
-        self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook"]))
+        self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
+                                        "emoji"]))
 
 
 if __name__ == "__main__":
