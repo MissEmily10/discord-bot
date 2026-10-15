@@ -2026,7 +2026,7 @@ class PackBannerTests(unittest.TestCase):
         data = b.pack_gif([("модератор", ""), ("artist", "напиши нам!")])
         image = Image.open(io.BytesIO(data))
         self.assertEqual(image.format, "GIF")
-        self.assertEqual(image.n_frames, 2)
+        self.assertGreaterEqual(image.n_frames, 2 * b.TYPE_STEPS)  # одинаковые соседние кадры GIF склеивает
         self.assertEqual(image.info.get("loop"), 0)
 
 

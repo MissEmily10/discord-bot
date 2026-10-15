@@ -12,6 +12,7 @@ fonts/banner/ (см. fonts/README.md); пока их нет — рисуем п�
 
 import glob
 import io
+import math
 import os
 
 from PIL import Image, ImageDraw, ImageFont
@@ -293,24 +294,69 @@ def render(screen, split_title=False, **values):
     return output.getvalue()
 
 
-FRAME_MS = 2200  # сколько показывается каждая должность в анимированном баннере пака
+FRAME_MS = 900           # пауза на готовом названии перед следующим
+TYPE_STEPS, TYPE_MS = 12, 45    # «печать» названия слева направо
+BOUNCE_STEPS, BOUNCE_MS = 8, 110  # прыжки большого «!»
+BANG_BOX = (1117, 0, 1180, 200)   # где на основе карточки стоит «!» (макет 1200×200)
+TITLE_RIGHT = 720                 # правее заголовок не заходит (там кнопки)
 
 
-def pack_gif(cards, frame_ms=FRAME_MS):
+def _ease(x):
+    return 1 - (1 - x) ** 3
+
+
+def _with_title(background, title, reveal=None):
+    layer = title
+    if reveal is not None:  # видна только левая часть — «печатается»
+        layer = title.copy()
+        layer.paste(Image.new("RGBA", (max(0, layer.width - reveal), layer.height), (0, 0, 0, 0)), (reveal, 0))
+    return Image.alpha_composite(background, layer)
+
+
+def pack_gif(cards, hold_ms=FRAME_MS):
     """
-    Анимированный баннер пака: карточки форм (название + надпись сверху)
-    сменяют друг друга по кругу. cards — [(название, надпись сверху)]. -> GIF (bytes)
+    Анимированный баннер пака: название каждой должности «печатается» слева
+    направо, большой «!» справа подпрыгивает, потом — следующая должность.
+    cards — [(название, надпись сверху)]. -> GIF (bytes)
     """
-    frames = []
+    empty = Image.open(base_path("forms.public_card")).convert("RGBA")
+    bang = empty.crop(BANG_BOX)
+    bang_clean = empty.crop(BANG_BOX)
+    frames, durations = [], []
     for name, tagline in cards:
         values = {"name": name}
         if tagline:
             values["tagline"] = tagline
-        frame = Image.open(io.BytesIO(render("forms.public_card", **values))).convert("RGB")
-        frames.append(frame.quantize(colors=255, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE))
+        background, title = render("forms.public_card", split_title=True, **values)
+        title.paste(Image.new("RGBA", (title.width - TITLE_RIGHT, title.height), (0, 0, 0, 0)), (TITLE_RIGHT, 0))
+        left, _, right, _ = title.getbbox() or (0, 0, TITLE_RIGHT, 0)
+        for step in range(TYPE_STEPS + 1):
+            reveal = int(left + (right - left) * _ease(step / TYPE_STEPS))
+            frames.append(_with_title(background, title, reveal))
+            durations.append(TYPE_MS)
+        done = _with_title(background, title)
+        for step in range(BOUNCE_STEPS):
+            frame = done.copy()
+            jump = int(-14 * abs(math.sin(step / BOUNCE_STEPS * math.pi * 2)))
+            frame.paste(bang_clean, BANG_BOX[:2])
+            frame.alpha_composite(bang, (BANG_BOX[0], BANG_BOX[1] + jump))
+            frames.append(frame)
+            durations.append(BOUNCE_MS)
+        durations[-1] = hold_ms
+    # одна палитра на всю анимацию (цвета у карточек одни и те же) — в разы быстрее
+    sample = Image.new("RGB", (frames[0].width, frames[0].height * min(3, len(frames))))
+    for n, frame in enumerate(frames[TYPE_STEPS::len(frames) // 3 or 1][:3]):
+        sample.paste(frame.convert("RGB"), (0, frames[0].height * n))
+    shared = sample.quantize(colors=255, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    # самый частый цвет — фон: возвращаем ему точный цвет макета (палитра его чуть сдвигает)
+    _, background_index = max(shared.getcolors(256))
+    colors = shared.getpalette()
+    colors[background_index * 3:background_index * 3 + 3] = empty.convert("RGB").getpixel((2, 2))
+    shared.putpalette(colors)
+    palette = [frame.convert("RGB").quantize(palette=shared, dither=Image.Dither.NONE) for frame in frames]
     output = io.BytesIO()
-    frames[0].save(output, "GIF", save_all=True, append_images=frames[1:], duration=frame_ms,
-                   loop=0, optimize=True, disposal=1)
+    palette[0].save(output, "GIF", save_all=True, append_images=palette[1:], duration=durations,
+                    loop=0, optimize=False, disposal=1)
     return output.getvalue()
 
 
