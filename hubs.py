@@ -101,6 +101,11 @@ class InteractiveHome(PanelView):
         await show(interaction, form_packs.home_embed(interaction),
                    form_packs.PacksHome(interaction, back_target=(core.screen(interaction), self)))
 
+    @discord.ui.button(label="Баннер сервера", emoji="🖼️", style=discord.ButtonStyle.secondary)
+    async def server_banner(self, interaction, button):
+        import server_banner
+        await server_banner.open_home(interaction, back_target=(core.screen(interaction), self))
+
 
 # ============================================================
 # /forms — проверка заявок

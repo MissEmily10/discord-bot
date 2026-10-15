@@ -81,6 +81,8 @@ async def setup_hook():
     await web_panel.start(bot)
     automation.setup(bot)  # расписание, триггеры, живое обновление
     await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)
+    import server_banner
+    server_banner.start(bot)  # баннер сервера с живыми цифрами — обновление по расписанию
     # дудл-эмодзи (меню паков форм и кнопки панелей) — в фоне: первая заливка долгая
     asyncio.create_task(form_packs.load_doodles(bot))
     ui_emoji.start(bot)

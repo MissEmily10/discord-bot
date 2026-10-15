@@ -46,7 +46,7 @@ PERSONAL_VARIABLES = {"user", "user_name"}
 SUBMISSION_VARIABLES = {"submissions", "pending", "approved", "rejected", "last_submission"}
 
 VARIABLE_HELP = (
-    "{server} {member_count} {online} {boosts} {boost_level} {date} {time} "
+    "{server} {member_count} {online} {voice} {boosts} {boost_level} {date} {time} "
     "{role:ID} {counter:имя} {submissions} {pending} {approved} {rejected} "
     "{submissions:ID_формы} {last_submission} {user} {user_name}"
 )
@@ -99,6 +99,10 @@ async def collect(guild, needed, user=None, extra=None):
     variables["time"] = current.strftime("%H:%M")
     if "online" in names:
         variables["online"] = await _online(guild)
+    if "voice" in names:  # сколько людей сейчас в голосовых (без ботов)
+        variables["voice"] = sum(
+            1 for channel in [*guild.voice_channels, *guild.stage_channels]
+            for member in channel.members if not member.bot)
 
     def role_count(arg):
         role = guild.get_role(int(arg)) if arg and arg.isdigit() else None
