@@ -117,16 +117,11 @@ async def on_ready():
 # Наборы кнопок хранятся в общем формате actions.normalize_button и
 # отправляются постоянными кнопками (actions.ActionButton, источник "s").
 
-# старые слова из модалки -> ключ реестра действий
-LEGACY_ACTION_WORDS = {"message": "message.send", "confirm": "message.confirm", "build": "build.trigger"}
-STYLE_WORDS = {"primary": "blue", "secondary": "grey", "success": "green", "danger": "red",
-               "blue": "blue", "grey": "grey", "green": "green", "red": "red"}
-
-
 class ButtonSetState:
 
     def __init__(self):
         self.name = t("buttons.default_name")
+        self.build_id = None  # общий сценарий кнопок из /embed спрашивает, какой build редактируем
         self.buttons = []
         self.visibility = "private"
         self.category = "general"
@@ -139,68 +134,6 @@ def render_button_builder(interaction, state):
         name=state.name,
         buttons=embed_module.buttons_text(state),
     )
-
-
-class InlineButtonModal(Modal, title="НОВАЯ КНОПКА"):
-
-    texts = "buttons.modal"
-
-    label_input = discord.ui.TextInput(label="Текст кнопки", required=True, max_length=80)
-    style_input = discord.ui.TextInput(label="Стиль: primary / secondary / success / danger", required=True, max_length=10)
-    action_input = discord.ui.TextInput(label="Действие: link / message / confirm", required=True, max_length=40)
-    value_input = discord.ui.TextInput(label="URL или текст действия", required=False, style=discord.TextStyle.paragraph, max_length=1000)
-
-    def __init__(self, state, back_target):
-        super().__init__()
-        self.state = state
-        self.back_target = back_target
-
-    async def on_submit(self, interaction):
-        if len(self.state.buttons) >= actions.MAX_BUTTONS:
-            await interaction.response.send_message(t("buttons.limit", max=actions.MAX_BUTTONS), ephemeral=True)
-            return
-
-        style_word = self.style_input.value.strip().lower()
-        action_word = self.action_input.value.strip().lower()
-
-        if style_word not in STYLE_WORDS:
-            await interaction.response.send_message(t("buttons.modal.bad_style"), ephemeral=True)
-            return
-        if action_word == "link":
-            style, action_key = "link", None
-        else:
-            style = STYLE_WORDS[style_word]
-            action_key = LEGACY_ACTION_WORDS.get(action_word, action_word)
-            # то же правило, что и в /embed: только действия, разрешённые уровню создателя
-            if not core.is_action_allowed(core.get_user_level(interaction), action_key):
-                await interaction.response.send_message(t("buttons.modal.bad_action"), ephemeral=True)
-                return
-
-        value, error = actions.validate_action_value(interaction, action_key, self.value_input.value, style=style)
-        if error:
-            await interaction.response.send_message(t(error), ephemeral=True)
-            return
-
-        import emoji_picker
-        builder = (render_button_builder(interaction, self.state),
-                   InlineButtonBuilderView(self.state, back_target=self.back_target))
-
-        async def picked(i, emoji):
-            # эмодзи — отдельным экраном: дудлы бота, эмодзи сервера или своё
-            if len(self.state.buttons) >= actions.MAX_BUTTONS:
-                await embed_module.edit_panel(i, embed=builder[0], view=builder[1])
-                return
-            self.state.buttons.append({
-                "label": self.label_input.value,
-                "emoji": emoji,
-                "style": style,
-                "action_key": action_key,
-                "value": value,
-            })
-            await embed_module.edit_panel(i, embed=render_button_builder(i, self.state),
-                                          view=InlineButtonBuilderView(self.state, back_target=self.back_target))
-
-        await emoji_picker.open_picker(interaction, picked, back_target=builder)
 
 
 class ButtonSetNameModal(Modal, title="НАЗВАНИЕ НАБОРА"):
@@ -236,13 +169,26 @@ class InlineButtonBuilderView(PanelView):
     def __init__(self, state, back_target=None):
         super().__init__(back_target=back_target)
         self.state = state
+        if state.buttons:
+            self.add_item(embed_module.RemoveItemSelect(state.buttons, "embed.buttons.remove_placeholder"))
+
+    # тот же пошаговый сценарий, что в /embed: текст -> эмодзи -> цвет -> действие -> значение
+    def rebuilt(self):
+        return InlineButtonBuilderView(self.state, back_target=self.back_target)
+
+    def screen_embed(self, interaction):
+        return render_button_builder(interaction, self.state)
+
+    async def show(self, interaction):
+        embed, view = embed_module.builder_screen(interaction, self)
+        await embed_module.edit_panel(interaction, embed=embed, view=view)
 
     @discord.ui.button(label="Добавить кнопку", emoji="➕", style=discord.ButtonStyle.success)
     async def add(self, interaction, button):
         if len(self.state.buttons) >= actions.MAX_BUTTONS:
             await interaction.response.send_message(t("buttons.limit", max=actions.MAX_BUTTONS), ephemeral=True)
             return
-        await interaction.response.send_modal(InlineButtonModal(self.state, self.back_target))
+        await interaction.response.send_modal(embed_module.ButtonLabelModal(self.state, self))
 
     @discord.ui.button(label="Название", emoji="🏷️", style=discord.ButtonStyle.secondary)
     async def rename(self, interaction, button):

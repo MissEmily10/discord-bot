@@ -1595,6 +1595,23 @@ class ConfirmationTests(unittest.TestCase):
             database.set_action_dangerous("build.trigger", False)
 
 
+class ButtonSetFlowTests(unittest.TestCase):
+    def test_button_set_uses_step_by_step_flow(self):
+        import bot
+        import embed_module as em
+        g = make_guild()
+        state = bot.ButtonSetState()
+        view = bot.InlineButtonBuilderView(state)
+        i = FakeInteraction(g, g.members[STAFF])
+        run(view.add.callback(i))
+        self.assertIsInstance(i.response.modals[0], em.ButtonLabelModal)
+        # дальше — общий сценарий: цвет и действие выбираются кнопками и списком
+        pending = {"label": "Сайт", "emoji": None, "style": "link", "action_key": None}
+        run(em.commit_pending(FakeInteraction(g, g.members[STAFF]), state, pending, "buttons", view,
+                              "https://example.com"))
+        self.assertEqual(state.buttons[0]["value"], "https://example.com")
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
@@ -1935,7 +1952,7 @@ class ViewSmokeTests(unittest.TestCase):
                 em.SaveAsTemplateModal(1),
                 ex.FormBasicModal(fs, None), ex.FormQuestionModal(fs, None), ex.FormRoutingModal(fs, None),
                 ex.TemplateModal(), ex.WebhookCreateModal(), ex.WebhookMessageModal(1), ex.RejectReasonModal(1, None),
-                ex.RoleMenuModal([1, 2]), bot.InlineButtonModal(bs, back), bot.ButtonSetNameModal(bs, back),
+                ex.RoleMenuModal([1, 2]), bot.ButtonSetNameModal(bs, back),
                 lm.StyleModal(),
             ]
             for view in views:
