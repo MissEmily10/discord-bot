@@ -114,6 +114,10 @@ def screen_contexts():
     )
 
 
+# Кнопки навигации оформляет сам бот (подписи без эмодзи + дудлы) — в панели их не показываем.
+HIDDEN_KEYS = {"nav_back", "nav_cancel", "nav_next", "ui_emoji_style"}
+
+
 def editable_keys():
     """
     Ключи в порядке каталога (он идёт по ходу экранов бота); thumbnail экрана —
@@ -122,6 +126,8 @@ def editable_keys():
     contexts = set(screen_contexts())
     keys = []
     for key in CATALOG:
+        if key in HIDDEN_KEYS:
+            continue
         if key.endswith((".thumbnail", ".banner")) and key.rsplit(".", 1)[0] in contexts:
             continue  # добавится после .title
         keys.append(key)

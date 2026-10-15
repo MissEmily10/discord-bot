@@ -54,8 +54,6 @@ CATALOG = {
     "nav_back": "Назад",
     "nav_next": "▶️ Далее",
     "nav_cancel": "Отмена",
-    "nav_prev_emoji": "◀️",
-    "nav_next_emoji": "▶️",
     "nav_page": "стр. {page}/{pages}",
     # выбор эмодзи для кнопки (emoji_picker.py)
     "emoji_picker.title": "ЭМОДЗИ ДЛЯ КНОПКИ",

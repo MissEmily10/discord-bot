@@ -670,15 +670,6 @@ class Modal(discord.ui.Modal):
 # PANEL VIEW — базовый класс с "Назад"
 # =========================
 
-def _nav_emoji(key, fallback):
-    """Эмодзи стрелок перелистывания: можно задать свой (в том числе <:имя:id>) в веб-панели."""
-    value = (get_setting(key) or fallback).strip()
-    try:
-        return discord.PartialEmoji.from_str(value)
-    except (TypeError, ValueError):
-        return discord.PartialEmoji.from_str(fallback)
-
-
 class PanelView(discord.ui.View):
     """
     Базовый класс для всех панелей бота.
@@ -745,10 +736,10 @@ class PanelView(discord.ui.View):
         self._page = 0
 
         prev_button = self._nav(discord.ui.Button(style=discord.ButtonStyle.secondary, row=4,
-                                                  emoji=_nav_emoji("nav_prev_emoji", "◀️")))
+                                                  emoji="◀️"))  # ui_emoji заменит на дудл
         self._page_label = self._nav(discord.ui.Button(style=discord.ButtonStyle.secondary, row=4, disabled=True))
         next_button = self._nav(discord.ui.Button(style=discord.ButtonStyle.secondary, row=4,
-                                                  emoji=_nav_emoji("nav_next_emoji", "▶️")))
+                                                  emoji="▶️"))
 
         async def turn(interaction, step):
             self._show_page((self._page + step) % len(self._pages))
