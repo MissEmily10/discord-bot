@@ -1862,6 +1862,54 @@ class EmojiCommandTests(unittest.TestCase):
         self.assertEqual(sorted(zipfile.ZipFile(io.BytesIO(archive)).namelist()), ["a.png", "a_2.png"])
 
 
+class ReferenceInboxTests(unittest.TestCase):
+    """Референсы пачкой: режим сбора по сообщениям без слэш-команд."""
+
+    def test_collect_from_messages(self):
+        import reference_inbox as ri
+        import logo_module
+        g = make_guild()
+        style_id = database.save_logo_style(GUILD, ADMIN, "Дудлы", "", "")
+        buffer = io.BytesIO()
+        PILImage.new("RGB", (64, 64), "red").save(buffer, "PNG")
+        png = buffer.getvalue()
+
+        class Attachment:
+            filename, content_type, size = "a.png", "image/png", len(png)
+
+            async def read(self):
+                return png
+
+        reactions, replies = [], []
+
+        async def add_reaction(emoji):
+            reactions.append(emoji)
+
+        async def reply(text, **kwargs):
+            replies.append(text)
+
+        admin = FakeInteraction(g, g.members[ADMIN])
+        admin.channel_id = 9990
+        ri.start_collecting(admin, style_id)
+        message = types.SimpleNamespace(
+            author=g.members[ADMIN], guild=g, channel=types.SimpleNamespace(id=9990), content="",
+            attachments=[Attachment() for _ in range(10)], stickers=[], add_reaction=add_reaction, reply=reply)
+        g.members[ADMIN].bot = False
+        old_dir = os.environ.get("LOGO_DIR")
+        os.environ["LOGO_DIR"] = tempfile.mkdtemp()
+        try:
+            run(ri.on_message(message))
+            self.assertEqual(reactions, ["✅"])
+            self.assertEqual(len(logo_module.references_of(database.get_logo_style(style_id))), 10)
+            self.assertIn("10", replies[0])
+        finally:
+            ri._collecting.clear()
+            if old_dir is None:
+                os.environ.pop("LOGO_DIR", None)
+            else:
+                os.environ["LOGO_DIR"] = old_dir
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
@@ -2230,7 +2278,7 @@ class ViewSmokeTests(unittest.TestCase):
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
         self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
-                                        "emoji"]))
+                                        "emoji", "В референсы стиля"]))
 
 
 if __name__ == "__main__":

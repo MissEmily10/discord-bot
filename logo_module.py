@@ -522,6 +522,7 @@ class StyleModal(Modal, title="СТИЛЬ ИКОНОК"):
 
 class StyleActions(PanelView):
     texts = "logo.style_actions"
+    button_order = ("add_refs", "edit", "describe", "make_default", "dataset", "delete")
 
     def __init__(self, style_id, back_target=None):
         super().__init__(back_target=back_target)
@@ -542,6 +543,17 @@ class StyleActions(PanelView):
         row = await self._row(interaction)
         if row:
             await interaction.response.send_modal(StyleModal(row))
+
+    @discord.ui.button(label="Добавить референсы", emoji="🖼️", style=discord.ButtonStyle.success)
+    async def add_refs(self, interaction, button):
+        row = await self._row(interaction)
+        if not row:
+            return
+        import reference_inbox
+        reference_inbox.start_collecting(interaction, self.style_id)
+        await interaction.response.send_message(
+            t("refs.collect.start", style=row[3], minutes=reference_inbox.COLLECT_SECONDS // 60),
+            view=reference_inbox.CollectView(interaction.user.id), ephemeral=True)
 
     @discord.ui.button(label="По умолчанию", emoji="⭐", style=discord.ButtonStyle.secondary)
     async def make_default(self, interaction, button):

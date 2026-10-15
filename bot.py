@@ -376,6 +376,8 @@ web_panel.register_panel(bot)
 hubs.register_hubs(bot, make_button_sets=StandaloneButtonStartView)
 import emoji_cmd  # noqa: E402
 emoji_cmd.register(bot)
+import reference_inbox  # noqa: E402
+reference_inbox.register(bot)
 
 
 # =========================
