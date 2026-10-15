@@ -18,7 +18,8 @@ from discord import app_commands
 import core
 from core import PanelView, panel_embed, t, get_user_level
 from actions import say
-from database import get_forms, get_form, get_form_submissions, count_pending_submissions, get_submission
+from database import (get_forms, get_form, get_form_submissions, count_pending_submissions, get_submission,
+                      get_form_status, set_form_status, count_form_submissions)
 
 for _name in ("library", "interactive", "forms", "eminemovna"):
     core.COMMAND_MIN_LEVELS.setdefault(_name, "staff")
@@ -116,14 +117,32 @@ def reviewable_forms(interaction):
     return rows
 
 
+def split_closed(forms):
+    """Закрытые наборы без новых заявок — отдельно, чтобы не копились в общем списке."""
+    active = [(form, n) for form, n in forms if n or not get_form_status(form[0])[0]]
+    closed = [(form, n) for form, n in forms if not n and get_form_status(form[0])[0]]
+    return active, closed
+
+
 class ReviewHome(PanelView):
     """Формы, заявки по которым ты можешь проверять, — с числом ожидающих."""
 
     texts = "forms.review_home"
 
-    def __init__(self, interaction, back_target=None):
+    def __init__(self, interaction, back_target=None, show_closed=False):
         super().__init__(back_target=back_target)
-        forms = reviewable_forms(interaction)
+        active, closed = split_closed(reviewable_forms(interaction))
+        forms = closed if show_closed else active
+        if not show_closed and closed:
+            button = discord.ui.Button(label=t("forms.review_home.closed_button", count=len(closed))[:80],
+                                       emoji="🔒", style=discord.ButtonStyle.secondary, row=1)
+
+            async def open_closed(i):
+                await show(i, panel_embed(i, "forms.review_home.closed"),
+                           ReviewHome(i, back_target=(core.screen(i), self), show_closed=True))
+
+            button.callback = open_closed
+            self.add_item(button)
         if not forms:
             self.add_item(discord.ui.Button(label=t("forms.review_home.empty")[:80], disabled=True))
             return
@@ -131,6 +150,7 @@ class ReviewHome(PanelView):
             placeholder=t("forms.review_home.placeholder")[:150],
             options=[discord.SelectOption(
                 label=t("forms.review_home.option", name=form[3], pending=pending)[:100], value=str(form[0]),
+                emoji="🔒" if get_form_status(form[0])[0] else None,
             ) for form, pending in forms[:25]],
         )
 
@@ -146,13 +166,23 @@ def submissions_embed(interaction, form):
     pending = get_form_submissions(form[0])
     lines = [t("forms.review_list.line", id=sid, user=f"<@{applicant}>", when=f"<t:{created}:R>")
              for sid, applicant, _, created in pending[:15]]
+    closed, limit = get_form_status(form[0])
+    status = t("forms.status_line.closed" if closed else "forms.status_line.open",
+               count=count_form_submissions(form[0]),
+               limit=t("forms.status_line.limit", limit=limit) if limit else "")
     return panel_embed(interaction, "forms.review_list", form=form[3],
-                       list="\n".join(lines) or t("forms.review_list.empty"))
+                       list=f"{status}\n\n" + ("\n".join(lines) or t("forms.review_list.empty")))
 
 
 class SubmissionListView(PanelView):
+    texts = "forms.review_list"
+
     def __init__(self, interaction, form_id, back_target):
         super().__init__(back_target=back_target)
+        self.form_id = form_id
+        closed = get_form_status(form_id)[0]
+        self.toggle.label = t("forms.review_list.reopen" if closed else "forms.review_list.close")[:80]
+        self.toggle.style = discord.ButtonStyle.success if closed else discord.ButtonStyle.danger
         pending = get_form_submissions(form_id)
         if not pending:
             return
@@ -170,6 +200,58 @@ class SubmissionListView(PanelView):
 
         select.callback = picked
         self.add_item(select)
+
+    async def _form(self, interaction):
+        from extended_modules import can_review
+        form = get_form(self.form_id)
+        if not form or form[1] != interaction.guild.id or not can_review(interaction, form):
+            await say(interaction, "forms.review.no_rights")
+            return None
+        return form
+
+    async def refresh(self, interaction, form):
+        await show(interaction, submissions_embed(interaction, form),
+                   SubmissionListView(interaction, self.form_id, back_target=self.back_target))
+
+    @discord.ui.button(label="Закрыть набор", emoji="🔒", style=discord.ButtonStyle.danger, row=2)
+    async def toggle(self, interaction, button):
+        form = await self._form(interaction)
+        if not form:
+            return
+        closed = not get_form_status(self.form_id)[0]
+        set_form_status(self.form_id, closed=closed)
+        core.audit(interaction, "form.closed" if closed else "form.reopened", "form", self.form_id)
+        await self.refresh(interaction, form)
+
+    @discord.ui.button(label="Лимит заявок", emoji="🔢", style=discord.ButtonStyle.secondary, row=2)
+    async def limit(self, interaction, button):
+        if await self._form(interaction):
+            await interaction.response.send_modal(FormLimitModal(self))
+
+
+class FormLimitModal(core.Modal, title="ЛИМИТ ЗАЯВОК"):
+    texts = "forms.limit_modal"
+    value = discord.ui.TextInput(label="Сколько заявок принять", required=False, max_length=5)
+
+    def __init__(self, list_view):
+        super().__init__()
+        self.list_view = list_view
+        limit = get_form_status(list_view.form_id)[1]
+        self.value.default = str(limit) if limit else ""
+
+    async def on_submit(self, interaction):
+        form = await self.list_view._form(interaction)
+        if not form:
+            return
+        raw = self.value.value.strip()
+        if raw and (not raw.isdigit() or int(raw) < 1):
+            await say(interaction, "forms.limit_modal.bad")
+            return
+        limit = int(raw) if raw else None
+        # лимит уже набран — набор закрывается сразу; новый лимит выше — снова открыт
+        closed = bool(limit and count_form_submissions(self.list_view.form_id) >= limit)
+        set_form_status(self.list_view.form_id, closed=closed if limit else None, max_submissions=limit)
+        await self.list_view.refresh(interaction, form)
 
 
 def _member_name(guild, user_id):

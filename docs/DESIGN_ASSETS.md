@@ -77,8 +77,8 @@ Discord рисует картинку внутри embed'а только под 
 | `interactive.home.banner` | `/interactive` | ✅ |
 | `forms.review_home.banner` | `/forms` | ✅ |
 | `logo.home.banner` | `/logo` | ✅ |
-| `eminemovna.home.banner` | `/eminemovna` | — |
-| `webhooks.home.banner` | `/webhook` | — |
+| `eminemovna.home.banner` | `/eminemovna` | ✅ |
+| `webhooks.home.banner` | `/webhook` | ✅ |
 
 ### Автоматические сообщения
 

@@ -1611,6 +1611,46 @@ def get_submission_stats(guild_id, form_id=None):
     }
 
 
+def _ensure_form_status():
+    connection = get_connection()
+    connection.execute("""CREATE TABLE IF NOT EXISTS form_status (
+        form_id INTEGER PRIMARY KEY, closed INTEGER NOT NULL DEFAULT 0, max_submissions INTEGER
+    )""")
+    connection.commit()
+    connection.close()
+
+
+def get_form_status(form_id):
+    """-> (закрыт ли набор, лимит заявок или None)."""
+    _ensure_form_status()
+    connection = get_connection()
+    row = connection.execute("SELECT closed, max_submissions FROM form_status WHERE form_id = ?", (form_id,)).fetchone()
+    connection.close()
+    return (bool(row[0]), row[1]) if row else (False, None)
+
+
+def set_form_status(form_id, closed=None, max_submissions=False):
+    """closed=None — не менять; max_submissions=False — не менять, None — без лимита."""
+    old_closed, old_max = get_form_status(form_id)
+    closed = old_closed if closed is None else bool(closed)
+    max_submissions = old_max if max_submissions is False else max_submissions
+    connection = get_connection()
+    connection.execute("INSERT OR REPLACE INTO form_status (form_id, closed, max_submissions) VALUES (?, ?, ?)",
+                       (form_id, int(closed), max_submissions))
+    connection.commit()
+    connection.close()
+
+
+def count_form_submissions(form_id):
+    """Все поданные заявки формы (кроме не дошедших до канала)."""
+    _ensure_extended_tables()
+    connection = get_connection()
+    count = connection.execute("SELECT COUNT(*) FROM form_submissions WHERE form_id = ? AND status != 'failed'",
+                               (form_id,)).fetchone()[0]
+    connection.close()
+    return count
+
+
 def get_form_submissions(form_id, status="pending", limit=25):
     """-> [(id, applicant_id, answers_json, created_at)], новые первыми."""
     _ensure_extended_tables()

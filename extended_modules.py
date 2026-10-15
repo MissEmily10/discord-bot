@@ -370,6 +370,10 @@ async def open_form(interaction, form_id):
     if not form_visible(interaction, row):
         await say(interaction, "forms.unavailable")
         return
+    from database import get_form_status
+    if get_form_status(form_id)[0]:
+        await say(interaction, "forms.closed")
+        return
     if get_pending_submission(form_id, interaction.user.id):
         await say(interaction, "forms.already_pending")
         return
@@ -419,6 +423,11 @@ class SubmissionModal(discord.ui.Modal):
         if channel is None:
             await say(i, "forms.destination_missing")
             return
+        from database import get_form_status, set_form_status, count_form_submissions
+        closed, limit = get_form_status(self.row[0])
+        if closed:  # набор закрыли, пока окно было открыто
+            await say(i, "forms.closed")
+            return
         sid = save_submission(self.row[0], i.guild.id, i.user.id, json.dumps(answers, ensure_ascii=False))
         e = panel_embed(i, "forms.submission", form=self.row[3], user=i.user.mention, id=sid)
         for k, v in answers.items():
@@ -433,6 +442,9 @@ class SubmissionModal(discord.ui.Modal):
             await say(i, "forms.destination_missing")
             return
         live.submissions_changed(i.guild)  # {submissions}, {last_submission} в отправленных build'ах
+        if limit and count_form_submissions(self.row[0]) >= limit:
+            set_form_status(self.row[0], closed=True)  # набрали сколько нужно — набор закрывается сам
+            core.audit(i, "form.auto_closed", "form", self.row[0], f"limit={limit}")
         await say(i, "forms.submitted")
 
 

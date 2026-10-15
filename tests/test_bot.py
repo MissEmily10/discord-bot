@@ -1709,6 +1709,34 @@ class SecurityAuditTests(unittest.TestCase):
         self.assertTrue(database.get_sent_instances(bid))
 
 
+class FormClosingTests(unittest.TestCase):
+    """Набор можно закрыть вручную или лимитом; закрытые не копятся в /forms."""
+
+    def test_close_limit_and_hide(self):
+        import hubs
+        from extended_modules import open_form
+        g = make_guild()
+        channel = FakeChannel(g, 9900)
+        form_id = database.save_form(GUILD, STAFF, "Хелпер", "", json.dumps([{"label": "Возраст"}]),
+                                     visibility="public", destination_channel_id=channel.id,
+                                     reviewer_user_ids_json=json.dumps([STAFF]))
+        database.set_form_status(form_id, closed=True)
+        member = FakeInteraction(g, g.members[MEMBER])
+        run(open_form(member, form_id))
+        self.assertEqual(member.last, core.t("forms.closed"))
+        reviewer = FakeInteraction(g, g.members[STAFF])
+        active, closed = hubs.split_closed(hubs.reviewable_forms(reviewer))
+        self.assertIn(form_id, [f[0] for f, _ in closed])
+        self.assertNotIn(form_id, [f[0] for f, _ in active])
+        # лимит: 1 заявка -> после неё набор закрывается сам
+        database.set_form_status(form_id, closed=False, max_submissions=1)
+        from extended_modules import SubmissionModal
+        modal = SubmissionModal(database.get_form(form_id))
+        modal.answer_inputs[0]._value = "20"
+        run(modal.on_submit(FakeInteraction(g, g.members[MEMBER])))
+        self.assertEqual(database.get_form_status(form_id), (True, 1))
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

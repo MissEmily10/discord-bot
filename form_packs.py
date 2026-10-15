@@ -21,7 +21,7 @@ import discord
 import core
 from core import PanelView, Modal, t, panel_embed
 from actions import reply
-from database import get_connection, get_form, get_forms
+from database import get_connection, get_form, get_forms, get_form_status
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DOODLE_DIR = os.path.join(ROOT, "panel_art", "emoji")
@@ -276,14 +276,13 @@ def pack_select(pack_id, row=None):
     items = pack_items(pack_id)[:MAX_ITEMS] if pack else []
     if not items:
         return None
-    options = [
-        discord.SelectOption(
-            label=form[3][:100], value=str(form[0]),
-            description=(description or None) and description[:100],
-            emoji=form_emoji(form[0]),
-        )
-        for form, description in items
-    ]
+    options = []
+    for form, description in items:
+        if get_form_status(form[0])[0]:
+            description = t("forms.closed_short")  # закрытый набор виден в меню, но с пометкой
+        options.append(discord.SelectOption(label=form[3][:100], value=str(form[0]),
+                                            description=(description or None) and description[:100],
+                                            emoji=form_emoji(form[0])))
     select = discord.ui.Select(
         custom_id=f"rb:fp:{pack_id}", placeholder=pack[3][:150], options=options, row=row,
     )
@@ -323,10 +322,13 @@ async def show_form_card(interaction, form_id, pack_id=None):
         return
     banner, file = banner_parts(interaction, "forms.public_card", name=form[3],
                                 tagline=tagline_for(pack_id, form_id))
-    card = panel_embed(interaction, "packs.card", title=form[3],
-                       description=form[4] or t("forms.no_description"), hints=False)
+    closed = get_form_status(form_id)[0]
+    description = form[4] or t("forms.no_description")
+    card = panel_embed(interaction, "packs.card", title=form[3], hints=False,
+                       description=f"{description}\n\n{t('forms.closed')}" if closed else description)
     view = discord.ui.View(timeout=None)
-    view.add_item(FormApplyButton(form_id))
+    if not closed:  # набор закрыт — кнопки подачи нет
+        view.add_item(FormApplyButton(form_id))
     kwargs = {"embeds": [banner, card] if banner else [card], "view": view, "ephemeral": True}
     if file:
         kwargs["file"] = file
