@@ -524,23 +524,33 @@ async def decide(i, sid, status, reason, message):
         result += "\n" + t("forms.reviewed.reason", reason=reason)
     if role_error:
         result += f"\n\n⚠️ {role_error}"
-    embed = message.embeds[0] if message and message.embeds else panel_embed(i, "forms.reviewed")
+    # карточка заявки — последний embed (над ней может стоять баннер)
+    embed = message.embeds[-1] if message and message.embeds else panel_embed(i, "forms.reviewed")
     embed.add_field(name=t("forms.reviewed.title")[:256], value=result[:1024], inline=False)
     if status == "approved":
         embed.color = discord.Color.green()
     else:
         embed.color = core.danger_color()
+    # баннер «одобрена/отклонена» заменяет баннер «новая заявка»; если его нет — прежний остаётся
+    banner = core.resolve_banner(i, f"forms.{status}")
+    above = [discord.Embed(color=embed.color).set_image(url=banner)] if banner \
+        else (list(message.embeds[:-1]) if message and message.embeds else [])
     if i.response.is_done():
-        await message.edit(embed=embed, view=None)
+        await message.edit(embeds=above + [embed], view=None)
     else:
-        await i.response.edit_message(embed=embed, view=None)
+        await i.response.edit_message(embeds=above + [embed], view=None)
 
-    if form[16]:  # уведомить заявителя
+    if form[16]:  # уведомить заявителя — карточкой со своим баннером
         applicant = i.guild.get_member(row[3])
         if applicant is not None:
             key = "forms.dm.approved" if status == "approved" else "forms.dm.rejected"
+            card = panel_embed(i, f"forms.{status}", hints=False, danger=status != "approved",
+                               description=t(key, form=form[3], guild=i.guild.name,
+                                             reason=reason or t("forms.dm.no_reason")))
+            if status == "approved":
+                card.color = discord.Color.green()
             try:
-                await applicant.send(t(key, form=form[3], guild=i.guild.name, reason=reason or t("forms.dm.no_reason")))
+                await applicant.send(embed=card)
             except discord.HTTPException:
                 pass  # закрытые ЛС — не ошибка
 

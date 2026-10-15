@@ -1436,6 +1436,46 @@ class WebPanelTests(unittest.TestCase):
             else:
                 os.environ["WEB_PANEL_URL"] = old
 
+    def test_auto_messages_have_banner_slots(self):
+        """Новая заявка, итог проверки и ЛС заявителю — со своими баннерами."""
+        from extended_modules import decide
+        g = make_guild()
+        keys = __import__("web_panel").editable_keys()
+        for screen in core.AUTO_BANNER_SCREENS:
+            self.assertIn(f"{screen}.banner", keys)
+        form_id = database.save_form(GUILD, STAFF, "Набор", "", json.dumps([{"label": "Возраст"}]),
+                                     reviewer_user_ids_json=json.dumps([STAFF]), dm_creator=1)
+        sid = database.save_submission(form_id, GUILD, MEMBER, json.dumps({"Возраст": "20"}))
+        dms = []
+
+        async def dm(**kwargs):
+            dms.append(kwargs)
+
+        g.members[MEMBER].send = dm
+        try:
+            core.set_setting("forms.submission.banner", "https://cdn/new.png")
+            core.set_setting("forms.approved.banner", "https://cdn/ok.png")
+            reviewer = FakeInteraction(g, g.members[STAFF])
+            card = core.panel_embed(reviewer, "forms.submission", form="Набор", user="<@1>", id=sid)
+            sent = core.expand_embeds({"embed": card})["embeds"]
+            self.assertEqual([e.image.url for e in sent[:1]], ["https://cdn/new.png"])
+            edits = []
+
+            async def edit(**kwargs):
+                edits.append(kwargs)
+
+            message = types.SimpleNamespace(embeds=sent, edit=edit)
+            reviewer.response.done = True
+            run(decide(reviewer, sid, "approved", "", message))
+            banner, result = edits[0]["embeds"]
+            self.assertEqual(banner.image.url, "https://cdn/ok.png")
+            self.assertEqual(result.title, card.title)
+            self.assertEqual(dms[0]["embed"].banner_url, "https://cdn/ok.png")
+            self.assertIn("Набор", dms[0]["embed"].description)
+        finally:
+            for key in ("forms.submission.banner", "forms.approved.banner"):
+                core.reset_setting(key)
+
     def test_asset_upload(self):
         import web_panel
         from PIL import Image

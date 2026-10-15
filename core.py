@@ -437,6 +437,12 @@ BANNER_SCREENS = (
     "embed.home", "library.home", "interactive.home", "forms.review_home",
     "logo.home", "eminemovna.home", "webhooks.home", "access_denied",
 )
+# Сообщения, которые бот шлёт сам, без панели: новая заявка, итог проверки
+# (карточка в канале и ЛС заявителю), опубликованные форма и меню ролей.
+AUTO_BANNER_SCREENS = (
+    "forms.submission", "forms.approved", "forms.rejected", "forms.public_card", "select.public_menu",
+)
+BANNER_SCREENS += AUTO_BANNER_SCREENS
 
 
 def resolve_banner(interaction, context):
