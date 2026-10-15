@@ -100,6 +100,8 @@ _synced = False
 async def on_ready():
     global _synced
     print(f"Бот запущен: {bot.user}")
+    # статус под именем — из /eminemovna → Оформление → Профиль бота
+    await bot.change_presence(**access_module.apply_presence_kwargs())
     if _synced:
         return
 

@@ -1797,6 +1797,30 @@ class BotProfileTests(unittest.TestCase):
         self.assertEqual(len(edits), 1)  # не владельцу — нельзя
 
 
+class BotStatusTests(unittest.TestCase):
+    def test_status_saved_and_applied(self):
+        import access_module
+        g = make_guild()
+        presences = []
+
+        async def change_presence(**kwargs):
+            presences.append(kwargs)
+
+        owner = FakeInteraction(g, g.members[OWNER])
+        owner.client = types.SimpleNamespace(user=types.SimpleNamespace(id=777, name="Purr"), change_presence=change_presence)
+        modal = access_module.StatusModal()
+        modal.text._value = "мурчит над заявками"
+        modal.mode._values = ["idle"]
+        try:
+            run(modal.on_submit(owner))
+            self.assertEqual(presences[0]["activity"].name, "мурчит над заявками")
+            self.assertEqual(presences[0]["status"], discord.Status.idle)
+            self.assertEqual(access_module.apply_presence_kwargs()["status"], discord.Status.idle)
+        finally:
+            core.reset_setting("bot_status_text")
+            core.reset_setting("bot_status_mode")
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

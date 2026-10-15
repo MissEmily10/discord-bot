@@ -718,7 +718,118 @@ class DesignView(PanelView):
     @discord.ui.button(label="Профиль бота", emoji="🪪", style=discord.ButtonStyle.primary)
     async def profile(self, interaction, button):
         if await ensure_owner(interaction):
+            await interaction.response.edit_message(
+                embed=panel_embed(interaction, "bot_profile.home"),
+                view=BotProfileView(back_target=(core.screen(interaction), self)))
+
+
+class BotProfileView(PanelView):
+    """Внешний вид бота: везде (аватарка, баннер, имя), на этом сервере, статус под именем."""
+
+    texts = "bot_profile.home"
+
+    @discord.ui.button(label="Везде", emoji="🌐", style=discord.ButtonStyle.primary)
+    async def everywhere(self, interaction, button):
+        if await ensure_owner(interaction):
+            await interaction.response.send_modal(GlobalProfileModal(interaction.client.user))
+
+    @discord.ui.button(label="На этом сервере", emoji="🏠", style=discord.ButtonStyle.secondary)
+    async def this_server(self, interaction, button):
+        if await ensure_owner(interaction):
             await interaction.response.send_modal(BotProfileModal(interaction.guild.me))
+
+    @discord.ui.button(label="Статус", emoji="💬", style=discord.ButtonStyle.secondary)
+    async def status(self, interaction, button):
+        if await ensure_owner(interaction):
+            await interaction.response.send_modal(StatusModal())
+
+
+async def read_image(interaction, field):
+    """-> bytes, None (не прикрепили) или False (не картинка — ответ уже отправлен)."""
+    files = list(field.values or [])
+    if not files:
+        return None
+    file = files[0]
+    if not (file.content_type or "").startswith("image/") or file.size > PROFILE_IMAGE_MAX:
+        await deny(interaction, "bot_profile.bad_image")
+        return False
+    return await file.read()
+
+
+class GlobalProfileModal(discord.ui.Modal):
+    """Аватарка, баннер и имя бота на всех серверах (Discord ограничивает смену имени: ~2 раза в час)."""
+
+    def __init__(self, me):
+        super().__init__(title=t("bot_profile.global_title")[:45])
+        self.name = discord.ui.TextInput(required=False, min_length=2, max_length=32, default=getattr(me, "name", None))
+        self.avatar = discord.ui.FileUpload(required=False, max_values=1)
+        self.banner = discord.ui.FileUpload(required=False, max_values=1)
+        for key, component in (("username", self.name), ("avatar", self.avatar), ("banner", self.banner)):
+            self.add_item(discord.ui.Label(text=t(f"bot_profile.{key}")[:45],
+                                           description=t(f"bot_profile.{key}_help")[:100], component=component))
+
+    async def on_submit(self, interaction):
+        if not await ensure_owner(interaction):
+            return
+        changes = {}
+        name = self.name.value.strip()
+        if name and name != interaction.client.user.name:
+            changes["username"] = name
+        for key, field in (("avatar", self.avatar), ("banner", self.banner)):
+            data = await read_image(interaction, field)
+            if data is False:
+                return
+            if data:
+                changes[key] = data
+        if not changes:
+            await deny(interaction, "bot_profile.nothing")
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await interaction.client.user.edit(**changes)
+        except discord.HTTPException as error:
+            await interaction.followup.send(t("bot_profile.failed", error=error), ephemeral=True)
+            return
+        audit(interaction, "bot.profile_global", "bot", interaction.client.user.id, ", ".join(changes))
+        await interaction.followup.send(t("bot_profile.global_done"), ephemeral=True)
+
+
+STATUS_MODES = ("online", "idle", "dnd")
+
+
+def apply_presence_kwargs():
+    """Статус бота из настроек -> аргументы change_presence (вызывается и при запуске)."""
+    text = (get_setting("bot_status_text") or "").strip()
+    mode = get_setting("bot_status_mode") or "online"
+    status = getattr(discord.Status, mode if mode in STATUS_MODES else "online")
+    return {"activity": discord.CustomActivity(name=text[:128]) if text else None, "status": status}
+
+
+class StatusModal(discord.ui.Modal):
+    def __init__(self):
+        super().__init__(title=t("bot_profile.status_title")[:45])
+        self.text = discord.ui.TextInput(required=False, max_length=128, default=get_setting("bot_status_text") or None,
+                                         placeholder=t("bot_profile.status_text.placeholder")[:100])
+        current = get_setting("bot_status_mode") or "online"
+        self.mode = discord.ui.Select(options=[
+            discord.SelectOption(label=t(f"bot_profile.mode.{mode}")[:100], value=mode, default=mode == current)
+            for mode in STATUS_MODES])
+        self.add_item(discord.ui.Label(text=t("bot_profile.status_text")[:45],
+                                       description=t("bot_profile.status_text_help")[:100], component=self.text))
+        self.add_item(discord.ui.Label(text=t("bot_profile.status_mode")[:45], component=self.mode))
+
+    async def on_submit(self, interaction):
+        if not await ensure_owner(interaction):
+            return
+        text = self.text.value.strip()
+        if text:
+            set_setting("bot_status_text", text)
+        else:
+            reset_setting("bot_status_text")
+        set_setting("bot_status_mode", (self.mode.values or ["online"])[0])
+        await interaction.client.change_presence(**apply_presence_kwargs())
+        audit(interaction, "bot.status", "bot", interaction.client.user.id, text)
+        await deny(interaction, "bot_profile.status_done")
 
 
 PROFILE_IMAGE_MAX = 10 * 1024 * 1024
