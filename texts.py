@@ -1020,12 +1020,56 @@ CATALOG = {
     "logo.style_modal.negative": 'Чего избегать',
     "logo.style_modal.lora": 'LoRA (репозиторий HF), если есть',
     "logo.style_modal.model": 'Своя модель text-to-image',
-    "logo.prompt.base": 'Discord role icon, single centered emblem, bold simple shapes, readable at 32px, plain background, no text, no letters',
-    "logo.prompt.default_style": 'clean flat vector icon',
-    "logo.prompt.generate": '{brief}. Style: {style}. {base}',
-    "logo.prompt.stylize": 'Redraw this icon keeping its subject, silhouette and composition, in this style: {style}. {brief}. {base}',
-    "logo.prompt.negative": 'text, watermark, signature, photo, blurry, multiple objects, frame',
-    "logo.prompt.describe": 'These images are icons drawn in one consistent style. Describe that style as a short prompt for an image generator (max 60 words): palette, line weight, shading, shapes, materials, background, mood. Do not describe what the icons depict. Answer with the prompt only.',
+    "logo.prompt.base": (
+        "A single Discord role icon, one object only, perfectly centered, filling about 85% of a square canvas "
+        "with only a small even margin. Bold, simple, instantly readable silhouette that still reads clearly "
+        "at 32x32 pixels: few large shapes, no tiny details, no thin hairlines. Clean crisp edges, flat 2D sticker/emoji "
+        "look, front view, no perspective scene, no ground, no shadow on the floor. Solid plain background of one flat "
+        "color (pure white) that is easy to cut out. No text, no letters, no numbers, no logos, no watermark, no frame, "
+        "no border around the canvas, no extra objects, no duplicates."
+    ),
+    "logo.prompt.default_style": "clean flat vector icon with a thick dark outline, limited palette, soft simple highlights",
+    "logo.prompt.generate": (
+        "Draw a role icon of: {brief}.\n\nSTYLE — follow it exactly, it is the most important instruction: {style}\n\n"
+        "Composition and format: {base}"
+    ),
+    "logo.prompt.from_reference": (
+        "The input image is a REFERENCE icon that shows the exact art style to use. Create a completely NEW icon "
+        "that depicts: {brief}. Do NOT copy or keep the subject of the reference — replace it entirely with the new "
+        "subject. Keep everything about the STYLE identical to the reference: the same outline color and thickness, "
+        "the same wobbly or clean line character, the same fill colors and palette, the same way of shading and "
+        "highlights, the same level of detail, the same proportions and cuteness, the same background treatment. "
+        "It must look like it was drawn by the same artist in the same set.\n\nStyle notes from all references: {style}\n\n"
+        "Composition and format: {base}"
+    ),
+    "logo.prompt.stylize": (
+        "Redraw the input image as a role icon. Keep its subject, silhouette, pose and composition recognizable, "
+        "but redraw it completely in this style — match it exactly: {style}\n\nExtra wishes: {brief}\n\n"
+        "Composition and format: {base}"
+    ),
+    "logo.prompt.negative": (
+        "text, letters, numbers, watermark, signature, logo, photo, photorealistic, 3d render, blurry, noisy, "
+        "low quality, jpeg artifacts, multiple objects, collage, grid, sticker sheet, frame, border, tiny subject, "
+        "small object far away, cropped subject, cut off edges, busy background, gradient background, scene, floor shadow"
+    ),
+
+    "logo.prompt.describe": (
+        "These images are icons from ONE set, drawn by one artist in one consistent style. Analyse ONLY the style, "
+        "never what they depict. Write precise, concrete notes an image generator can follow, covering:\n"
+        "1) Outline: color (give hex), thickness relative to icon size, line character (wobbly hand-drawn / clean vector), "
+        "corner roundness.\n2) Fill and palette: every main color with hex, which parts get which colors, flat or gradient.\n"
+        "3) Shading and highlights: where, what shape, what color, how strong.\n4) Shapes and proportions: chunky/thin, "
+        "rounded/angular, how cute or serious, level of detail.\n5) Faces/eyes if present: how they are drawn.\n"
+        "6) Texture, effects, glow, stickers rims.\n7) Background and margins.\n8) Overall mood.\n"
+        "Answer as a dense style description in English, no lists of objects, no intro."
+    ),
+    "logo.prompt.merge": (
+        "Below are several style notes about the SAME icon set. Merge them into ONE detailed, consistent style "
+        "description for an image generator (English, max 1500 characters): outline color/hex and thickness, line "
+        "character, full palette with hex codes and where each color goes, shading and highlights, shapes and "
+        "proportions, faces if any, texture/effects, background, mood. Keep only what the notes agree on; no lists "
+        "of depicted objects; no intro, answer with the description only.\n\n{notes}"
+    ),
 
     "embed.native_select.placeholder": "Выбери...",
     "embed.list.done": "Готово",

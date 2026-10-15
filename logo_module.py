@@ -5,12 +5,16 @@ logo_module.py
 
 Стиль (logo_styles) = текстовое описание + референс-иконки + (опционально)
 LoRA, обученная на этих референсах. Режимы:
-- "С нуля": короткое ТЗ -> text-to-image (FLUX; с LoRA стиля, если задана);
+- "С нуля": короткое ТЗ -> если у стиля есть референсы — новая иконка рисуется
+  поверх случайного референса (модель редактирования копирует его манеру),
+  иначе text-to-image (FLUX; с LoRA стиля, если задана);
 - "Из макета": присланная иконка/набросок -> image-to-image (модель
   редактирования перерисовывает макет в стиле);
-- "Описать стиль": vision-модель смотрит на референсы и пишет описание стиля;
+- "Описать стиль": vision-модель смотрит на ВСЕ референсы (пачками) и пишет
+  подробное описание стиля; если описания нет — оно составляется само при
+  первой генерации;
 - "Датасет": архив референсов + подписи для обучения LoRA (самый точный стиль).
-Результат: PNG 512x512 для Discord-иконки роли, кнопки "Поставить на роль"
+Результат: PNG 500x500 (рисунок на весь кадр) отдельным файлом, кнопки "Поставить на роль"
 (с подсказкой подходящих ролей по названию), "Ещё вариант", "Убрать фон".
 
 Генерация идёт через Hugging Face Inference Providers (huggingface_hub).
@@ -46,7 +50,9 @@ from database import (
 
 _log = logging.getLogger(__name__)
 
-ICON_SIZE = 512             # Discord рекомендует ≥64; храним с запасом, отдаём ≤256 КБ
+ICON_SIZE = int(os.getenv("LOGO_ICON_SIZE") or 500)  # итоговая иконка: PNG 500×500 (для иконки роли ужимается до 256 КБ)
+SUBJECT_MARGIN = 0.06       # поля вокруг рисунка после обрезки пустого фона (доля стороны)
+STYLE_TEXT_MAX = 1800       # описание стиля: длиннее модели генерации всё равно не читают
 ROLE_ICON_MAX_BYTES = 256 * 1024
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_REFERENCES = 60
@@ -111,6 +117,36 @@ def to_icon_png(image, size=ICON_SIZE):
     buffer = io.BytesIO()
     image.save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
+
+
+def fit_subject(image, size=ICON_SIZE, margin=SUBJECT_MARGIN):
+    """
+    Рисунок на весь кадр: нейросети любят рисовать маленький значок посреди
+    большого фона, а на иконке роли (32 px) он превращается в точку. Находим
+    сам рисунок (по прозрачности или по отличию от цвета углов), обрезаем
+    пустые поля и растягиваем до size с небольшим запасом по краям.
+    """
+    from PIL import Image, ImageChops
+
+    image = image.convert("RGBA")
+    alpha = image.getchannel("A")
+    if alpha.getextrema()[0] < 250:  # есть прозрачность — рисунок там, где не прозрачно
+        box = alpha.point(lambda a: 255 if a > 24 else 0).getbbox()
+    else:
+        w, h = image.size
+        corners = [image.getpixel(p) for p in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))]
+        background = tuple(sum(c[i] for c in corners) // 4 for i in range(3))
+        diff = ImageChops.difference(image.convert("RGB"), Image.new("RGB", image.size, background)).convert("L")
+        box = diff.point(lambda d: 255 if d > 28 else 0).getbbox()
+    if box:
+        left, top, right, bottom = box
+        side = int(max(right - left, bottom - top) * (1 + 2 * margin))
+        cx, cy = (left + right) / 2, (top + bottom) / 2
+        square = Image.new("RGBA", (side, side), (0, 0, 0, 0) if alpha.getextrema()[0] < 250
+                           else image.getpixel((0, 0)))
+        square.paste(image, (int(side / 2 - cx), int(side / 2 - cy)))
+        image = square
+    return to_icon_png(image, size)
 
 
 def role_icon_bytes(png_bytes):
@@ -193,8 +229,9 @@ def add_reference(style_row, data):
 # =========================
 
 def build_prompt(mode, style_row, brief):
+    """mode: generate (с нуля), reference (новая иконка по референсу), stylize (перерисовать макет)."""
     style_text = (style_row[4] if style_row else "") or t("logo.prompt.default_style")
-    key = "logo.prompt.generate" if mode == "generate" else "logo.prompt.stylize"
+    key = {"generate": "logo.prompt.generate", "reference": "logo.prompt.from_reference"}.get(mode, "logo.prompt.stylize")
     return t(key, brief=brief or "", style=style_text, base=t("logo.prompt.base"))
 
 
@@ -206,10 +243,18 @@ def negative_prompt(style_row):
 async def generate_image(mode, style_row, brief, source_bytes=None):
     """-> PNG bytes. Исключения пробрасываются (их показывает вызывающий код)."""
     client = _client()
+    refs = references_of(style_row) if style_row else []
+    lora = style_row and (style_row[7] or style_row[6])
+    if mode == "generate" and refs and not lora:
+        # Строго по референсам: модель редактирования получает настоящую иконку
+        # стиля и рисует НОВЫЙ предмет её же рукой (линия, цвета, тени, фон).
+        # Текстовая модель референсы не видит — только их описание.
+        import random
+        mode, source_bytes = "reference", pathlib.Path(random.choice(refs)).read_bytes()
     prompt = build_prompt(mode, style_row, brief)
     if mode == "generate":
         # LoRA стиля — это и есть модель для text-to-image (репозиторий на HF)
-        model = (style_row and (style_row[7] or style_row[6])) or cfg("LOGO_TEXT_MODEL", "black-forest-labs/FLUX.1-dev")
+        model = lora or cfg("LOGO_TEXT_MODEL", "black-forest-labs/FLUX.1-dev")
         image = await client.text_to_image(
             prompt, negative_prompt=negative_prompt(style_row), width=1024, height=1024, model=model,
         )
@@ -218,7 +263,7 @@ async def generate_image(mode, style_row, brief, source_bytes=None):
         image = await client.image_to_image(
             source_bytes, prompt=prompt, negative_prompt=negative_prompt(style_row), model=model,
         )
-    return to_icon_png(image)
+    return fit_subject(image)
 
 
 async def remove_background(png_bytes):
@@ -232,27 +277,51 @@ async def remove_background(png_bytes):
     if isinstance(mask, str):  # некоторые провайдеры отдают base64
         mask = open_image(base64.b64decode(mask))
     image.putalpha(mask.convert("L").resize(image.size))
-    return to_icon_png(image)
+    return fit_subject(image)
 
 
 async def describe_style(style_row):
-    """Vision-модель смотрит на референсы и пишет короткое описание стиля для промпта."""
-    refs = references_of(style_row)[:8]
+    """
+    Очень подробное описание стиля по ВСЕМ референсам: vision-модель смотрит на
+    них пачками по 6, а потом сводит заметки в одно описание для генератора.
+    """
+    refs = references_of(style_row)
     if not refs:
         return None
-    content = [{"type": "text", "text": t("logo.prompt.describe")}]
-    for path in refs:
-        encoded = base64.b64encode(pathlib.Path(path).read_bytes()).decode()
-        content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}})
     from huggingface_hub import AsyncInferenceClient
 
-    client = AsyncInferenceClient(api_key=cfg("HF_TOKEN"), timeout=120)
-    response = await client.chat_completion(
-        messages=[{"role": "user", "content": content}],
-        model=cfg("LOGO_VISION_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct"),
-        max_tokens=300,
-    )
-    return response.choices[0].message.content.strip()
+    client = AsyncInferenceClient(api_key=cfg("HF_TOKEN"), timeout=180)
+    model = cfg("LOGO_VISION_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct")
+    notes = []
+    for start in range(0, len(refs), 6):
+        content = [{"type": "text", "text": t("logo.prompt.describe")}]
+        for path in refs[start:start + 6]:
+            encoded = base64.b64encode(pathlib.Path(path).read_bytes()).decode()
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}})
+        response = await client.chat_completion(messages=[{"role": "user", "content": content}],
+                                                model=model, max_tokens=700)
+        notes.append(response.choices[0].message.content.strip())
+    if len(notes) == 1:
+        return notes[0][:STYLE_TEXT_MAX]
+    merged = await client.chat_completion(
+        messages=[{"role": "user", "content": t("logo.prompt.merge", notes="\n\n---\n\n".join(notes))}],
+        model=model, max_tokens=900)
+    return merged.choices[0].message.content.strip()[:STYLE_TEXT_MAX]
+
+
+async def ensure_style_text(style_row):
+    """Есть референсы, но нет описания стиля — составить его один раз и сохранить."""
+    if style_row is None or (style_row[4] or "").strip() or not references_of(style_row):
+        return style_row
+    try:
+        text = await describe_style(style_row)
+    except Exception as error:  # описание — помощь, а не условие генерации
+        _log.warning("style description failed: %s", error)
+        return style_row
+    if text:
+        update_logo_style(style_row[0], prompt=text)
+        return get_logo_style(style_row[0])
+    return style_row
 
 
 def build_dataset_zip(style_row):
@@ -463,8 +532,10 @@ async def send_result(interaction, style_row, mode, brief, png, source_bytes=Non
         interaction, "logo.result",
         style=style_row[3] if style_row else t("logo.no_style"), mode=t(f"logo.mode.{mode}"), brief=brief or "—",
     )
-    embed.set_image(url="attachment://icon.png")
-    await interaction.followup.send(embed=embed, file=discord.File(io.BytesIO(png), "icon.png"), view=view, ephemeral=True)
+    # PNG — отдельным файлом, а не картинкой внутри карточки: картинки в карточках
+    # Discord пережимает (на телефоне — в мелкий WebP), а файл скачивается как есть
+    await interaction.followup.send(embed=embed, file=discord.File(io.BytesIO(png), f"icon_{ICON_SIZE}.png"),
+                                    view=view, ephemeral=True)
 
 
 DYNAMIC_ITEMS = [LogoActionButton]
@@ -487,7 +558,7 @@ class StyleModal(Modal, title="СТИЛЬ ИКОНОК"):
     texts = "logo.style_modal"
 
     name = discord.ui.TextInput(label="Название стиля", max_length=80)
-    prompt = discord.ui.TextInput(label="Описание стиля (для нейросети)", style=discord.TextStyle.paragraph, required=False, max_length=1500)
+    prompt = discord.ui.TextInput(label="Описание стиля (для нейросети)", style=discord.TextStyle.paragraph, required=False, max_length=4000)
     negative = discord.ui.TextInput(label="Чего избегать", required=False, max_length=500)
     lora = discord.ui.TextInput(label="LoRA (репозиторий HF), если есть", required=False, max_length=200)
     model = discord.ui.TextInput(label="Своя модель text-to-image", required=False, max_length=200)
@@ -580,7 +651,7 @@ class StyleActions(PanelView):
         except Exception as error:  # noqa: BLE001
             await interaction.followup.send(t("logo.failed", error=str(error)[:300]), ephemeral=True)
             return
-        update_logo_style(self.style_id, prompt=text[:1500])
+        update_logo_style(self.style_id, prompt=text[:STYLE_TEXT_MAX])
         await interaction.followup.send(embed=style_embed(interaction, get_logo_style(self.style_id)), ephemeral=True)
 
     @discord.ui.button(label="Датасет для LoRA", emoji="📦", style=discord.ButtonStyle.secondary, row=1)
@@ -679,6 +750,7 @@ async def run_generate(interaction, brief, style=None):
     style_row = pick_style(interaction.guild.id, style)
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
+    style_row = await ensure_style_text(style_row)  # описание стиля по референсам, если его ещё нет
     try:
         png = await generate_image("generate", style_row, brief)
     except Exception as error:  # noqa: BLE001
@@ -699,6 +771,7 @@ async def run_stylize(interaction, image, brief="", style=None):
     style_row = pick_style(interaction.guild.id, style)
     await interaction.response.defer(ephemeral=True, thinking=True)
     source = to_icon_png(open_image(data), 1024)
+    style_row = await ensure_style_text(style_row)
     try:
         png = await generate_image("stylize", style_row, brief[:300], source_bytes=source)
     except Exception as error:  # noqa: BLE001

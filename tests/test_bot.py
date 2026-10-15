@@ -2138,13 +2138,57 @@ class LogoTests(unittest.TestCase):
         import logo_module
 
         icon = logo_module.to_icon_png(logo_module.open_image(self.png))
-        self.assertEqual(self.Image.open(io.BytesIO(icon)).size, (512, 512))
+        self.assertEqual(self.Image.open(io.BytesIO(icon)).size, (logo_module.ICON_SIZE, logo_module.ICON_SIZE))
         noisy = self.Image.effect_noise((900, 900), 100).convert("RGB")
         buffer = io.BytesIO()
         noisy.save(buffer, format="PNG")
         small = logo_module.role_icon_bytes(buffer.getvalue())
         self.assertIsNotNone(small)
         self.assertLessEqual(len(small), logo_module.ROLE_ICON_MAX_BYTES)
+
+    def test_small_subject_fills_the_icon(self):
+        import logo_module
+        canvas = self.Image.new("RGB", (1024, 1024), "white")
+        canvas.paste(self.Image.new("RGB", (120, 120), "red"), (452, 452))  # маленький значок посреди фона
+        icon = self.Image.open(io.BytesIO(logo_module.fit_subject(canvas)))
+        self.assertEqual(icon.size, (500, 500))
+        self.assertEqual(icon.format, "PNG")
+        red = sum(1 for p in icon.convert("RGB").getdata() if p[0] > 200 and p[1] < 60)
+        self.assertGreater(red / (500 * 500), 0.7)  # рисунок занимает почти весь кадр
+
+    def test_generate_uses_reference_image(self):
+        import logo_module
+        calls = {}
+
+        class Client:
+            async def image_to_image(self, source, prompt, negative_prompt, model):
+                calls["prompt"], calls["source"] = prompt, source
+                return self_image
+
+            async def text_to_image(self, *args, **kwargs):
+                calls["text"] = True
+                return self_image
+
+        self_image = self.Image.new("RGB", (1024, 1024), "white")
+        self_image.paste(self.Image.new("RGB", (300, 300), "blue"), (362, 362))
+        style_id = database.save_logo_style(GUILD, ADMIN, "Реф", "thick black outline", "")
+        old_dir = os.environ.get("LOGO_DIR")
+        os.environ["LOGO_DIR"] = tempfile.mkdtemp()
+        old_client = logo_module._client
+        logo_module._client = lambda: Client()
+        try:
+            logo_module.add_reference(database.get_logo_style(style_id), self.png)
+            png = run(logo_module.generate_image("generate", database.get_logo_style(style_id), "кот"))
+            self.assertNotIn("text", calls)  # не текстовая модель, а перерисовка по референсу
+            self.assertIn("REFERENCE", calls["prompt"])
+            self.assertIn("кот", calls["prompt"])
+            self.assertEqual(self.Image.open(io.BytesIO(png)).size, (500, 500))
+        finally:
+            logo_module._client = old_client
+            if old_dir is None:
+                os.environ.pop("LOGO_DIR", None)
+            else:
+                os.environ["LOGO_DIR"] = old_dir
 
     def test_style_references_dataset_and_zip_limits(self):
         import logo_module
