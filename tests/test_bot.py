@@ -1947,6 +1947,15 @@ class EmojiExportTests(unittest.TestCase):
         self.assertFalse(emoji_export.pinged(msg(content="эмодзи")))
 
 
+class BannerFontTests(unittest.TestCase):
+    def test_design_fonts_and_cyrillic_fallback(self):
+        import banner_render as b
+        self.assertTrue(b.has_design_fonts())
+        self.assertEqual(b.kind_for("dunkin", "your moderator form"), "dunkin")
+        self.assertTrue(b.kind_for("drunk", "набор! набор!").startswith("fallback:"))
+        self.assertEqual(b.kind_for("coolvetica", "модератор"), "coolvetica")
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

@@ -1,10 +1,12 @@
 # Шрифты баннеров
 
-Сюда — файлы шрифтов из макетов баннеров (бот дописывает ими название должности):
+Бот дописывает ими текст на баннерах форм (banner_render.py):
 
-- **Coolvetica** (Regular) — крупное название на карточке формы. Файл назови `Coolvetica-Regular.otf` (или `.ttf`).
-- **DRUNK FONTS** (Regular) — надпись сверху карточки формы («набор! набор!…»). Файл: `DrunkFonts-Regular.otf`.
-- **Dunkin Sans** (Regular) — мелкая строка «your … form has been». Файл: `DunkinSans-Regular.otf` (или `.ttf`).
+- **Coolvetica Regular** (`Coolvetica-Regular.otf`) — крупное название на карточке формы. Есть кириллица.
+- **DRUNK FONTS Regular** (`DrunkFonts-Regular.otf`) — надпись сверху карточки формы. Только латиница.
+- **Dunkin Sans Regular** (`DunkinSans-Regular.otf`) — строка «your … form has been». Только латиница.
 
-Пока файлов нет, бот рисует похожим Inter — работает, но не один в один с Figma.
-Перед загрузкой проверь, что лицензия шрифта разрешает встраивать его в приложение.
+Остальные начертания (Italic, Bold, Dunkin) лежат про запас.
+
+Если в тексте есть буквы, которых нет в шрифте (например, русские в DRUNK FONTS
+или Dunkin Sans), эту строку бот рисует похожим Inter — вместо пустых квадратиков.

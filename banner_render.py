@@ -26,8 +26,8 @@ BANNER_FONT_DIR = os.path.join(FONT_DIR, "banner")
 
 # Файл шрифта ищется по началу имени (любое расширение .otf/.ttf), потом — запасной.
 FONTS = {
-    "coolvetica": (("Coolvetica-Regular", "Coolvetica Rg", "coolvetica rg", "Coolvetica"), "Inter-Bold.otf"),
-    "dunkin": (("DunkinSans-Regular", "Dunkin Sans", "DunkinSans", "dunkin"), "Inter-SemiBold.otf"),
+    "coolvetica": (("Coolvetica-Regular", "Coolvetica Rg"), "Inter-Bold.otf"),
+    "dunkin": (("DunkinSans-Regular", "Dunkin Sans Regular"), "Inter-SemiBold.otf"),
     "drunk": (("DrunkFonts-Regular", "DRUNK FONTS", "Drunk Fonts", "DrunkFonts", "drunk"), "Inter-Bold.otf"),
 }
 
@@ -66,10 +66,34 @@ def has_design_fonts():
     return all(os.path.dirname(font_path(kind)) == BANNER_FONT_DIR for kind in FONTS)
 
 
+_cmap_cache = {}
+
+
+def covers(path, text):
+    """Есть ли в файле шрифта все буквы текста (у Dunkin, например, нет кириллицы)."""
+    if path not in _cmap_cache:
+        try:
+            from fontTools.ttLib import TTFont
+            _cmap_cache[path] = set(TTFont(path, lazy=True).getBestCmap() or {})
+        except Exception:  # нет fontTools или битый файл — считаем, что всё есть
+            _cmap_cache[path] = None
+    cmap = _cmap_cache[path]
+    return cmap is None or all(ord(ch) in cmap for ch in text if not ch.isspace())
+
+
+def kind_for(kind, text):
+    """Шрифт макета, а если в нём нет нужных букв — запасной Inter того же веса."""
+    path = font_path(kind)
+    if os.path.dirname(path) == BANNER_FONT_DIR and not covers(path, text):
+        return "fallback:" + FONTS[kind][1]
+    return kind
+
+
 def _font(kind, size):
     key = (kind, size)
     if key not in _font_cache:
-        _font_cache[key] = ImageFont.truetype(font_path(kind), size)
+        path = os.path.join(FONT_DIR, kind[9:]) if kind.startswith("fallback:") else font_path(kind)
+        _font_cache[key] = ImageFont.truetype(path, size)
     return _font_cache[key]
 
 
@@ -92,7 +116,7 @@ def fit_text(spec, text):
     строки (крупно читается лучше мелкого), и только в крайнем случае «…».
     -> ([строки], шрифт)
     """
-    width, size, kind = spec["max_width"], spec["size"], spec["font"]
+    width, size, kind = spec["max_width"], spec["size"], kind_for(spec["font"], text)
     min_size = spec.get("min_size", size)
     fits = lambda line, font: font.getlength(line) <= width
     two_lines_from = max(min_size, int(size * 0.6))
