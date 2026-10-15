@@ -83,6 +83,7 @@ async def setup_hook():
     await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)
     import server_banner
     server_banner.start(bot)  # баннер сервера с живыми цифрами — обновление по расписанию
+    asyncio.create_task(cards.refresh_loop(bot))  # живые картинки с переменными
     # дудл-эмодзи (меню паков форм и кнопки панелей) — в фоне: первая заливка долгая
     asyncio.create_task(form_packs.load_doodles(bot))
     ui_emoji.start(bot)
@@ -111,6 +112,8 @@ async def on_ready():
         synced = await bot.tree.sync()
         _synced = True
         print(f"Синхронизировано команд: {len(synced)}")
+        import card_commands
+        await card_commands.load_all(bot)  # свои команды живых картинок (по серверам)
     except Exception as error:
         print(f"Ошибка синхронизации: {error}")
 

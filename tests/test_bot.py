@@ -1434,8 +1434,53 @@ class LiveCardTests(unittest.TestCase):
         self.assertTrue(run(cards.refresh_message(g, card)))
         self.assertEqual(edits[0]["attachments"][0].filename, "card.png")
         self.assertEqual(edits[0]["view"].children[0].custom_id, f"rb:cd:{card_id}")
-        message = cards.card_message(cards.get_card(card_id))
+        message = run(cards.card_message(cards.get_card(card_id)))
         self.assertEqual(message["embed"].image.url, "attachment://card.png")
+
+
+class CardTemplateTests(unittest.TestCase):
+    def test_templates_change_and_render(self):
+        import card_commands as cc
+        import card_templates as ct
+        from PIL import Image as PILImage
+        for template in ct.TEMPLATES:
+            card = {"id": 1, "template": template, "title": "Тест", "data": ct.default_data(template)}
+            png = ct.render(card, card["title"], card["data"])
+            self.assertEqual(PILImage.open(io.BytesIO(png)).width, 1200)
+        progress = {"template": "progress", "data": ct.default_data("progress")}
+        self.assertIsNone(cc.apply_value(progress, "+50"))
+        self.assertIsNone(cc.apply_value(progress, "цель 500"))
+        self.assertIsNone(cc.apply_value(progress, "340/400"))
+        self.assertEqual((progress["data"]["value"], progress["data"]["goal"]), (340, 400))
+        self.assertEqual(cc.apply_value(progress, "много"), "cards.error.bad_value")
+        counter = {"template": "counter", "data": ct.default_data("counter")}
+        cc.apply_value(counter, "=7")
+        cc.apply_value(counter, "-2")
+        self.assertEqual(counter["data"]["value"], 5)
+        table = {"template": "table", "data": ct.default_data("table")}
+        self.assertIsNone(cc.apply_value(table, "Аня | дизайн | пт"))
+        self.assertIsNone(cc.apply_value(table, "сб", who="Аня", column=3))
+        self.assertIsNone(cc.apply_value(table, "Кот | музыка | вс"))
+        self.assertEqual(table["data"]["rows"], [["Аня", "дизайн", "сб"], ["Кот", "музыка", "вс"]])
+        self.assertIsNone(cc.apply_value(table, "убрать", who="1"))
+        self.assertEqual(len(table["data"]["rows"]), 1)
+        self.assertEqual(cc.apply_value(table, "x", who="Кот", column=9), "cards.error.bad_column")
+
+    def test_command_names(self):
+        import card_commands as cc
+        self.assertEqual(cc.clean_name("/Очки Клана"), "очки_клана")
+        self.assertIsNone(cc.clean_name("очки!"))
+        self.assertIsNone(cc.clean_name("x" * 40))
+
+    def test_variables_in_card_message(self):
+        import cards
+        g = make_guild()
+        card_id = cards.create_card(GUILD, STAFF, "Нас {member_count}", "counter")
+        card = cards.get_card(card_id)
+        self.assertTrue(cards.uses_variables(card))
+        message = run(cards.card_message(card, g))
+        self.assertEqual(message["file"].filename, "card.png")
+        cards.delete_card(card_id)
 
 
 class UiEmojiTests(unittest.TestCase):

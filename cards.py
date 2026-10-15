@@ -55,12 +55,15 @@ def ensure_table():
         editor_roles_json TEXT NOT NULL DEFAULT '[]', channel_id INTEGER, message_id INTEGER,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     )""")
+    # своя слэш-команда картинки (card_commands.py)
+    if "command" not in {row[1] for row in connection.execute("PRAGMA table_info(live_cards)")}:
+        connection.execute("ALTER TABLE live_cards ADD COLUMN command TEXT NOT NULL DEFAULT ''")
     connection.commit()
     connection.close()
 
 
 COLUMNS = ("id", "guild_id", "owner_id", "template", "title", "data", "editors", "editor_roles",
-           "channel_id", "message_id")
+           "channel_id", "message_id", "command")
 
 
 def _row_to_card(row):
@@ -70,7 +73,9 @@ def _row_to_card(row):
     card["data"] = _json(card["data"], {})
     card["editors"] = _json(card["editors"], [])
     card["editor_roles"] = _json(card["editor_roles"], [])
-    card["data"].setdefault("rows", [])
+    from card_templates import default_data
+    for key, value in default_data(card["template"]).items():
+        card["data"].setdefault(key, value)
     return card
 
 
@@ -86,7 +91,7 @@ def get_card(card_id):
     ensure_table()
     connection = get_connection()
     row = connection.execute(f"SELECT id, guild_id, owner_id, template, title, data_json, editor_ids_json, "
-                             f"editor_roles_json, channel_id, message_id FROM live_cards WHERE id = ?",
+                             f"editor_roles_json, channel_id, message_id, command FROM live_cards WHERE id = ?",
                              (card_id,)).fetchone()
     connection.close()
     return _row_to_card(row)
@@ -101,12 +106,14 @@ def get_cards(guild_id):
 
 
 def create_card(guild_id, owner_id, title, template="rating"):
+    from card_templates import default_data
     ensure_table()
     now = int(time.time())
     connection = get_connection()
     cursor = connection.execute(
         "INSERT INTO live_cards (guild_id, owner_id, template, title, data_json, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)", (guild_id, owner_id, template, title, json.dumps({"rows": []}), now, now))
+        "VALUES (?, ?, ?, ?, ?, ?, ?)", (guild_id, owner_id, template, title,
+                                           json.dumps(default_data(template), ensure_ascii=False), now, now))
     connection.commit()
     card_id = cursor.lastrowid
     connection.close()
@@ -117,9 +124,10 @@ def save_card(card):
     connection = get_connection()
     connection.execute(
         "UPDATE live_cards SET title = ?, data_json = ?, editor_ids_json = ?, editor_roles_json = ?, "
-        "channel_id = ?, message_id = ?, updated_at = ? WHERE id = ?",
+        "channel_id = ?, message_id = ?, command = ?, updated_at = ? WHERE id = ?",
         (card["title"], json.dumps(card["data"], ensure_ascii=False), json.dumps(card["editors"]),
-         json.dumps(card["editor_roles"]), card["channel_id"], card["message_id"], int(time.time()), card["id"]))
+         json.dumps(card["editor_roles"]), card["channel_id"], card["message_id"], card.get("command") or "",
+         int(time.time()), card["id"]))
     connection.commit()
     connection.close()
 
@@ -241,13 +249,34 @@ def render_rating(title, rows, empty_text="—"):
     return output.getvalue()
 
 
-def card_message(card):
-    """-> kwargs сообщения с картинкой и кнопкой «Изменить»."""
-    png = render_rating(card["title"], sorted_rows(card), t("cards.rating.empty"))
+async def card_message(card, guild=None):
+    """-> kwargs сообщения с картинкой и кнопкой «Изменить». Переменные в текстах подставляются."""
+    import card_templates
+    from actions import VARIABLE, substitute
+    title, data = card["title"], json.loads(json.dumps(card["data"]))
+    found = card_templates.texts_of(card)
+    needed = {(m[1], m[2]) for _, text in found for m in VARIABLE.finditer(str(text or ""))}
+    if needed and guild is not None:
+        import live
+        variables = await live.collect(guild, needed)
+        title = substitute(title, variables)
+        for key in ("unit", "note", "caption", "text"):
+            if data.get(key):
+                data[key] = substitute(data[key], variables)
+        for row in data.get("rows") or []:
+            if isinstance(row, list):
+                row[:] = [substitute(cell, variables) for cell in row]
+    png = card_templates.render(card, title, data, t("cards.rating.empty"))
     embed = discord.Embed(color=core.embed_color()).set_image(url=f"attachment://{FILENAME}")
     view = discord.ui.View(timeout=None)
     view.add_item(CardEditButton(card["id"]))
     return {"embed": embed, "view": view, "file": discord.File(io.BytesIO(png), filename=FILENAME)}
+
+
+def uses_variables(card):
+    import card_templates
+    from actions import VARIABLE
+    return any(VARIABLE.search(str(text or "")) for _, text in card_templates.texts_of(card))
 
 
 async def refresh_message(guild, card):
@@ -255,7 +284,7 @@ async def refresh_message(guild, card):
     channel = guild.get_channel_or_thread(card["channel_id"]) if card["channel_id"] else None
     if channel is None or not card["message_id"]:
         return False
-    message_kwargs = card_message(card)
+    message_kwargs = await card_message(card, guild)
     file = message_kwargs.pop("file")
     try:
         message = await channel.fetch_message(card["message_id"])
@@ -263,6 +292,29 @@ async def refresh_message(guild, card):
     except discord.HTTPException:
         return False
     return True
+
+
+VARIABLES_REFRESH = 10 * 60  # картинки с переменными ({voice}, {online}…) перерисовываются сами
+
+
+async def refresh_loop(bot):
+    import asyncio
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        await asyncio.sleep(VARIABLES_REFRESH)
+        ensure_table()
+        connection = get_connection()
+        rows = connection.execute("SELECT id FROM live_cards WHERE message_id IS NOT NULL").fetchall()
+        connection.close()
+        for card_id, in rows:
+            card = get_card(card_id)
+            guild = bot.get_guild(card["guild_id"]) if card else None
+            if guild is None or not uses_variables(card):
+                continue
+            try:
+                await refresh_message(guild, card)
+            except Exception:  # одна картинка не должна ломать остальные
+                core._log.exception("card refresh %s", card_id)
 
 
 # ============================================================
@@ -313,14 +365,54 @@ class CardEditButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rb:cd
                                                 view=CardEditorView(self.card_id), ephemeral=True)
 
 
-def editor_embed(interaction, card):
+# кнопки правки у каждого шаблона (остальные убираются из панели)
+TEMPLATE_BUTTONS = {
+    "rating": ("set_score", "remove"),
+    "progress": ("value", "details"),
+    "counter": ("value", "details"),
+    "text": ("edit_text",),
+    "table": ("row", "remove_row", "columns"),
+}
+COMMON_BUTTONS = ("rename", "access", "command", "publish", "delete_card")
+
+
+def summary(card):
+    """Что сейчас на картинке — текстом для панели правки."""
+    import card_templates as ct
+    data, template = card["data"], card["template"]
+    if template == "progress":
+        goal = data.get("goal") or 0
+        share = int(max(0, min(1, (data.get("value") or 0) / goal)) * 100) if goal else 0
+        return t("cards.summary.progress", value=ct.number_text(data.get("value") or 0),
+                 goal=ct.number_text(goal), unit=data.get("unit") or "", share=share,
+                 note=data.get("note") or "—")
+    if template == "counter":
+        return t("cards.summary.counter", value=ct.number_text(data.get("value") or 0),
+                 caption=data.get("caption") or "—")
+    if template == "text":
+        return (data.get("text") or t("cards.text.empty"))[:1500]
+    if template == "table":
+        head = " | ".join(data["columns"])
+        lines = [f"`{n}.` " + " | ".join(cell or "—" for cell in row) for n, row in enumerate(data["rows"], 1)]
+        return f"**{head}**\n" + ("\n".join(lines) or t("cards.table.empty"))
     rows = sorted_rows(card)
-    lines = [t("cards.editor.line", place=n, name=row["name"], score=score_text(row["score"]))
-             for n, row in enumerate(rows, 1)]
+    return "\n".join(t("cards.editor.line", place=n, name=row["name"], score=score_text(row["score"]))
+                     for n, row in enumerate(rows, 1)) or t("cards.rating.empty")
+
+
+def editor_embed(interaction, card):
     editors = [f"<@{uid}>" for uid in card["editors"]] + [f"<@&{rid}>" for rid in card["editor_roles"]]
-    return panel_embed(interaction, "cards.editor", title=card["title"] or t("cards.editor.title"),
-                       rows="\n".join(lines) or t("cards.rating.empty"), max=MAX_ROWS,
-                       editors=", ".join(editors) or t("cards.editor.only_owner"))
+    command = t("cards.command.line", name=card["command"]) if card.get("command") else t("cards.command.none")
+    embed = panel_embed(interaction, "cards.editor", hints=False,
+                        title=card["title"] or t(f"cards.template.{card['template']}"),
+                        rows=summary(card), max=MAX_ROWS, command=command,
+                        editors=", ".join(editors) or t("cards.editor.only_owner"))
+    lines = [t("hints.line", label=t(f"cards.editor.{name}"), hint=t(f"cards.editor.{name}.hint"))
+             for name in TEMPLATE_BUTTONS.get(card["template"], ()) + COMMON_BUTTONS
+             if core.has_text(f"cards.editor.{name}.hint") and t(f"cards.editor.{name}.hint").strip()]
+    if lines:
+        embed.description = f"{embed.description}\n\n{t('hints.header')}\n" + "\n".join(lines)
+    return embed
 
 
 async def apply_change(interaction, card, problem=None):
@@ -338,11 +430,17 @@ async def apply_change(interaction, card, problem=None):
 
 class CardEditorView(PanelView):
     texts = "cards.editor"
-    button_order = ("set_score", "remove", "rename", "access", "publish", "delete_card")
+    button_order = ("set_score", "value", "edit_text", "row", "remove", "details", "remove_row", "columns",
+                    "rename", "access", "command", "publish", "delete_card")
 
     def __init__(self, card_id, back_target=None):
         super().__init__(back_target=back_target, timeout=900)
         self.card_id = card_id
+        card = get_card(card_id)
+        keep = set(TEMPLATE_BUTTONS.get(card["template"] if card else "rating", ())) | set(COMMON_BUTTONS)
+        for name in ("set_score", "remove", "value", "details", "edit_text", "row", "remove_row", "columns"):
+            if name not in keep:
+                self.remove_item(getattr(self, name))
 
     async def _card(self, interaction, manage=False):
         card = get_card(self.card_id)
@@ -382,6 +480,66 @@ class CardEditorView(PanelView):
         select.on_pick = picked
         view.add_item(select)
         await interaction.response.edit_message(view=view)
+
+    @discord.ui.button(label="Значение", emoji="➕", style=discord.ButtonStyle.primary)
+    async def value(self, interaction, button):
+        if await self._card(interaction):
+            await interaction.response.send_modal(ValueModal(self.card_id))
+
+    @discord.ui.button(label="Цель и подпись", emoji="✏️", style=discord.ButtonStyle.secondary)
+    async def details(self, interaction, button):
+        card = await self._card(interaction)
+        if card:
+            await interaction.response.send_modal(DetailsModal(card))
+
+    @discord.ui.button(label="Текст", emoji="📝", style=discord.ButtonStyle.primary)
+    async def edit_text(self, interaction, button):
+        card = await self._card(interaction)
+        if card:
+            await interaction.response.send_modal(TextModal(card))
+
+    @discord.ui.button(label="Строка", emoji="➕", style=discord.ButtonStyle.primary)
+    async def row(self, interaction, button):
+        card = await self._card(interaction)
+        if card:
+            await interaction.response.send_modal(RowModal(card))
+
+    @discord.ui.button(label="Убрать строку", emoji="➖", style=discord.ButtonStyle.secondary)
+    async def remove_row(self, interaction, button):
+        card = await self._card(interaction)
+        if not card:
+            return
+        if not card["data"]["rows"]:
+            await reply(interaction, "cards.table.empty")
+            return
+        view = PanelView(back_target=(core.screen(interaction), self), timeout=600)
+        select = core.PagedSelect(placeholder=t("cards.editor.pick_row")[:150], options=[
+            discord.SelectOption(label=f"{n}. " + " | ".join(cell for cell in row if cell)[:90] or f"{n}.",
+                                 value=str(n - 1)) for n, row in enumerate(card["data"]["rows"], 1)])
+
+        async def picked(i):
+            fresh = await self._card(i)
+            index = int(select.values[0])
+            if fresh and index < len(fresh["data"]["rows"]):
+                fresh["data"]["rows"].pop(index)
+                await apply_change(i, fresh)
+
+        select.on_pick = picked
+        view.add_item(select)
+        await interaction.response.edit_message(view=view)
+
+    @discord.ui.button(label="Столбцы", emoji="📋", style=discord.ButtonStyle.secondary)
+    async def columns(self, interaction, button):
+        card = await self._card(interaction)
+        if card:
+            await interaction.response.send_modal(ColumnsModal(card))
+
+    @discord.ui.button(label="Своя команда", emoji="⏯️", style=discord.ButtonStyle.secondary)
+    async def command(self, interaction, button):
+        card = await self._card(interaction, manage=True)
+        if card:
+            import card_commands
+            await interaction.response.send_modal(card_commands.CommandModal(card))
 
     @discord.ui.button(label="Название", emoji="📝", style=discord.ButtonStyle.secondary)
     async def rename(self, interaction, button):
@@ -439,7 +597,7 @@ class CardEditorView(PanelView):
                             perms=core.bot_missing_text(channel, files=True))
                 return
             await i.response.defer()
-            message = await channel.send(**card_message(fresh))
+            message = await channel.send(**await card_message(fresh, i.guild))
             fresh["channel_id"], fresh["message_id"] = channel.id, message.id
             save_card(fresh)
             core.audit(i, "card.published", "card", fresh["id"], f"channel={channel.id}")
@@ -455,6 +613,9 @@ class CardEditorView(PanelView):
         card = await self._card(interaction, manage=True)
         if not card:
             return
+        if card.get("command"):
+            import card_commands
+            await card_commands.unregister(interaction.client, card)
         delete_card(card["id"])
         core.audit(interaction, "card.deleted", "card", card["id"], card["title"])
         await interaction.response.edit_message(embed=panel_embed(interaction, "cards.deleted"), view=None)
@@ -477,20 +638,131 @@ class ScoreModal(Modal, title="ОЧКИ"):
         await apply_change(interaction, card, set_score(card, self.name.value, self.value.value))
 
 
+class _CardModal(Modal):
+    """Общее: проверка доступа и сохранение с перерисовкой."""
+
+    def __init__(self, card, title_key):
+        super().__init__(title=t(title_key)[:45])
+        self.card_id = card["id"]
+
+    def field(self, key, default="", style=discord.TextStyle.short, max_length=100, required=True):
+        item = discord.ui.TextInput(label=t(key)[:45], default=(str(default) if default not in (None, "") else None),
+                                    style=style, max_length=max_length, required=required)
+        if core.has_text(f"{key}.placeholder"):
+            item.placeholder = t(f"{key}.placeholder")[:100]
+        self.add_item(item)
+        return item
+
+    async def fresh(self, interaction):
+        card = get_card(self.card_id)
+        if not can_edit(interaction, card):
+            await reply(interaction, "cards.denied" if card else "cards.gone")
+            return None
+        return card
+
+
+class ValueModal(_CardModal):
+    def __init__(self, card_id):
+        card = get_card(card_id)
+        super().__init__(card, "cards.value_modal.title")
+        hint = "cards.value_modal.progress" if card["template"] == "progress" else "cards.value_modal.counter"
+        self.number = self.field(hint, max_length=30)
+
+    async def on_submit(self, interaction):
+        import card_templates as ct
+        card = await self.fresh(interaction)
+        if not card:
+            return
+        if card["template"] == "progress":
+            problem = ct.set_progress(card["data"], self.number.value)
+        else:
+            problem = ct.change_number(card["data"], "value", self.number.value.lstrip("="))
+        await apply_change(interaction, card, problem)
+
+
+class DetailsModal(_CardModal):
+    def __init__(self, card):
+        super().__init__(card, "cards.details_modal.title")
+        self.template = card["template"]
+        data = card["data"]
+        if self.template == "progress":
+            self.goal = self.field("cards.details_modal.goal", data.get("goal"), max_length=15)
+            self.unit = self.field("cards.details_modal.unit", data.get("unit"), max_length=30, required=False)
+            self.note = self.field("cards.details_modal.note", data.get("note"), max_length=120, required=False)
+        else:
+            self.caption = self.field("cards.details_modal.caption", data.get("caption"), max_length=80,
+                                      required=False)
+
+    async def on_submit(self, interaction):
+        import card_templates as ct
+        card = await self.fresh(interaction)
+        if not card:
+            return
+        data = card["data"]
+        problem = None
+        if self.template == "progress":
+            problem = ct.change_number(data, "goal", self.goal.value.lstrip("="))
+            data["unit"], data["note"] = self.unit.value.strip(), self.note.value.strip()
+        else:
+            data["caption"] = self.caption.value.strip()
+        await apply_change(interaction, card, problem)
+
+
+class TextModal(_CardModal):
+    def __init__(self, card):
+        super().__init__(card, "cards.text_modal.title")
+        import card_templates as ct
+        self.text = self.field("cards.text_modal.text", card["data"].get("text"), discord.TextStyle.paragraph,
+                               max_length=ct.MAX_TEXT, required=False)
+
+    async def on_submit(self, interaction):
+        import card_templates as ct
+        card = await self.fresh(interaction)
+        if card:
+            await apply_change(interaction, card, ct.set_text(card["data"], self.text.value))
+
+
+class RowModal(_CardModal):
+    def __init__(self, card):
+        super().__init__(card, "cards.row_modal.title")
+        self.who = self.field("cards.row_modal.who", max_length=40, required=False)
+        self.cells = self.field("cards.row_modal.cells", max_length=300)
+        self.cells.placeholder = " | ".join(card["data"]["columns"])[:100]
+
+    async def on_submit(self, interaction):
+        import card_templates as ct
+        card = await self.fresh(interaction)
+        if card:
+            await apply_change(interaction, card, ct.set_table(card["data"], self.who.value, self.cells.value))
+
+
+class ColumnsModal(_CardModal):
+    def __init__(self, card):
+        super().__init__(card, "cards.columns_modal.title")
+        self.names = self.field("cards.columns_modal.names", " | ".join(card["data"]["columns"]), max_length=200)
+
+    async def on_submit(self, interaction):
+        import card_templates as ct
+        card = await self.fresh(interaction)
+        if card:
+            await apply_change(interaction, card, ct.set_columns(card["data"], self.names.value))
+
+
 class TitleModal(Modal, title="НАЗВАНИЕ"):
     texts = "cards.title_modal"
     name = discord.ui.TextInput(label="Название картинки", max_length=60)
 
-    def __init__(self, card_id, current="", create=False):
+    def __init__(self, card_id, current="", create=False, template="rating"):
         super().__init__()
         self.card_id = card_id
         self.create = create
+        self.template = template
         self.name.default = current
 
     async def on_submit(self, interaction):
         title = self.name.value.strip()
         if self.create:
-            card = get_card(create_card(interaction.guild.id, interaction.user.id, title))
+            card = get_card(create_card(interaction.guild.id, interaction.user.id, title, self.template))
             core.audit(interaction, "card.created", "card", card["id"], title)
             await interaction.response.edit_message(embed=editor_embed(interaction, card),
                                                     view=CardEditorView(card["id"]))
@@ -509,7 +781,7 @@ class TitleModal(Modal, title="НАЗВАНИЕ"):
 
 def home_embed(interaction):
     cards = get_cards(interaction.guild.id)
-    lines = [t("cards.home.line", title=card["title"], count=len(card["data"]["rows"]),
+    lines = [t("cards.home.line", title=card["title"], kind=t(f"cards.template.{card['template']}"),
                where=f"<#{card['channel_id']}>" if card["message_id"] else t("cards.home.not_published"))
              for card in cards[:20]]
     return panel_embed(interaction, "cards.home", cards="\n".join(lines) or t("cards.home.empty"))
@@ -536,9 +808,22 @@ class CardsHome(PanelView):
             select.on_pick = picked
             self.add_item(select)
 
-    @discord.ui.button(label="Новый рейтинг", emoji="🏆", style=discord.ButtonStyle.success)
-    async def create_rating(self, interaction, button):
-        await interaction.response.send_modal(TitleModal(None, t("cards.rating.default_title"), create=True))
+    @discord.ui.button(label="Новая картинка", emoji="➕", style=discord.ButtonStyle.success)
+    async def create_card(self, interaction, button):
+        import card_templates as ct
+        view = PanelView(back_target=(core.screen(interaction), self), timeout=600)
+        select = discord.ui.Select(placeholder=t("cards.home.pick_template")[:150], options=[
+            discord.SelectOption(label=t(f"cards.template.{key}")[:100],
+                                 description=t(f"cards.template.{key}.about")[:100], value=key)
+            for key in ct.TEMPLATES])
+
+        async def picked(i):
+            key = select.values[0]
+            await i.response.send_modal(TitleModal(None, t(f"cards.template.{key}"), create=True, template=key))
+
+        select.callback = picked
+        view.add_item(select)
+        await interaction.response.edit_message(view=view)
 
 
 DYNAMIC_ITEMS = [CardEditButton]
