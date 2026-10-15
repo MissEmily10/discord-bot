@@ -13,7 +13,9 @@ embed_module.py
 можно обновить после правки, а кнопки в них постоянные и берут данные из БД.
 """
 
+import io
 import json
+import logging
 
 import discord
 
@@ -52,6 +54,8 @@ def can_manage_build(interaction, row):
         or core.is_owner(interaction)
         or core.level_value(get_user_level(interaction)) >= core.level_value("admin")
     )
+
+_log = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -161,6 +165,110 @@ def buttons_text(state):
             action = f"{action} → {(build[3] if build else '?')} #{raw['value']}"
         lines.append(t("buttons.builder.line", n=index, emoji=raw.get("emoji") or "", label=label, action=action))
     return "\n".join(lines) or t("buttons.builder.empty")
+
+
+# ============================================================
+# КАРТИНКА-ПРЕДПРОСМОТР
+# ============================================================
+
+def state_source(state):
+    """Несохранённый редактор как источник build'а — то же, что load_source("b", …)."""
+    from actions import inherit_style
+    from database import get_build_settings
+    embeds = list(state.embeds)
+    settings = get_build_settings(state.build_id) if state.build_id else {}
+    parent_id = settings.get("parent_id")
+    if parent_id and parent_id != state.build_id:
+        parent = get_message_build(parent_id)
+        if parent and parent[1] == state.guild_id:
+            embeds = inherit_style(embeds, _json(parent[5], []))
+    return {
+        "guild_id": state.guild_id, "owner_id": state.owner_id, "content": state.content,
+        "embeds": embeds, "buttons": state.buttons, "interactive": state.interactive,
+        "row": None, "settings": settings, "layout": state.layout,
+    }
+
+
+def preview_labels():
+    return {key: t(f"preview.{key}") for key in (
+        "bot_tag", "time", "image_missing", "select", "unknown_user", "unknown_role",
+        "unknown_channel", "truncated",
+    )}
+
+
+async def picture_file(interaction, parts, theme):
+    """-> discord.File с картинкой или None (ошибка уже показана)."""
+    import live
+    import preview_render
+    me = interaction.client.user
+    author = {"name": getattr(me, "display_name", None) or "Bot",
+              "avatar": getattr(getattr(me, "display_avatar", None), "url", None),
+              "time": live.now_local().strftime("%H:%M")}
+    try:
+        png = await preview_render.render_parts(parts, guild=interaction.guild, author=author,
+                                                theme=theme, labels=preview_labels())
+    except Exception as error:  # Pillow/битая картинка — не роняем панель
+        _log.exception("preview render failed")
+        await reply(interaction, "preview.error", error=type(error).__name__)
+        return None
+    return discord.File(io.BytesIO(png), filename="preview.png")
+
+
+async def send_picture_preview(interaction, parts, real_parts=False):
+    """Картинка, как сообщение выглядит в Discord, — отдельным скрытым сообщением."""
+    if not parts:
+        await say(interaction, "embed.build_empty")
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    file = await picture_file(interaction, parts, "dark")
+    if file is None:
+        return
+    view = PicturePreviewView(parts, "dark", real_parts)
+    await interaction.followup.send(t("preview.caption"), file=file, view=view, ephemeral=True)
+
+
+class PicturePreviewView(discord.ui.View):
+    """Под картинкой: другая тема Discord и (для сохранённых) настоящие сообщения."""
+
+    def __init__(self, parts, theme, real_parts=False):
+        super().__init__(timeout=600)
+        self.parts = parts
+        self.theme = theme
+        other = "light" if theme == "dark" else "dark"
+        toggle = discord.ui.Button(label=t(f"preview.theme_{other}"), emoji="☀️" if other == "light" else "🌙",
+                                   style=discord.ButtonStyle.secondary)
+        toggle.callback = self.switch_theme
+        self.add_item(toggle)
+        if real_parts:
+            real = discord.ui.Button(label=t("preview.real"), emoji="💬", style=discord.ButtonStyle.secondary)
+            real.callback = self.send_real
+            self.add_item(real)
+        self.real_parts = real_parts
+
+    async def switch_theme(self, interaction):
+        await interaction.response.defer()
+        theme = "light" if self.theme == "dark" else "dark"
+        file = await picture_file(interaction, self.parts, theme)
+        if file is None:
+            return
+        await interaction.edit_original_response(
+            attachments=[file], view=PicturePreviewView(self.parts, theme, self.real_parts))
+
+    async def send_real(self, interaction):
+        # Ровно так, как сообщение уйдёт в канал: каждая часть отдельно.
+        try:
+            for index, part in enumerate(self.parts):
+                send = interaction.response.send_message if index == 0 else interaction.followup.send
+                await send(ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), **part)
+        except discord.HTTPException as error:
+            await reply(interaction, "embed.preview_error", error=error)
+
+
+async def preview_state(interaction, state):
+    import live
+    parts = await live.parts_for(interaction.guild, state.build_id or 0, user=interaction.user,
+                                 data=state_source(state))
+    await send_picture_preview(interaction, parts)
 
 
 # ============================================================
@@ -405,7 +513,7 @@ class EmbedFieldSelect(discord.ui.Select):
 
 class EmbedEditorView(PanelView):
     texts = "embed.editor"
-    button_order = ('basic', 'meta', 'media', 'add_field', 'confirm', 'author_footer', 'timestamp', 'visibility', 'delete_embed')
+    button_order = ('basic', 'meta', 'media', 'add_field', 'confirm', 'preview', 'author_footer', 'timestamp', 'visibility', 'delete_embed')
 
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
@@ -450,6 +558,10 @@ class EmbedEditorView(PanelView):
     @discord.ui.button(label="Название и текст", emoji="📝", style=discord.ButtonStyle.primary, row=2)
     async def meta(self, interaction, button):
         await interaction.response.send_modal(BuildMetaModal(self.state, self))
+
+    @discord.ui.button(label="Превью", emoji="🖼️", style=discord.ButtonStyle.secondary, row=2)
+    async def preview(self, interaction, button):
+        await preview_state(interaction, self.state)
 
     @discord.ui.button(label="Время", emoji="🕒", style=discord.ButtonStyle.secondary, row=2)
     async def timestamp(self, interaction, button):
@@ -715,7 +827,7 @@ class BuildMetaModal(Modal, title="НАЗВАНИЕ И ТЕКСТ"):
 
 class InteractiveHubView(PanelView):
     texts = "embed.interactive"
-    button_order = ('send_now', 'buttons', 'list', 'form', 'save', 'native', 'clear_interactive')
+    button_order = ('send_now', 'preview', 'buttons', 'list', 'save', 'form', 'native', 'clear_interactive')
 
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
@@ -775,6 +887,10 @@ class InteractiveHubView(PanelView):
         add_webhook_option(interaction, view,
                            lambda i, channel, name, avatar: send_from_editor(i, self.state, [], self, (channel, name, avatar)))
         await interaction.response.edit_message(embed=panel_embed(interaction, "embed.send_pick"), view=view)
+
+    @discord.ui.button(label="Превью", emoji="🖼️", style=discord.ButtonStyle.secondary, row=1)
+    async def preview(self, interaction, button):
+        await preview_state(interaction, self.state)
 
     @discord.ui.button(label="Сохранить", emoji="💾", style=discord.ButtonStyle.secondary, row=1)
     async def save(self, interaction, button):
@@ -1474,25 +1590,13 @@ class MessageBuildFinalView(PanelView):
             return None
         return row
 
-    @discord.ui.button(label="Предпросмотр", emoji="👁️", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Предпросмотр", emoji="🖼️", style=discord.ButtonStyle.secondary)
     async def preview(self, interaction, button):
         if not await self._row(interaction):
             return
-        # Ровно так, как сообщение уйдёт в канал: каждый embed отдельно.
         import live
         parts = await live.parts_for(interaction.guild, self.build_id, user=interaction.user)
-        if not parts:
-            await say(interaction, "embed.build_empty")
-            return
-        try:
-            for index, part in enumerate(parts):
-                send = interaction.response.send_message if index == 0 else interaction.followup.send
-                await send(ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), **part)
-        except discord.HTTPException as error:
-            if interaction.response.is_done():
-                await interaction.followup.send(t("embed.preview_error", error=error), ephemeral=True)
-            else:
-                await say(interaction, "embed.preview_error", error=error)
+        await send_picture_preview(interaction, parts, real_parts=True)
 
     @discord.ui.button(label="Отправить", emoji="📤", style=discord.ButtonStyle.success)
     async def send(self, interaction, button):

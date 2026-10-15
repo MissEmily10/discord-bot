@@ -31,6 +31,7 @@ for name in ("WEB_PANEL_PORT", "SERVER_PORT", "HF_TOKEN"):
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import discord  # noqa: E402
+from PIL import Image as PILImage  # noqa: E402
 
 import database  # noqa: E402
 import core  # noqa: E402
@@ -1224,6 +1225,79 @@ class WebhookSendTests(unittest.TestCase):
             self.assertIn("view", log[1][1])           # кнопки уходят и через вебхук
             self.assertEqual(log[-1], ("delete", None))  # вебхук сразу удалён
             self.assertEqual(database.get_sent_instances(bid), [])  # такие сообщения не обновляются
+
+        run(check())
+
+
+class PreviewPictureTests(unittest.TestCase):
+    """Картинка-предпросмотр: разбор разметки и эмодзи, рисование, кнопки в конструкторе."""
+
+    def test_emoji_and_markdown(self):
+        import preview_render as pr
+        codes = [pr.twemoji_code(seq) for _, _, seq in pr.emoji_matches("Привет 👋 ★ ✓ ✅ ❤️ 👨‍👩‍👧 🇷🇺 1️⃣ 👍🏽")]
+        self.assertEqual(codes, ["1f44b", "2705", "2764", "1f468-200d-1f469-200d-1f467", "1f1f7-1f1fa",
+                                 "31-20e3", "1f44d-1f3fd"])
+        pieces = pr.parse_inline("**жир** <@123456789012345678> <:pepe:123456789012345678> 2*3",
+                                 {("user", 123456789012345678): "Эмилия"}, pr.DEFAULT_LABELS)
+        self.assertIn("bold", pieces[0]["style"])
+        self.assertEqual([p["text"] for p in pieces if p["kind"] == "pill"], ["@Эмилия"])
+        self.assertEqual([p["id"] for p in pieces if p["kind"] == "cemoji"], ["123456789012345678"])
+        self.assertTrue("".join(p["text"] for p in pieces if p["kind"] == "text").endswith("2*3"))
+
+    def test_render_split_is_taller_than_single(self):
+        import preview_render as pr
+        data = {"content": "Текст 👋", "embeds": [
+            {"title": "Первый", "description": "# Заголовок\n> цитата\n```\nкод\n```",
+             "fields": [{"name": "a", "value": "1", "inline": True}, {"name": "b", "value": "2", "inline": True}],
+             "image": "https://example.com/missing.png", "footer_text": "подпись", "timestamp": True},
+            {"title": "Второй", "thumbnail": "https://example.com/t.png"},
+        ], "buttons": [{"label": "Сайт", "style": "link", "value": "https://example.com"}],
+            "interactive": None, "layout": "single"}
+        heights = {}
+        for layout in ("single", "split"):
+            parts = actions.message_parts(0, None, dict(data, layout=layout))
+            png = pr.render(pr.messages_from_parts(parts), {"name": "Бот", "time": "12:00"}, theme="light")
+            picture = PILImage.open(io.BytesIO(png))
+            self.assertEqual(picture.width, pr.WIDTH * pr.SCALE)
+            heights[layout] = picture.height
+        self.assertGreater(heights["split"], heights["single"])
+
+    def test_editor_and_saved_build_send_picture(self):
+        import embed_module as em
+        import preview_render as pr
+
+        async def no_network(urls):
+            return {}
+
+        async def check():
+            original = pr.fetch_assets
+            pr.fetch_assets = no_network
+            try:
+                g = make_guild()
+                state = em.EmbedState(GUILD, STAFF)
+                state.embeds = [{"title": "Привет", "description": "**текст**"}, {"title": "Второй"}]
+                state.buttons = [{"label": "Кнопка", "style": "primary", "action_key": "message.send", "value": "x"}]
+                sent = []
+                for view in (em.EmbedEditorView(state, back_target=None), em.InteractiveHubView(state, back_target=None)):
+                    i = FakeInteraction(g, g.members[STAFF])
+
+                    async def capture(content=None, **kwargs):
+                        sent.append(kwargs)
+
+                    i.followup = types.SimpleNamespace(send=capture)
+                    await view.preview.callback(i)
+                self.assertEqual(len(sent), 2)
+                self.assertTrue(all(item["file"].filename == "preview.png" for item in sent))
+                self.assertEqual(sent[0]["file"].fp.read(8), b"\x89PNG\r\n\x1a\n")
+                labels = [c.label for c in sent[0]["view"].children]
+                self.assertEqual(labels, ["Светлая тема"])
+                # пустой редактор — без картинки, с объяснением
+                empty = em.EmbedState(GUILD, STAFF)
+                i = FakeInteraction(g, g.members[STAFF])
+                await em.EmbedEditorView(empty, back_target=None).preview.callback(i)
+                self.assertEqual(i.last, core.t("embed.build_empty"))
+            finally:
+                pr.fetch_assets = original
 
         run(check())
 
