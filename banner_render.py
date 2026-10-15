@@ -28,6 +28,7 @@ BANNER_FONT_DIR = os.path.join(FONT_DIR, "banner")
 FONTS = {
     "coolvetica": (("Coolvetica-Regular", "Coolvetica Rg", "coolvetica rg", "Coolvetica"), "Inter-Bold.otf"),
     "dunkin": (("DunkinSans-Regular", "Dunkin Sans", "DunkinSans", "dunkin"), "Inter-SemiBold.otf"),
+    "drunk": (("DrunkFonts-Regular", "DRUNK FONTS", "Drunk Fonts", "DrunkFonts", "drunk"), "Inter-Bold.otf"),
 }
 
 # Координаты — из макета (1200×200): левый край текста, центр строки по высоте.
@@ -40,10 +41,13 @@ TEMPLATES = {
         "text": "      an answer to your {role} form", "font": "dunkin", "size": 22,
         "x": -27, "y": 147 + 11, "max_width": 700, "color": (90, 82, 84),
     },
-    "forms.public_card": {
-        "text": "{name}", "font": "coolvetica", "size": 166, "min_size": 56,
-        "x": 40, "y": 36 + 58, "two_line_y": 116, "max_width": 670, "color": (32, 28, 30), "lower": True,
-    },
+    "forms.public_card": [
+        # надпись сверху — своя у пака («набор! набор!…», «напиши нам!…»), у формы можно задать свою
+        {"text": "{tagline}", "font": "drunk", "size": 22, "x": 48, "y": 31 + 11, "max_width": 660,
+         "color": (90, 82, 84)},
+        {"text": "{name}", "font": "coolvetica", "size": 166, "min_size": 56,
+         "x": 40, "y": 36 + 58, "two_line_y": 116, "max_width": 670, "color": (32, 28, 30), "lower": True},
+    ],
 }
 
 _font_cache = {}
@@ -119,18 +123,20 @@ def _cut(text, font, width):
 
 def render(screen, **values):
     """-> PNG (bytes) баннера с подставленным текстом."""
-    spec = TEMPLATES[screen]
+    layers = TEMPLATES[screen]
     picture = Image.open(base_path(screen)).convert("RGBA")
     draw = ImageDraw.Draw(picture)
-    text = spec["text"].format_map({k: str(v) for k, v in values.items()})
-    if spec.get("lower"):
-        text = text.lower()
-    lines, font = fit_text(spec, text)
-    step = font.size * 0.8
-    center = spec.get("two_line_y", spec["y"]) if len(lines) > 1 else spec["y"]
-    top = center - step * (len(lines) - 1) / 2
-    for number, line in enumerate(lines):
-        draw.text((spec["x"], top + number * step), line, font=font, fill=spec["color"], anchor="lm")
+    values = {"tagline": core.t("packs.tagline_default"), **values}
+    for spec in layers if isinstance(layers, list) else [layers]:
+        text = spec["text"].format_map({k: str(v) for k, v in values.items()})
+        if spec.get("lower"):
+            text = text.lower()
+        lines, font = fit_text(spec, text)
+        step = font.size * 0.8
+        center = spec.get("two_line_y", spec["y"]) if len(lines) > 1 else spec["y"]
+        top = center - step * (len(lines) - 1) / 2
+        for number, line in enumerate(lines):
+            draw.text((spec["x"], top + number * step), line, font=font, fill=spec["color"], anchor="lm")
     output = io.BytesIO()
     picture.save(output, "PNG", optimize=True)
     return output.getvalue()

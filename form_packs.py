@@ -46,6 +46,11 @@ def ensure_tables():
     connection.execute("""CREATE TABLE IF NOT EXISTS form_meta (
         form_id INTEGER PRIMARY KEY, name_en TEXT, emoji TEXT
     )""")
+    # надпись сверху баннера карточки: у пака и (по желанию) своя у формы в паке
+    for table in ("form_packs", "form_pack_items"):
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if "tagline" not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN tagline TEXT NOT NULL DEFAULT ''")
     connection.commit()
     connection.close()
 
@@ -66,18 +71,19 @@ def get_packs(guild_id):
 
 
 def get_pack(pack_id):
-    return _query("SELECT id, guild_id, owner_id, name, intro FROM form_packs WHERE id = ?", (pack_id,), one=True)
+    """-> (id, guild_id, owner_id, name, intro, tagline)"""
+    return _query("SELECT id, guild_id, owner_id, name, intro, tagline FROM form_packs WHERE id = ?", (pack_id,), one=True)
 
 
-def save_pack(guild_id, owner_id, name, intro=""):
+def save_pack(guild_id, owner_id, name, intro="", tagline=""):
     now = int(time.time())
-    return _query("INSERT INTO form_packs (guild_id, owner_id, name, intro, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                  (guild_id, owner_id, name, intro, now, now), write=True)
+    return _query("INSERT INTO form_packs (guild_id, owner_id, name, intro, tagline, created_at, updated_at) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?)", (guild_id, owner_id, name, intro, tagline, now, now), write=True)
 
 
-def update_pack(pack_id, name, intro):
-    _query("UPDATE form_packs SET name = ?, intro = ?, updated_at = ? WHERE id = ?",
-           (name, intro, int(time.time()), pack_id), write=True)
+def update_pack(pack_id, name, intro, tagline=""):
+    _query("UPDATE form_packs SET name = ?, intro = ?, tagline = ?, updated_at = ? WHERE id = ?",
+           (name, intro, tagline, int(time.time()), pack_id), write=True)
 
 
 def delete_pack(pack_id):
@@ -98,18 +104,26 @@ def pack_items(pack_id):
 
 
 def pack_item(pack_id, form_id):
-    return _query("SELECT short_description FROM form_pack_items WHERE pack_id = ? AND form_id = ?",
+    """-> (short_description, tagline) или None."""
+    return _query("SELECT short_description, tagline FROM form_pack_items WHERE pack_id = ? AND form_id = ?",
                   (pack_id, form_id), one=True)
 
 
-def set_item(pack_id, form_id, short_description):
+def set_item(pack_id, form_id, short_description, tagline=""):
     if pack_item(pack_id, form_id):
-        _query("UPDATE form_pack_items SET short_description = ? WHERE pack_id = ? AND form_id = ?",
-               (short_description, pack_id, form_id), write=True)
+        _query("UPDATE form_pack_items SET short_description = ?, tagline = ? WHERE pack_id = ? AND form_id = ?",
+               (short_description, tagline, pack_id, form_id), write=True)
         return
     position = len(_query("SELECT form_id FROM form_pack_items WHERE pack_id = ?", (pack_id,)))
-    _query("INSERT INTO form_pack_items (pack_id, form_id, position, short_description) VALUES (?, ?, ?, ?)",
-           (pack_id, form_id, position, short_description), write=True)
+    _query("INSERT INTO form_pack_items (pack_id, form_id, position, short_description, tagline) VALUES (?, ?, ?, ?, ?)",
+           (pack_id, form_id, position, short_description, tagline), write=True)
+
+
+def tagline_for(pack_id, form_id):
+    """Надпись сверху баннера: своя у формы -> у пака -> общая из каталога."""
+    item = pack_item(pack_id, form_id) if pack_id else None
+    pack = get_pack(pack_id) if pack_id else None
+    return (item and item[1]) or (pack and pack[5]) or t("packs.tagline_default")
 
 
 def remove_item(pack_id, form_id):
@@ -296,10 +310,10 @@ class FormPackSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"rb:fp
                 or not pack_item(self.pack_id, form_id):
             await reply(interaction, "packs.card.gone")
             return
-        await show_form_card(interaction, form_id)
+        await show_form_card(interaction, form_id, self.pack_id)
 
 
-async def show_form_card(interaction, form_id):
+async def show_form_card(interaction, form_id, pack_id=None):
     """Баннер с названием должности + описание роли + «Подать заявку» (видно только тебе)."""
     from banner_render import banner_parts
     from extended_modules import FormApplyButton
@@ -307,7 +321,8 @@ async def show_form_card(interaction, form_id):
     if not form or interaction.guild is None or form[1] != interaction.guild.id:
         await reply(interaction, "forms.not_found")
         return
-    banner, file = banner_parts(interaction, "forms.public_card", name=form[3])
+    banner, file = banner_parts(interaction, "forms.public_card", name=form[3],
+                                tagline=tagline_for(pack_id, form_id))
     card = panel_embed(interaction, "packs.card", title=form[3],
                        description=form[4] or t("forms.no_description"), hints=False)
     view = discord.ui.View(timeout=None)
@@ -362,6 +377,7 @@ def pack_embed(interaction, pack):
         lines.append(t("packs.pack.line", emoji=get_meta(form[0])[1] or "▫️", name=form[3],
                        name_en=english_name(form), description=description or t("packs.pack.no_description")))
     return panel_embed(interaction, "packs.pack", title=pack[3], intro=pack[4] or t("packs.pack.no_intro"),
+                       tagline=pack[5] or t("packs.tagline_default"),
                        forms="\n".join(lines) or t("packs.pack.empty"), max=MAX_ITEMS)
 
 
@@ -479,6 +495,7 @@ class PackModal(Modal, title="ПАК ФОРМ"):
     name = discord.ui.TextInput(label="Название пака", max_length=100)
     intro = discord.ui.TextInput(label="Текст сообщения", style=discord.TextStyle.paragraph,
                                  required=False, max_length=1500)
+    tagline = discord.ui.TextInput(label="Надпись сверху баннера", required=False, max_length=80)
 
     def __init__(self, pack, back_target=None):
         super().__init__()
@@ -487,17 +504,18 @@ class PackModal(Modal, title="ПАК ФОРМ"):
         if pack:
             self.name.default = pack[3]
             self.intro.default = pack[4]
+            self.tagline.default = pack[5]
 
     async def on_submit(self, interaction):
-        name, intro = self.name.value.strip(), self.intro.value.strip()
+        name, intro, tagline = self.name.value.strip(), self.intro.value.strip(), self.tagline.value.strip()
         if self.pack:
             if not can_manage(interaction, get_pack(self.pack[0])):
                 await reply(interaction, "packs.denied")
                 return
-            update_pack(self.pack[0], name, intro)
+            update_pack(self.pack[0], name, intro, tagline)
             pack_id = self.pack[0]
         else:
-            pack_id = save_pack(interaction.guild.id, interaction.user.id, name, intro)
+            pack_id = save_pack(interaction.guild.id, interaction.user.id, name, intro, tagline)
             core.audit(interaction, "form_pack.created", "form_pack", pack_id, name)
         await open_pack(interaction, pack_id, back_target=self.back_target)
 
@@ -506,6 +524,7 @@ class PackItemModal(Modal, title="ФОРМА В ПАКЕ"):
     texts = "packs.item_modal"
     description = discord.ui.TextInput(label="Описание в меню", max_length=100, required=False)
     name_en = discord.ui.TextInput(label="Должность по-английски", max_length=40, required=False)
+    tagline = discord.ui.TextInput(label="Своя надпись сверху баннера", max_length=80, required=False)
 
     def __init__(self, pack_id, form, back_target=None):
         super().__init__()
@@ -514,6 +533,7 @@ class PackItemModal(Modal, title="ФОРМА В ПАКЕ"):
         self.back_target = back_target
         current = pack_item(pack_id, form[0])
         self.description.default = (current[0] if current else (form[4] or ""))[:100]
+        self.tagline.default = current[1] if current else ""
         # пусто — переведу сам после «Отправить»; известную должность подставляем сразу
         known = re.sub(r"\s+", " ", form[3].strip().lower())
         self.name_en.default = get_meta(form[0])[0] or ROLE_WORDS.get(known) or ""
@@ -527,7 +547,7 @@ class PackItemModal(Modal, title="ФОРМА В ПАКЕ"):
         name_en = self.name_en.value.strip().lower() or await to_english(self.form[3])
         emoji = None if get_meta(self.form[0])[1] else pick_emoji(interaction.guild.id)
         set_meta(self.form[0], name_en=name_en, emoji=emoji)
-        set_item(self.pack_id, self.form[0], self.description.value.strip())
+        set_item(self.pack_id, self.form[0], self.description.value.strip(), self.tagline.value.strip())
         await open_pack(interaction, self.pack_id, back_target=self.back_target, edit=True)
 
 

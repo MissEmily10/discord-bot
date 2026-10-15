@@ -3,6 +3,7 @@
 Сюда — файлы шрифтов из макетов баннеров (бот дописывает ими название должности):
 
 - **Coolvetica** (Regular) — крупное название на карточке формы. Файл назови `Coolvetica-Regular.otf` (или `.ttf`).
+- **DRUNK FONTS** (Regular) — надпись сверху карточки формы («набор! набор!…»). Файл: `DrunkFonts-Regular.otf`.
 - **Dunkin Sans** (Regular) — мелкая строка «your … form has been». Файл: `DunkinSans-Regular.otf` (или `.ttf`).
 
 Пока файлов нет, бот рисует похожим Inter — работает, но не один в один с Figma.
