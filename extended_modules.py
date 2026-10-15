@@ -424,7 +424,7 @@ class SubmissionModal(discord.ui.Modal):
             await say(i, "forms.destination_missing")
             return
         from database import get_form_status, set_form_status, count_form_submissions
-        closed, limit = get_form_status(self.row[0])
+        closed, limit, _ = get_form_status(self.row[0])
         if closed:  # набор закрыли, пока окно было открыто
             await say(i, "forms.closed")
             return
@@ -549,6 +549,8 @@ async def decide(i, sid, status, reason, message, panel_back=None):
     from form_packs import english_name
     role_en = english_name(form)
     color = discord.Color.green() if status == "approved" else core.danger_color()
+    # ЛС заявителю — до показа итога, чтобы проверяющий видел, дошло ли
+    result += "\n" + await notify_applicant(i, row, form, status, reason, role_en)
 
     async def update_card(card_message, respond):
         """Карточка в канале проверки: итог полем, баннер «одобрена/отклонена», без кнопок."""
@@ -585,22 +587,34 @@ async def decide(i, sid, status, reason, message, panel_back=None):
         panel.color = color
         await i.response.edit_message(embed=panel, view=PanelView(back_target=panel_back))
 
-    if form[16]:  # уведомить заявителя — карточкой со своим баннером
-        applicant = i.guild.get_member(row[3])
-        if applicant is not None:
-            key = "forms.dm.approved" if status == "approved" else "forms.dm.rejected"
-            card = panel_embed(i, f"forms.{status}", hints=False, danger=status != "approved",
-                               description=t(key, form=form[3], guild=i.guild.name,
-                                             reason=reason or t("forms.dm.no_reason")))
-            card.banner_url = None  # баннер — свой, с должностью
-            if status == "approved":
-                card.color = discord.Color.green()
-            dm_banner, dm_file = banner_parts(i, f"forms.{status}", role=role_en)
-            try:
-                await applicant.send(embeds=[dm_banner, card] if dm_banner else [card],
-                                     **({"file": dm_file} if dm_file else {}))
-            except discord.HTTPException:
-                pass  # закрытые ЛС — не ошибка
+
+async def notify_applicant(i, row, form, status, reason, role_en):
+    """Карточка с баннером в ЛС заявителю. -> строка для проверяющего: дошло ли."""
+    from banner_render import banner_parts
+    from database import form_dm_enabled
+    if not form_dm_enabled(form):
+        return t("forms.dm_note.off")
+    applicant = i.guild.get_member(row[3])
+    if applicant is None:
+        try:
+            applicant = await i.guild.fetch_member(row[3])
+        except discord.HTTPException:
+            return t("forms.dm_note.left")
+    key = "forms.dm.approved" if status == "approved" else "forms.dm.rejected"
+    card = panel_embed(i, f"forms.{status}", hints=False, danger=status != "approved",
+                       description=t(key, form=form[3], guild=i.guild.name, reason=reason or t("forms.dm.no_reason")))
+    card.banner_url = None  # баннер — свой, с должностью
+    if status == "approved":
+        card.color = discord.Color.green()
+    dm_banner, dm_file = banner_parts(i, f"forms.{status}", role=role_en)
+    try:
+        await applicant.send(embeds=[dm_banner, card] if dm_banner else [card], **({"file": dm_file} if dm_file else {}))
+    except discord.Forbidden:
+        return t("forms.dm_note.closed")
+    except discord.HTTPException as error:
+        core._log.warning("ЛС заявителю не отправлено: %s", error)
+        return t("forms.dm_note.closed")
+    return t("forms.dm_note.sent")
 
 
 class FormStartView(PanelView):

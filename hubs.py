@@ -166,10 +166,12 @@ def submissions_embed(interaction, form):
     pending = get_form_submissions(form[0])
     lines = [t("forms.review_list.line", id=sid, user=f"<@{applicant}>", when=f"<t:{created}:R>")
              for sid, applicant, _, created in pending[:15]]
-    closed, limit = get_form_status(form[0])
+    from database import form_dm_enabled
+    closed, limit, _ = get_form_status(form[0])
     status = t("forms.status_line.closed" if closed else "forms.status_line.open",
                count=count_form_submissions(form[0]),
                limit=t("forms.status_line.limit", limit=limit) if limit else "")
+    status += "\n" + t("forms.status_line.dm_on" if form_dm_enabled(form) else "forms.status_line.dm_off")
     return panel_embed(interaction, "forms.review_list", form=form[3],
                        list=f"{status}\n\n" + ("\n".join(lines) or t("forms.review_list.empty")))
 
@@ -227,6 +229,15 @@ class SubmissionListView(PanelView):
     async def limit(self, interaction, button):
         if await self._form(interaction):
             await interaction.response.send_modal(FormLimitModal(self))
+
+    @discord.ui.button(label="ЛС заявителю", emoji="✉️", style=discord.ButtonStyle.secondary, row=2)
+    async def dm(self, interaction, button):
+        from database import form_dm_enabled
+        form = await self._form(interaction)
+        if not form:
+            return
+        set_form_status(self.form_id, dm_off=form_dm_enabled(form))  # переключить
+        await self.refresh(interaction, form)
 
 
 class FormLimitModal(core.Modal, title="ЛИМИТ ЗАЯВОК"):

@@ -2,7 +2,7 @@
 Прикрепить набор кнопок к уже существующему сообщению.
 
 Discord даёт боту менять только свои сообщения, поэтому:
-- сообщение бота — кнопки добавляются к нему (в свободные ряды, старые кнопки остаются);
+- сообщение бота — кнопки набора ставятся под него, старые кнопки убираются;
 - чужое сообщение (твоё, участника, другого бота) — бот переотправляет его с
   кнопками: от своего имени или от имени автора (временный вебхук: имя и
   аватарка автора, потом вебхук удаляется). Оригинал удаляется, если можно.
@@ -62,18 +62,8 @@ class AttachModal(Modal, title="ПРИКРЕПИТЬ К СООБЩЕНИЮ"):
 
 
 def merged_view(message, view):
-    """Старые кнопки сообщения + набор в свободных рядах. None — места не хватает (5 рядов)."""
-    rows_used = len(message.components)
-    new_rows = sorted({item.row or 0 for item in view.children})
-    if rows_used + len(new_rows) > 5:
-        return None
-    merged = discord.ui.View.from_message(message, timeout=None) if rows_used else discord.ui.View(timeout=None)
-    shift = {row: rows_used + n for n, row in enumerate(new_rows)}
-    for item in list(view.children):
-        view.remove_item(item)
-        item.row = shift[item.row or 0]
-        merged.add_item(item)
-    return merged
+    """Кнопки набора ВМЕСТО старых кнопок сообщения (старые убираются)."""
+    return view
 
 
 async def attach_to_own(interaction, message, view):

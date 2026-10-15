@@ -1616,27 +1616,32 @@ def _ensure_form_status():
     connection.execute("""CREATE TABLE IF NOT EXISTS form_status (
         form_id INTEGER PRIMARY KEY, closed INTEGER NOT NULL DEFAULT 0, max_submissions INTEGER
     )""")
+    if "dm_off" not in {row[1] for row in connection.execute("PRAGMA table_info(form_status)")}:
+        connection.execute("ALTER TABLE form_status ADD COLUMN dm_off INTEGER")  # NULL — как в настройках формы
     connection.commit()
     connection.close()
 
 
 def get_form_status(form_id):
-    """-> (закрыт ли набор, лимит заявок или None)."""
+    """-> (закрыт ли набор, лимит заявок или None, выключены ли ЛС заявителю)."""
     _ensure_form_status()
     connection = get_connection()
-    row = connection.execute("SELECT closed, max_submissions FROM form_status WHERE form_id = ?", (form_id,)).fetchone()
+    row = connection.execute("SELECT closed, max_submissions, dm_off FROM form_status WHERE form_id = ?",
+                             (form_id,)).fetchone()
     connection.close()
-    return (bool(row[0]), row[1]) if row else (False, None)
+    return (bool(row[0]), row[1], None if row[2] is None else bool(row[2])) if row else (False, None, None)
 
 
-def set_form_status(form_id, closed=None, max_submissions=False):
-    """closed=None — не менять; max_submissions=False — не менять, None — без лимита."""
-    old_closed, old_max = get_form_status(form_id)
+def set_form_status(form_id, closed=None, max_submissions=False, dm_off=None):
+    """closed/dm_off=None — не менять; max_submissions=False — не менять, None — без лимита."""
+    old_closed, old_max, old_dm_off = get_form_status(form_id)
     closed = old_closed if closed is None else bool(closed)
+    dm_off = old_dm_off if dm_off is None else bool(dm_off)
+    dm_off = None if dm_off is None else int(dm_off)
     max_submissions = old_max if max_submissions is False else max_submissions
     connection = get_connection()
-    connection.execute("INSERT OR REPLACE INTO form_status (form_id, closed, max_submissions) VALUES (?, ?, ?)",
-                       (form_id, int(closed), max_submissions))
+    connection.execute("INSERT OR REPLACE INTO form_status (form_id, closed, max_submissions, dm_off) VALUES (?, ?, ?, ?)",
+                       (form_id, int(closed), max_submissions, dm_off))
     connection.commit()
     connection.close()
 
@@ -1659,6 +1664,12 @@ def get_submission_card(submission_id):
                              (submission_id,)).fetchone()
     connection.close()
     return row
+
+
+def form_dm_enabled(form):
+    """Писать ли заявителю в ЛС: переключатель в /forms, иначе — настройка из конструктора формы."""
+    dm_off = get_form_status(form[0])[2]
+    return (not dm_off) if dm_off is not None else bool(form[16])
 
 
 def count_form_submissions(form_id):

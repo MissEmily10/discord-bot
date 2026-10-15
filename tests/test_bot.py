@@ -1734,7 +1734,7 @@ class FormClosingTests(unittest.TestCase):
         modal = SubmissionModal(database.get_form(form_id))
         modal.answer_inputs[0]._value = "20"
         run(modal.on_submit(FakeInteraction(g, g.members[MEMBER])))
-        self.assertEqual(database.get_form_status(form_id), (True, 1))
+        self.assertEqual(database.get_form_status(form_id)[:2], (True, 1))
 
 
 class ReviewFromPanelTests(unittest.TestCase):
@@ -1773,6 +1773,28 @@ class ReviewFromPanelTests(unittest.TestCase):
         self.assertNotIn("{status}", result)
         self.assertIn("Одобрена", result)
         self.assertNotIn("{", shown[0]["embed"].description or "")
+
+
+class BotProfileTests(unittest.TestCase):
+    def test_owner_sets_server_profile(self):
+        import access_module
+        g = make_guild()
+        edits = []
+
+        async def edit(**kwargs):
+            edits.append(kwargs)
+
+        g.me.edit = edit
+        modal = access_module.BotProfileModal(g.me)
+        modal.nick._value = "Purr"
+        modal.bio._value = "мурр"
+        owner = FakeInteraction(g, g.members[OWNER])
+        run(modal.on_submit(owner))
+        self.assertEqual(edits[0]["nick"], "Purr")
+        self.assertEqual(edits[0]["bio"], "мурр")
+        staff = FakeInteraction(g, g.members[STAFF])
+        run(modal.on_submit(staff))
+        self.assertEqual(len(edits), 1)  # не владельцу — нельзя
 
 
 class HintsTests(unittest.TestCase):

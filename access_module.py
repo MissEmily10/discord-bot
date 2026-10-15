@@ -715,6 +715,60 @@ class DesignView(PanelView):
             reset_setting(key)
         await interaction.response.edit_message(embed=design_embed(interaction), view=DesignView())
 
+    @discord.ui.button(label="Профиль бота", emoji="🪪", style=discord.ButtonStyle.primary)
+    async def profile(self, interaction, button):
+        if await ensure_owner(interaction):
+            await interaction.response.send_modal(BotProfileModal(interaction.guild.me))
+
+
+PROFILE_IMAGE_MAX = 10 * 1024 * 1024
+
+
+class BotProfileModal(discord.ui.Modal):
+    """
+    Как бот выглядит на ЭТОМ сервере: ник, «обо мне», аватарка и баннер профиля
+    (Discord разрешает ботам свой профиль на каждом сервере). Пустая картинка —
+    не менять; «-» в тексте — убрать.
+    """
+
+    def __init__(self, me):
+        super().__init__(title=t("bot_profile.title")[:45])
+        self.nick = discord.ui.TextInput(required=False, max_length=32, default=(getattr(me, "nick", None) or "")[:32] or None)
+        self.bio = discord.ui.TextInput(required=False, max_length=190, style=discord.TextStyle.paragraph,
+                                        placeholder=t("bot_profile.bio.placeholder")[:100])
+        self.avatar = discord.ui.FileUpload(required=False, max_values=1)
+        self.banner = discord.ui.FileUpload(required=False, max_values=1)
+        for key, component in (("nick", self.nick), ("bio", self.bio), ("avatar", self.avatar), ("banner", self.banner)):
+            self.add_item(discord.ui.Label(text=t(f"bot_profile.{key}")[:45],
+                                           description=t(f"bot_profile.{key}_help")[:100], component=component))
+
+    async def on_submit(self, interaction):
+        if not await ensure_owner(interaction):
+            return
+        changes = {}
+        nick = self.nick.value.strip()
+        changes["nick"] = None if nick in ("", "-") else nick
+        bio = self.bio.value.strip()
+        if bio:
+            changes["bio"] = None if bio == "-" else bio
+        for key, field in (("avatar", self.avatar), ("banner", self.banner)):
+            files = list(field.values or [])
+            if not files:
+                continue
+            file = files[0]
+            if not (file.content_type or "").startswith("image/") or file.size > PROFILE_IMAGE_MAX:
+                await deny(interaction, "bot_profile.bad_image")
+                return
+            changes[key] = await file.read()
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await interaction.guild.me.edit(reason=f"profile by {interaction.user.id}", **changes)
+        except discord.HTTPException as error:
+            await interaction.followup.send(t("bot_profile.failed", error=error), ephemeral=True)
+            return
+        audit(interaction, "bot.profile", "bot", interaction.guild.id, ", ".join(changes))
+        await interaction.followup.send(t("bot_profile.done"), ephemeral=True)
+
 
 # ============================================================
 # ACTION REGISTRY
