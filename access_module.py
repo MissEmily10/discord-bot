@@ -815,6 +815,9 @@ class ActionEditView(PanelView):
     async def toggle_dangerous(self, interaction, button):
         if not await ensure_owner(interaction):
             return
+        if self.action_key in core.SAFE_ACTIONS:
+            await deny(interaction, "access.registry.confirm_not_needed")
+            return
         row = core.get_action(self.action_key)
         set_action_dangerous(self.action_key, not (row and row[2]))
         await interaction.response.edit_message(embed=action_registry_embed(interaction), view=self.back_target[1])

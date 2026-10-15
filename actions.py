@@ -778,9 +778,9 @@ async def dispatch_action(interaction, action_key, value, *, creator_id=None, sk
         return
 
     action_row = core.get_action(action_key)
-    if action_row and action_row[2] and not skip_confirmation:
+    if core.needs_confirmation(action_key) and not skip_confirmation:
         await interaction.response.send_message(
-            t("actions.dangerous.text", action=action_key),
+            t("actions.dangerous.text", action=(action_row[3] or action_key) if action_row else action_key),
             view=DangerousActionView(action_key, value, creator_id=creator_id, target_message=interaction.message),
             ephemeral=True,
         )

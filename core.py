@@ -32,7 +32,7 @@ from database import (
     get_access_level,
     get_command_access,
     get_all_role_access,
-    is_user_denied,
+    is_user_denied, set_action_dangerous,
 )
 from texts import CATALOG
 
@@ -835,10 +835,24 @@ DEFAULT_ACTIONS = [
 ]
 
 
+# Действия, которые только что-то показывают нажавшему (видно ему одному) и
+# ничего не меняют: подтверждение «Продолжить?» для них бессмысленно и не
+# спрашивается, даже если когда-то было включено в Бункере.
+SAFE_ACTIONS = {"message.send", "message.confirm", "form.trigger", "select.trigger", "build.trigger", "build.goto"}
+
+
+def needs_confirmation(action_key):
+    row = get_action(action_key)
+    return bool(row and row[2]) and action_key not in SAFE_ACTIONS
+
+
 def ensure_default_actions():
     for key, min_level, dangerous, description, use_level in DEFAULT_ACTIONS:
-        if get_action(key) is None:
+        row = get_action(key)
+        if row is None:
             upsert_action(key, min_level, dangerous, description, use_level=use_level)
+        elif key in SAFE_ACTIONS and row[2]:
+            set_action_dangerous(key, False)
 
 
 def actions_for_level(level):

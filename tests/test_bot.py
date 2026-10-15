@@ -1583,6 +1583,18 @@ class MessageEditActionTests(unittest.TestCase):
         self.assertEqual(len(modal.children), 3)
 
 
+class ConfirmationTests(unittest.TestCase):
+    def test_harmless_actions_never_ask(self):
+        database.set_action_dangerous("build.trigger", True)  # как было включено у Эмилии
+        try:
+            self.assertFalse(core.needs_confirmation("build.trigger"))
+            core.ensure_default_actions()
+            self.assertEqual(core.get_action("build.trigger")[2], 0)
+            self.assertTrue(core.needs_confirmation("webhook.send"))
+        finally:
+            database.set_action_dangerous("build.trigger", False)
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
