@@ -35,6 +35,13 @@ MAP = {
     "🕘": "ui_time", "⏱": "ui_time", "🗓": "ui_time", "🔍": "ui_search",
     "🔘": "ui_button", "⏯": "ui_play", "🏆": "ui_trophy", "🎨": "ui_palette",
     "🖌": "ui_palette",
+    # остальные кнопки панелей — дудлы из набора форм (тот же стиль)
+    "💬": "doodle_chat", "🛡": "doodle_shield", "🧩": "ui_settings", "♾": "ui_refresh",
+    "🧪": "ui_play", "👋": "doodle_heart", "🧵": "ui_list", "📍": "doodle_flag",
+    "🧬": "doodle_gem", "☀": "doodle_sun", "📥": "ui_mail", "🎯": "doodle_medal",
+    "🔀": "ui_refresh", "🪝": "ui_web", "⚡": "doodle_bolt", "🔢": "ui_list",
+    "🎞": "doodle_film", "🩺": "ui_search", "🪪": "ui_people", "🏠": "ui_back",
+    "🟢": "ui_confirm", "🔴": "ui_block", "📎": "ui_folder", "🌟": "ui_star",
 }
 
 _loaded = {}  # имя -> PartialEmoji из хранилища приложения
@@ -108,12 +115,24 @@ def enabled():
     return (core.get_setting("ui_emoji_style") or "doodle").strip().lower() != "standard"
 
 
+def _doodle(name):
+    """Эмодзи по имени: дудл кнопок (ui_*) или дудл из набора форм (doodle_*)."""
+    if name in _loaded:
+        return _loaded[name]
+    if name and name.startswith("doodle_"):
+        import form_packs
+        value = form_packs._doodles.get(name)
+        if value:
+            return discord.PartialEmoji.from_str(value)
+    return None
+
+
 def swap(emoji):
     """Обычное эмодзи -> дудл (если загружен и включён), иначе как было."""
     if not enabled() or emoji is None:
         return emoji
     name = MAP.get(_key(str(emoji)))
-    return _loaded.get(name, emoji) if name else emoji
+    return (_doodle(name) or emoji) if name else emoji
 
 
 def apply(view):
@@ -129,7 +148,7 @@ def apply(view):
             continue
         label = child.label or ""
         head, _, rest = label.partition(" ")
-        name = MAP.get(_key(head))
-        if name in _loaded and rest:
-            child.emoji = _loaded[name]
+        doodle = _doodle(MAP.get(_key(head)))
+        if doodle is not None and rest:
+            child.emoji = doodle
             child.label = rest
