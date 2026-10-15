@@ -1641,6 +1641,26 @@ def set_form_status(form_id, closed=None, max_submissions=False):
     connection.close()
 
 
+def save_submission_card(submission_id, channel_id, message_id):
+    """Где лежит карточка заявки в канале проверки — чтобы обновить её, если решили из /forms."""
+    connection = get_connection()
+    connection.execute("""CREATE TABLE IF NOT EXISTS submission_cards (
+        submission_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL)""")
+    connection.execute("INSERT OR REPLACE INTO submission_cards VALUES (?, ?, ?)", (submission_id, channel_id, message_id))
+    connection.commit()
+    connection.close()
+
+
+def get_submission_card(submission_id):
+    connection = get_connection()
+    connection.execute("""CREATE TABLE IF NOT EXISTS submission_cards (
+        submission_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL)""")
+    row = connection.execute("SELECT channel_id, message_id FROM submission_cards WHERE submission_id = ?",
+                             (submission_id,)).fetchone()
+    connection.close()
+    return row
+
+
 def count_form_submissions(form_id):
     """Все поданные заявки формы (кроме не дошедших до канала)."""
     _ensure_extended_tables()

@@ -283,12 +283,12 @@ class SubmissionReviewView(PanelView):
     @discord.ui.button(label="Одобрить", emoji="✅", style=discord.ButtonStyle.success)
     async def approve(self, interaction, button):
         from extended_modules import decide
-        await decide(interaction, self.sid, "approved", "", None)
+        await decide(interaction, self.sid, "approved", "", None, panel_back=self.back_target)
 
     @discord.ui.button(label="Отклонить", emoji="❌", style=discord.ButtonStyle.danger)
     async def reject(self, interaction, button):
         from extended_modules import RejectReasonModal
-        await interaction.response.send_modal(RejectReasonModal(self.sid, None))
+        await interaction.response.send_modal(RejectReasonModal(self.sid, None, panel_back=self.back_target))
 
 
 # ============================================================

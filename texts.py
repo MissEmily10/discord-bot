@@ -620,10 +620,10 @@ CATALOG = {
     "forms.review.role_forbidden": "Discord не разрешил выдать роль. Проверь права бота и иерархию ролей.",
     "forms.review.role_missing": "Не удалось найти участника или роль для назначения.",
     "forms.reviewed.title": "ЗАЯВКА ОБРАБОТАНА",
-    "forms.reviewed.text": "Статус: **{status}**\nReviewer: {reviewer}",
-    "forms.status.pending": "pending",
-    "forms.status.approved": "approved",
-    "forms.status.rejected": "rejected",
+    "forms.reviewed.text": "**{status}** · проверил(а) {reviewer}",
+    "forms.status.pending": "ждёт решения",
+    "forms.status.approved": "✅ Одобрена",
+    "forms.status.rejected": "❌ Отклонена",
 
     # ================= /templates =================
     "templates.home.title": "TEMPLATE MANAGER",
@@ -906,7 +906,7 @@ CATALOG = {
     "forms.reject_modal.title": 'ПРИЧИНА ОТКАЗА',
     "forms.reject_modal.reason": 'Причина (увидит заявитель)',
     "forms.reviewed.reason": 'Причина: {reason}',
-    "forms.status.failed": 'failed',
+    "forms.status.failed": 'не дошла до канала',
     "forms.dm.approved": '✅ Твоя заявка «{form}» на сервере {guild} одобрена.',
     "forms.dm.rejected": '❌ Твоя заявка «{form}» на сервере {guild} отклонена.\nПричина: {reason}',
     "forms.dm.no_reason": 'не указана',

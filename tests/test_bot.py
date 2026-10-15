@@ -1737,6 +1737,44 @@ class FormClosingTests(unittest.TestCase):
         self.assertEqual(database.get_form_status(form_id), (True, 1))
 
 
+class ReviewFromPanelTests(unittest.TestCase):
+    def test_panel_decision_updates_channel_card(self):
+        import hubs
+        g = make_guild()
+        form_id = database.save_form(GUILD, STAFF, "Модер", "", json.dumps([{"label": "Возраст"}]),
+                                     reviewer_user_ids_json=json.dumps([STAFF]))
+        sid = database.save_submission(form_id, GUILD, MEMBER, json.dumps({"Возраст": "20"}))
+        channel = FakeChannel(g, 9950)
+        card_edits = []
+
+        class Card:
+            embeds = [discord.Embed(title="НОВАЯ ЗАЯВКА")]
+
+            async def edit(self, **kwargs):
+                card_edits.append(kwargs)
+
+        async def fetch_message(mid):
+            return Card()
+
+        channel.fetch_message = fetch_message
+        database.save_submission_card(sid, channel.id, 1)
+        reviewer = FakeInteraction(g, g.members[STAFF])
+        shown = []
+
+        async def edit_message(**kwargs):
+            reviewer.response.done = True
+            shown.append(kwargs)
+
+        reviewer.response.edit_message = edit_message
+        view = hubs.SubmissionReviewView(sid, back_target=([], None))
+        run(view.approve.callback(reviewer))
+        self.assertIsNone(card_edits[0]["view"])  # кнопки с карточки в канале убраны
+        result = shown[0]["embed"].fields[-1].value
+        self.assertNotIn("{status}", result)
+        self.assertIn("Одобрена", result)
+        self.assertNotIn("{", shown[0]["embed"].description or "")
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

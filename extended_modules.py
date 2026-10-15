@@ -436,7 +436,9 @@ class SubmissionModal(discord.ui.Modal):
         view.add_item(ReviewButton(sid, "approve"))
         view.add_item(ReviewButton(sid, "reject"))
         try:
-            await channel.send(embed=e, view=view, allowed_mentions=discord.AllowedMentions.none())
+            card = await channel.send(embed=e, view=view, allowed_mentions=discord.AllowedMentions.none())
+            from database import save_submission_card
+            save_submission_card(sid, channel.id, card.id)
         except discord.HTTPException:
             review_submission(sid, i.client.user.id, "failed", "destination unavailable")
             await say(i, "forms.destination_missing")
@@ -502,16 +504,18 @@ class RejectReasonModal(Modal, title="ПРИЧИНА ОТКАЗА"):
     texts = "forms.reject_modal"
     reason = discord.ui.TextInput(label="Причина (увидит заявитель)", required=False, style=discord.TextStyle.paragraph, max_length=500)
 
-    def __init__(self, sid, message):
+    def __init__(self, sid, message, panel_back=None):
         super().__init__()
         self.sid = sid
         self.message = message
+        self.panel_back = panel_back
 
     async def on_submit(self, interaction):
-        await decide(interaction, self.sid, "rejected", self.reason.value.strip(), self.message)
+        await decide(interaction, self.sid, "rejected", self.reason.value.strip(), self.message,
+                     panel_back=self.panel_back)
 
 
-async def decide(i, sid, status, reason, message):
+async def decide(i, sid, status, reason, message, panel_back=None):
     row, form = await _review_context(i, sid)
     if row is None:
         return
@@ -541,25 +545,45 @@ async def decide(i, sid, status, reason, message):
         result += "\n" + t("forms.reviewed.reason", reason=reason)
     if role_error:
         result += f"\n\n⚠️ {role_error}"
-    # карточка заявки — последний embed (над ней может стоять баннер)
-    embed = message.embeds[-1] if message and message.embeds else panel_embed(i, "forms.reviewed")
-    embed.add_field(name=t("forms.reviewed.title")[:256], value=result[:1024], inline=False)
-    if status == "approved":
-        embed.color = discord.Color.green()
-    else:
-        embed.color = core.danger_color()
-    # баннер «одобрена/отклонена» (с должностью по-английски) заменяет баннер
-    # «новая заявка»; если его нет — прежний остаётся
     from banner_render import banner_parts
     from form_packs import english_name
     role_en = english_name(form)
-    banner, file = banner_parts(i, f"forms.{status}", role=role_en)
-    above = [banner] if banner else (list(message.embeds[:-1]) if message and message.embeds else [])
-    extra = {"attachments": [file]} if file else {}
-    if i.response.is_done():
-        await message.edit(embeds=above + [embed], view=None, **extra)
+    color = discord.Color.green() if status == "approved" else core.danger_color()
+
+    async def update_card(card_message, respond):
+        """Карточка в канале проверки: итог полем, баннер «одобрена/отклонена», без кнопок."""
+        embed = card_message.embeds[-1] if card_message.embeds else panel_embed(i, "forms.reviewed", hints=False)
+        embed.add_field(name=t("forms.reviewed.title")[:256], value=result[:1024], inline=False)
+        embed.color = color
+        # баннер с должностью по-английски заменяет «новая заявка»; нет баннера — прежний остаётся
+        banner, file = banner_parts(i, f"forms.{status}", role=role_en)
+        above = [banner] if banner else list(card_message.embeds[:-1])
+        extra = {"attachments": [file]} if file else {}
+        if respond:
+            await i.response.edit_message(embeds=above + [embed], view=None, **extra)
+        else:
+            await card_message.edit(embeds=above + [embed], view=None, **extra)
+
+    if message is not None:  # решили кнопкой на самой карточке
+        if i.response.is_done():
+            await update_card(message, respond=False)
+        else:
+            await update_card(message, respond=True)
     else:
-        await i.response.edit_message(embeds=above + [embed], view=None, **extra)
+        # решили из /forms: обновить карточку в канале и показать итог в панели
+        from database import get_submission_card
+        stored = get_submission_card(sid)
+        channel = i.guild.get_channel_or_thread(stored[0]) if stored else None
+        if channel is not None:
+            try:
+                await update_card(await channel.fetch_message(stored[1]), respond=False)
+            except discord.HTTPException:
+                pass  # карточку удалили — не страшно
+        import hubs
+        panel = hubs.submission_embed(i, sid)
+        panel.add_field(name=t("forms.reviewed.title")[:256], value=result[:1024], inline=False)
+        panel.color = color
+        await i.response.edit_message(embed=panel, view=PanelView(back_target=panel_back))
 
     if form[16]:  # уведомить заявителя — карточкой со своим баннером
         applicant = i.guild.get_member(row[3])
