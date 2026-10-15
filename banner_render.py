@@ -256,8 +256,8 @@ def place_title(draw, spec, lines, font, tagline, tagline_font, bottom_limit):
         font = font.font_variant(size=max(min_size, int(font.size * 0.95)))
 
 
-def render(screen, **values):
-    """-> PNG (bytes) баннера с подставленным текстом."""
+def render(screen, split_title=False, **values):
+    """-> PNG (bytes) баннера с подставленным текстом; split_title -> (фон, слой заголовка)."""
     layers = TEMPLATES[screen]
     picture = Image.open(base_path(screen)).convert("RGBA")
     draw = ImageDraw.Draw(picture)
@@ -275,9 +275,19 @@ def render(screen, **values):
         else:
             placed = _layout(draw, spec, lines, font)
         drawn.append((placed, font, spec["color"]))
+    if split_title:
+        # для анимации: фон с надписью сверху и заголовок отдельным прозрачным слоем
+        *rest, (pieces, font, color) = drawn
+        title = Image.new("RGBA", picture.size, (0, 0, 0, 0))
+        title_draw = ImageDraw.Draw(title)
+        for (x, y), text in pieces:
+            title_draw.text((x, y), text, font=font, fill=color, anchor="lm")
+        drawn = rest
     for pieces, font, color in drawn:
         for (x, y), text in pieces:
             draw.text((x, y), text, font=font, fill=color, anchor="lm")
+    if split_title:
+        return picture, title
     output = io.BytesIO()
     picture.save(output, "PNG", optimize=True)
     return output.getvalue()
