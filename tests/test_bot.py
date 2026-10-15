@@ -1910,6 +1910,28 @@ class ReferenceInboxTests(unittest.TestCase):
                 os.environ["LOGO_DIR"] = old_dir
 
 
+class EmojiExportTests(unittest.TestCase):
+    def test_upload_skips_existing_and_stops_when_full(self):
+        import emoji_export
+        created = []
+
+        class Guild:
+            emoji_limit = 30
+            emojis = [types.SimpleNamespace(name="doodle_star", animated=False)]
+
+            async def create_custom_emoji(self, name, image, reason=None):
+                created.append(name)
+                self.emojis.append(types.SimpleNamespace(name=name, animated=False))
+
+        guild = Guild()
+        added, skipped, no_room, errors = run(emoji_export.upload(guild, "forms"))
+        self.assertEqual(skipped, 1)            # doodle_star уже был
+        self.assertEqual(added, 29)             # 30 мест минус уже занятое
+        self.assertEqual(no_room, 20)           # остальным места не хватило
+        self.assertNotIn("doodle_star", created)
+        self.assertEqual(len(emoji_export.files_of("all")), 86)
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
