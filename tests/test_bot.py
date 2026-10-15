@@ -1462,6 +1462,62 @@ class UiEmojiTests(unittest.TestCase):
             ui_emoji._loaded.clear()
 
 
+class EmojiPickerTests(unittest.TestCase):
+    """Эмодзи кнопки — экраном: дудлы бота, эмодзи сервера, своё."""
+
+    def test_text_and_image(self):
+        import emoji_picker as ep
+        bot = types.SimpleNamespace(get_emoji=lambda _id: None)
+        guild = types.SimpleNamespace(emojis=[types.SimpleNamespace(name="pepe", __str__=None)])
+
+        class Emoji:
+            name = "pepe"
+
+            def __str__(self):
+                return "<:pepe:111111111111111111>"
+
+        guild.emojis = [Emoji()]
+        i = types.SimpleNamespace(client=bot, guild=guild, response=FakeResponse())
+        self.assertEqual(run(ep.from_text(i, "✨")), ("✨", None))
+        self.assertEqual(run(ep.from_text(i, ":pepe:")), ("<:pepe:111111111111111111>", None))
+        self.assertEqual(run(ep.from_text(i, "hello")), (None, "emoji_picker.error.unknown"))
+        buffer = io.BytesIO()
+        PILImage.new("RGB", (300, 100), "red").save(buffer, "PNG")
+        self.assertEqual(PILImage.open(io.BytesIO(ep.prepare_image(buffer.getvalue()))).size, (128, 128))
+
+    def test_button_flow_uses_picker(self):
+        import embed_module as em
+        import form_packs
+        form_packs._doodles.update({f"doodle_{n:02d}": f"<:doodle_{n:02d}:{200000000000000000 + n}>" for n in range(30)})
+        try:
+            g = make_guild()
+            state = em.EmbedState(GUILD, STAFF)
+            builder = em.ButtonBuilderView(state, hub=None, back_target=None)
+            modal = em.ButtonLabelModal(state, builder)
+            modal.label_input._value = "Правила"
+            shown = []
+
+            def capture(i):
+                async def edit_message(**kwargs):
+                    i.response.done = True
+                    shown.append(kwargs)
+                i.response.edit_message = edit_message
+                return i
+
+            run(modal.on_submit(capture(FakeInteraction(g, g.members[STAFF]))))
+            picker = shown[-1]["view"]
+            selects = [c for c in picker.children if isinstance(c, discord.ui.Select)]
+            self.assertEqual([len(s.options) for s in selects], [25, 5])
+            selects[1]._values = [selects[1].options[0].value]
+            run(selects[1].callback(capture(FakeInteraction(g, g.members[STAFF]))))
+            color_view = shown[-1]["view"]
+            self.assertIsInstance(color_view, em.ButtonColorView)
+            self.assertEqual(color_view.pending["emoji"], "<:doodle_25:200000000000000025>")
+            self.assertEqual(color_view.pending["label"], "Правила")
+        finally:
+            form_packs._doodles.clear()
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

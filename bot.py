@@ -146,7 +146,6 @@ class InlineButtonModal(Modal, title="НОВАЯ КНОПКА"):
     texts = "buttons.modal"
 
     label_input = discord.ui.TextInput(label="Текст кнопки", required=True, max_length=80)
-    emoji_input = discord.ui.TextInput(label="Emoji", placeholder="Например: ✨ или :my_emoji:", required=False, max_length=100)
     style_input = discord.ui.TextInput(label="Стиль: primary / secondary / success / danger", required=True, max_length=10)
     action_input = discord.ui.TextInput(label="Действие: link / message / confirm", required=True, max_length=40)
     value_input = discord.ui.TextInput(label="URL или текст действия", required=False, style=discord.TextStyle.paragraph, max_length=1000)
@@ -167,10 +166,6 @@ class InlineButtonModal(Modal, title="НОВАЯ КНОПКА"):
         if style_word not in STYLE_WORDS:
             await interaction.response.send_message(t("buttons.modal.bad_style"), ephemeral=True)
             return
-        if not actions.valid_emoji(self.emoji_input.value):
-            await interaction.response.send_message(t("embed.bad_emoji"), ephemeral=True)
-            return
-
         if action_word == "link":
             style, action_key = "link", None
         else:
@@ -186,30 +181,26 @@ class InlineButtonModal(Modal, title="НОВАЯ КНОПКА"):
             await interaction.response.send_message(t(error), ephemeral=True)
             return
 
-        emoji = self.emoji_input.value.strip() or None
-        if emoji and media.needs_work(interaction.client, {"buttons": [{"emoji": emoji}]}):
-            # эмодзи с чужого сервера: копия в хранилище бота (скачивание — не за 3 секунды)
-            await interaction.response.defer()
-            emoji = await media.mirror_emoji(interaction.client, emoji)
-            if emoji is None:
-                await interaction.followup.send(t("media.emoji_failed", count=1), ephemeral=True)
+        import emoji_picker
+        builder = (render_button_builder(interaction, self.state),
+                   InlineButtonBuilderView(self.state, back_target=self.back_target))
 
-        self.state.buttons.append({
-            "label": self.label_input.value,
-            "emoji": emoji,
-            "style": style,
-            "action_key": action_key,
-            "value": value,
-        })
+        async def picked(i, emoji):
+            # эмодзи — отдельным экраном: дудлы бота, эмодзи сервера или своё
+            if len(self.state.buttons) >= actions.MAX_BUTTONS:
+                await embed_module.edit_panel(i, embed=builder[0], view=builder[1])
+                return
+            self.state.buttons.append({
+                "label": self.label_input.value,
+                "emoji": emoji,
+                "style": style,
+                "action_key": action_key,
+                "value": value,
+            })
+            await embed_module.edit_panel(i, embed=render_button_builder(i, self.state),
+                                          view=InlineButtonBuilderView(self.state, back_target=self.back_target))
 
-        kwargs = dict(
-            embed=render_button_builder(interaction, self.state),
-            view=InlineButtonBuilderView(self.state, back_target=self.back_target),
-        )
-        if interaction.response.is_done():
-            await interaction.edit_original_response(**kwargs)
-        else:
-            await interaction.response.edit_message(**kwargs)
+        await emoji_picker.open_picker(interaction, picked, back_target=builder)
 
 
 class ButtonSetNameModal(Modal, title="НАЗВАНИЕ НАБОРА"):

@@ -1251,7 +1251,6 @@ class ButtonLabelModal(Modal, title="ТЕКСТ КНОПКИ"):
     texts = "embed.button_label_modal"
 
     label_input = discord.ui.TextInput(label="Текст кнопки", max_length=80)
-    emoji_input = discord.ui.TextInput(label="Emoji", required=False, max_length=100)
 
     def __init__(self, state, builder_view):
         super().__init__()
@@ -1259,15 +1258,17 @@ class ButtonLabelModal(Modal, title="ТЕКСТ КНОПКИ"):
         self.builder_view = builder_view
 
     async def on_submit(self, interaction):
-        if not valid_emoji(self.emoji_input.value):
-            await say(interaction, "embed.bad_emoji")
-            return
-        pending = {"label": self.label_input.value, "emoji": self.emoji_input.value.strip() or None}
-        await interaction.response.edit_message(
-            embed=panel_embed(interaction, "embed.button_color"),
-            view=ButtonColorView(self.state, pending, self.builder_view,
-                                 back_target=builder_screen(interaction, self.builder_view)),
-        )
+        import emoji_picker
+        pending = {"label": self.label_input.value, "emoji": None}
+        back = builder_screen(interaction, self.builder_view)
+
+        async def picked(i, emoji):
+            # эмодзи выбран (или «без эмодзи») — дальше цвет кнопки
+            pending["emoji"] = emoji
+            await edit_panel(i, embed=panel_embed(i, "embed.button_color"),
+                             view=ButtonColorView(self.state, pending, self.builder_view, back_target=back))
+
+        await emoji_picker.open_picker(interaction, picked, back_target=back)
 
 
 class ButtonColorView(PanelView):
