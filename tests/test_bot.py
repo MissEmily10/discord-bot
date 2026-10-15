@@ -1821,6 +1821,16 @@ class BotStatusTests(unittest.TestCase):
             core.reset_setting("bot_status_mode")
 
 
+class RegistryScreenTests(unittest.TestCase):
+    def test_action_registry_opens(self):
+        import access_module as am
+        g = make_guild()
+        owner = FakeInteraction(g, g.members[OWNER])
+        self.assertIn("build.trigger", am.action_registry_embed(owner).description)
+        run(am.SettingsView(None, back_target=([], None)).registry.callback(owner))
+        self.assertEqual(core.t("access.registry.line", key="x", status="", create="", use="", danger="").count("x"), 1)
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

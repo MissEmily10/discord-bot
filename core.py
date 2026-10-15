@@ -196,7 +196,7 @@ DENIAL_KEYS = {
 }
 
 
-def message_for(interaction, key, **params):
+def message_for(interaction, key, /, **params):
     """Ответ бота по ключу: отказ в доступе — карточкой с баннером, остальное — текстом."""
     text = t(key, **params)
     if key in DENIAL_KEYS:
@@ -362,7 +362,7 @@ class _KeepMissing(dict):
         return "{" + key + "}"
 
 
-def t(key, **params):
+def t(key, /, **params):
     """
     Текст из каталога. Подстановки — {name}. Если владелец сломал фигурные
     скобки в своей фразе, показываем фразу как есть, а не роняем бота.
