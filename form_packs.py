@@ -151,26 +151,10 @@ _doodles = {}  # имя -> "<:имя:id>"
 
 async def load_doodles(bot):
     """Из setup_hook: залить недостающие дудл-эмодзи в хранилище приложения (один раз)."""
-    if not os.path.isdir(DOODLE_DIR):
-        return
-    try:
-        existing = {emoji.name: emoji for emoji in await bot.fetch_application_emojis()}
-    except (discord.HTTPException, AttributeError) as error:
-        core._log.warning("Дудл-эмодзи не загружены: %s", error)
-        return
-    for file in sorted(os.listdir(DOODLE_DIR)):
-        name, ext = os.path.splitext(file)
-        if ext.lower() != ".png":
-            continue
-        emoji = existing.get(name)
-        if emoji is None:
-            try:
-                with open(os.path.join(DOODLE_DIR, file), "rb") as handle:
-                    emoji = await bot.create_application_emoji(name=name, image=handle.read())
-            except discord.HTTPException as error:
-                core._log.warning("Эмодзи %s не загружен: %s", name, error)
-                continue
-        _doodles[name] = str(emoji)
+    import ui_emoji
+    store = {}
+    await ui_emoji.upload_folder(bot, DOODLE_DIR, store)
+    _doodles.update({name: str(emoji) for name, emoji in store.items()})
 
 
 def pick_emoji(guild_id):

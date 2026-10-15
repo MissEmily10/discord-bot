@@ -35,6 +35,8 @@ MAP = {
 }
 
 _loaded = {}  # имя -> PartialEmoji из хранилища приложения
+# для «Бункер → Диагностика»: что получилось при загрузке (папка -> состояние)
+load_status = {}
 
 
 def _key(text):
@@ -43,12 +45,18 @@ def _key(text):
 
 async def upload_folder(bot, folder, store):
     """Залить недостающие PNG из папки в эмодзи приложения; store[имя] = эмодзи."""
+    state = load_status.setdefault(os.path.basename(folder), {"files": 0, "loaded": 0, "errors": [], "done": False})
     if not os.path.isdir(folder):
+        state["errors"].append(f"нет папки {folder}")
+        state["done"] = True
         return
+    state["files"] = len([f for f in os.listdir(folder) if f.lower().endswith(".png")])
     try:
         existing = {emoji.name: emoji for emoji in await bot.fetch_application_emojis()}
-    except (discord.HTTPException, AttributeError) as error:
+    except Exception as error:  # нет application_id, сеть, права — не роняем бота
         core._log.warning("Эмодзи приложения недоступны: %s", error)
+        state["errors"].append(f"список эмодзи приложения: {error}")
+        state["done"] = True
         return
     for file in sorted(os.listdir(folder)):
         name, ext = os.path.splitext(file)
@@ -61,14 +69,16 @@ async def upload_folder(bot, folder, store):
                     emoji = await bot.create_application_emoji(name=name, image=handle.read())
             except discord.HTTPException as error:
                 core._log.warning("Эмодзи %s не загружен: %s", name, error)
+                state["errors"].append(f"{name}: {error}")
                 continue
         store[name] = emoji
+        state["loaded"] += 1
+    state["done"] = True
 
 
 async def load(bot):
-    store = {}
-    await upload_folder(bot, UI_DIR, store)
-    _loaded.update({name: discord.PartialEmoji(name=name, id=emoji.id) for name, emoji in store.items()})
+    # прямо в _loaded: кнопки получают дудлы по мере загрузки, а не после всех
+    await upload_folder(bot, UI_DIR, _loaded)
 
 
 def start(bot):

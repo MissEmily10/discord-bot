@@ -606,6 +606,12 @@ class SettingsView(PanelView):
             view=DenialAccessView(interaction, back_target=(core.screen(interaction), self))
         )
 
+    @discord.ui.button(label="Диагностика", emoji="🩺", style=discord.ButtonStyle.secondary)
+    async def diagnostics(self, interaction, button):
+        if await ensure_owner(interaction):
+            import diagnostics
+            await diagnostics.send_report(interaction)
+
     @discord.ui.button(label="Action Registry", emoji="🔑", style=discord.ButtonStyle.primary)
     async def registry(self, interaction, button):
         if not await ensure_owner(interaction):

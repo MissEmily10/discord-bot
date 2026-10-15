@@ -1831,6 +1831,26 @@ class RegistryScreenTests(unittest.TestCase):
         self.assertEqual(core.t("access.registry.line", key="x", status="", create="", use="", danger="").count("x"), 1)
 
 
+class DiagnosticsTests(unittest.TestCase):
+    def test_report_explains_missing_parts(self):
+        import diagnostics
+        import ui_emoji
+        g = make_guild()
+        owner = FakeInteraction(g, g.members[OWNER])
+        old = os.environ.pop("WEB_PANEL_URL", None)
+        ui_emoji.load_status["ui"] = {"files": 36, "loaded": 0, "errors": ["ui_add: 403 Forbidden"], "done": True}
+        try:
+            embed, banner = diagnostics.report(owner)
+            self.assertIsNone(banner)
+            self.assertIn("WEB_PANEL_URL", embed.description)
+            self.assertIn("0 из 36", embed.description)
+            self.assertIn("403", embed.description)
+        finally:
+            ui_emoji.load_status.clear()
+            if old is not None:
+                os.environ["WEB_PANEL_URL"] = old
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
