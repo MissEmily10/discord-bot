@@ -24,7 +24,7 @@ from core import PanelView, Modal, t, panel_embed
 from actions import (
     MAX_EMBEDS, MAX_BUTTONS, NATIVE_SELECT_CLASSES,
     say, reply, normalize_button, validate_action_value, load_source, build_visible,
-    render_source, check_url,
+    render_source, check_url, strip_secrets,
 )
 from database import (
     get_message_build, update_message_build, save_build_version,
@@ -109,28 +109,32 @@ def _emoji_text(emoji):
     return str(emoji) if emoji else None
 
 
-def _copied_button(custom_id):
-    """Кнопка нашего бота — берём её настоящее определение из источника."""
+def _copied_button(custom_id, guild_id=None):
+    """Кнопка нашего бота — берём её настоящее определение из источника (только этого сервера)."""
     match = _OUR_BUTTON.match(custom_id or "")
     if not match:
         return None
     data = load_source(match[1], int(match[2]))
+    if data and guild_id is not None and data["guild_id"] != guild_id:
+        return None
     index = int(match[3])
     if not data or index >= len(data["buttons"]):
         return None
     return dict(normalize_button(data["buttons"][index]))
 
 
-def _copied_list(custom_id):
+def _copied_list(custom_id, guild_id=None):
     match = _OUR_LIST.match(custom_id or "")
     if not match:
         return None
     data = load_source(match[1], int(match[2]))
+    if data and guild_id is not None and data["guild_id"] != guild_id:
+        return None
     interactive = (data or {}).get("interactive") or {}
     return interactive if interactive.get("type") == "list" else None
 
 
-def message_to_payload(message):
+def message_to_payload(message, guild_id=None):
     """
     discord.Message -> payload в формате шаблонов/экспорта.
     Кнопки и списки нашего бота копируются вместе с действиями;
@@ -140,7 +144,7 @@ def message_to_payload(message):
     for row in message.components:
         for item in getattr(row, "children", [row]):
             if isinstance(item, discord.components.Button):
-                button = _copied_button(item.custom_id)
+                button = _copied_button(item.custom_id, guild_id)
                 if button is None:
                     style = _STYLE_NAMES.get(item.style, "grey")
                     button = {
@@ -154,7 +158,7 @@ def message_to_payload(message):
                 if native or ours:
                     interactive = {"type": "native_select", "kind": native or ours[1]}
                     continue
-                interactive = _copied_list(item.custom_id) or {"type": "list", "options": [
+                interactive = _copied_list(item.custom_id, guild_id) or {"type": "list", "options": [
                     {"label": option.label, "description": option.description or "",
                      "emoji": _emoji_text(option.emoji), "action_key": None, "value": None}
                     for option in item.options
@@ -316,7 +320,7 @@ def export_build(row):
         "category": row[8] or "general",
         "content": row[4] or "",
         "embeds": json.loads(row[5] or "[]"),
-        "buttons": json.loads(row[6] or "[]"),
+        "buttons": strip_secrets(json.loads(row[6] or "[]")),
         "interactive": json.loads(row[11] or "null"),
         "layout": row[14] if len(row) > 14 else "split",
     }
@@ -379,7 +383,7 @@ async def import_from_message(interaction, text):
     if error:
         await reply(interaction, error)
         return
-    payload = message_to_payload(message)
+    payload = message_to_payload(message, interaction.guild.id)
     if not payload["content"] and not payload["embeds"] and not payload["buttons"] and not payload["interactive"]:
         await reply(interaction, "build_tools.import.empty")
         return

@@ -152,6 +152,8 @@ def member_can_view(guild, user, owner_id, visibility, role_ids=(), levels=()):
         return True
     if visibility == "public":
         return True
+    if visibility != "restricted":
+        return False  # private: старые списки ролей и уровней доступа не дают
     if isinstance(user, int):
         user = guild.get_member(user) if guild is not None else None
     member_roles = {role.id for role in getattr(user, "roles", [])}
@@ -160,6 +162,16 @@ def member_can_view(guild, user, owner_id, visibility, role_ids=(), levels=()):
     if levels and level >= min(core.level_value(lvl) for lvl in levels):
         return True
     return False
+
+
+def strip_secrets(buttons):
+    """Кнопки для экспорта и шаблонов: без вебхуков (ссылка — секрет, запись — только этого сервера)."""
+    cleaned = []
+    for button in buttons or []:
+        if isinstance(button, dict) and button.get("action_key") == "webhook.send":
+            button = {**button, "action_key": None, "value": None}
+        cleaned.append(button)
+    return cleaned
 
 
 def _json(value, default):
@@ -646,11 +658,11 @@ class WebhookSendModal(Modal, title="ОТПРАВИТЬ ЧЕРЕЗ WEBHOOK"):
     def __init__(self, default_url="", record_id=None):
         super().__init__()
         self.record_id = record_id
-        if record_id is not None:
-            # URL сохранённого вебхука — секрет, не показываем его нажавшему
+        # URL вебхука — секрет: никогда не показываем его нажавшему. Старые
+        # кнопки со ссылкой внутри работают, но ссылку берём на сервере.
+        self.secret_url = default_url or None
+        if record_id is not None or self.secret_url:
             self.remove_item(self.url_input)
-        else:
-            self.url_input.default = default_url
 
     async def on_submit(self, interaction):
         if self.record_id is not None:
@@ -660,7 +672,7 @@ class WebhookSendModal(Modal, title="ОТПРАВИТЬ ЧЕРЕЗ WEBHOOK"):
                 return
             webhook_url = row[6]
         else:
-            webhook_url = normalize_url(self.url_input.value)
+            webhook_url = normalize_url(self.secret_url or self.url_input.value)
             if not webhook_url or not _WEBHOOK_URL.match(webhook_url):
                 await say(interaction, "actions.webhook_modal.no_url")
                 return
@@ -701,7 +713,7 @@ class DangerousActionView(PanelView):
 # ПРОВЕРКА ЗНАЧЕНИЯ ПРИ СОЗДАНИИ
 # ============================================================
 
-def validate_action_value(interaction, action_key, value, style=None):
+def validate_action_value(interaction, action_key, value, style=None, actor=None):
     """
     -> (нормализованное значение, None) или (None, ключ ошибки).
     Вызывается, когда создатель заполняет кнопку/опцию: битые ID, чужие
@@ -730,17 +742,18 @@ def validate_action_value(interaction, action_key, value, style=None):
         role = guild.get_role(role_id) if role_id else None
         if role is None:
             return None, "actions.role.bad_value"
-        problem = role_problem(guild, role, interaction.user)
+        # роль проверяется для создателя кнопки: при клике права берутся его
+        problem = role_problem(guild, role, actor or interaction.user)
         return (None, problem) if problem else (str(role_id), None)
     if action_key == "webhook.send":
+        # только сохранённый вебхук этого сервера, которым ты управляешь (/webhook);
+        # ссылку-секрет в кнопку больше не кладём: её видели бы нажавшие и экспорт
+        from extended_modules import can_manage_webhook
         record_id = parse_id(value)
-        if record_id is not None:
-            row = get_webhook(record_id)
-            return (str(record_id), None) if row and row[1] == guild.id else (None, "actions.webhook_record_missing")
-        url = normalize_url(value)
-        if url and _WEBHOOK_URL.match(url):
-            return url, None
-        return None, "actions.webhook_modal.no_url"
+        row = get_webhook(record_id) if record_id is not None else None
+        if row and row[1] == guild.id and can_manage_webhook(interaction, row):
+            return str(record_id), None
+        return None, "actions.webhook_record_missing"
     if action_key == "counter.change":
         parsed = parse_counter(value)
         if parsed is None:
@@ -940,7 +953,7 @@ def variant_for(interaction, row):
     roles = {role.id for role in getattr(interaction.user, "roles", [])}
     for variant in get_build_settings(row[0]).get("variants") or []:
         target = get_message_build(variant.get("build_id") or 0)
-        if not target or target[1] != row[1]:
+        if not target or target[1] != row[1] or not build_attach_allowed(interaction, target, row[2]):
             continue
         if variant.get("level") and level >= core.level_value(variant["level"]):
             return target[0]

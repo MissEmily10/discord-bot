@@ -1656,6 +1656,59 @@ class AttachButtonsTests(unittest.TestCase):
         self.assertFalse(ab.may_impersonate(FakeInteraction(self.g, self.g.members[MEMBER]), other))
 
 
+class SecurityAuditTests(unittest.TestCase):
+    """Находки аудита Message Build."""
+
+    def test_private_ignores_old_restrictions(self):
+        g = make_guild()
+        member = FakeInteraction(g, g.members[MEMBER])
+        self.assertFalse(actions.can_view(member, STAFF, "private", [], ["member"]))
+        self.assertTrue(actions.can_view(member, STAFF, "restricted", [], ["member"]))
+
+    def test_webhook_button_needs_own_saved_webhook(self):
+        g = make_guild()
+        staff = FakeInteraction(g, g.members[STAFF])
+        url = "https://discord.com/api/webhooks/1/abc"
+        self.assertEqual(actions.validate_action_value(staff, "webhook.send", url)[1], "actions.webhook_record_missing")
+        rid = database.save_webhook(GUILD, ADMIN, 1, 9800, "hook", url, None)
+        self.assertEqual(actions.validate_action_value(staff, "webhook.send", str(rid))[1],
+                         "actions.webhook_record_missing")  # чужой вебхук
+        admin = FakeInteraction(g, g.members[ADMIN])
+        self.assertEqual(actions.validate_action_value(admin, "webhook.send", str(rid)), (str(rid), None))
+        self.assertEqual(actions.strip_secrets([{"action_key": "webhook.send", "value": "1"}])[0]["value"], None)
+        modal = actions.WebhookSendModal(url)
+        self.assertNotIn(modal.url_input, modal.children)  # ссылку нажавшему не показываем
+
+    def test_webhook_command_checks_user(self):
+        import hubs
+        g = make_guild()
+        staff = FakeInteraction(g, g.members[STAFF])
+        channel = FakeChannel(g, 9801)
+        run(hubs.create_webhook_for(staff, channel, "x", None))
+        self.assertEqual(staff.last, core.t("live.error.webhook_no_rights", channel=channel.mention))
+
+    def test_history_is_manage_only_and_list_kept(self):
+        import embed_module as em
+        g = make_guild()
+        bid = database.save_message_build(GUILD, ADMIN, "Секрет", "", json.dumps([{"title": "x"}]), "[]",
+                                          visibility="public")
+        member = FakeInteraction(g, g.members[MEMBER])
+        run(em.MessageBuildFinalView(bid, back_target=None).history.callback(member))
+        self.assertEqual(member.last, core.t("embed.edit_denied"))
+        state = em.EmbedState(GUILD, STAFF)
+        state.interactive = {"type": "native_select", "kind": "role"}
+        self.assertEqual(state.list_options, [])
+        self.assertEqual(state.interactive["type"], "native_select")  # просмотр не стирает меню
+
+    def test_empty_build_does_not_wipe_copies(self):
+        import live
+        g = make_guild()
+        bid = database.save_message_build(GUILD, STAFF, "Пусто", "", "[]", "[]")
+        database.save_sent_instance(bid, 990001, 9802, GUILD, 0)
+        self.assertEqual(run(live._resync_one(g, bid)), (0, 0, 0, 0))
+        self.assertTrue(database.get_sent_instances(bid))
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

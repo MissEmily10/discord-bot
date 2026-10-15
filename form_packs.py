@@ -432,7 +432,10 @@ class PackView(PanelView):
         if not await self._pack(interaction):
             return
         inside = {form[0] for form, _ in pack_items(self.pack_id)}
+        from actions import form_visible
+        # пак видят все: в меню — только публичные формы (приватные не открылись бы у участников)
         forms = [get_form(fid) for fid, *_ in get_forms(interaction.guild.id) if fid not in inside]
+        forms = [form for form in forms if form and form[6] == "public" and form_visible(interaction, form)]
         if len(inside) >= MAX_ITEMS:
             await reply(interaction, "packs.pack.full", max=MAX_ITEMS)
             return

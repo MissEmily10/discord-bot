@@ -128,7 +128,8 @@ async def collect(guild, needed, user=None, extra=None):
             if not row:
                 return t("live.no_submissions")
             form_name, applicant_id, created = row
-            return t("live.last_submission", form=form_name or "—", user=f"<@{applicant_id}>", when=f"<t:{created}:R>")
+            return t("live.last_submission", form=safe_text(form_name or "—"), user=f"<@{applicant_id}>",
+                     when=f"<t:{created}:R>")
 
         variables["last_submission"] = last
 
@@ -328,6 +329,8 @@ async def resync_build(guild, build_id, with_children=True):
 
 async def _resync_one(guild, build_id):
     parts = await parts_for(guild, build_id) or []
+    if not parts:
+        return 0, 0, 0, 0  # build стал пустым — не удаляем отправленное
     by_channel = {}
     for message_id, channel_id, guild_id, sent_at, part_index in get_sent_instances(build_id):
         if guild_id == guild.id:
@@ -454,6 +457,11 @@ def automation_author(guild, owner_id, build_row):
     """
     member = guild.get_member(owner_id)
     if member is None or build_row is None:
+        return None
+    # автора понизили или закрыли ему доступ — его расписания и триггеры молчат
+    if not core.is_owner_id(member.id) and (
+            core.level_value(core.member_level(guild, member)) < core.level_value("staff")
+            or core.is_user_denied(guild.id, member.id) is not None):
         return None
     settings_roles = _json(build_row[9], [])
     levels = _json(build_row[10], [])

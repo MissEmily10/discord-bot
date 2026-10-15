@@ -274,6 +274,13 @@ WEBHOOK_AVATAR_MAX = 8 * 1024 * 1024
 
 async def create_webhook_for(interaction, channel, name, avatar):
     from database import save_webhook
+    from extended_modules import is_admin
+    # постоянный вебхук = писать в канал от любого имени: только тем, кто и в
+    # Discord может управлять вебхуками в этом канале (или админам бота)
+    if not core.can_post_in(interaction.user, channel) or not (
+            is_admin(interaction) or channel.permissions_for(interaction.user).manage_webhooks):
+        await say(interaction, "live.error.webhook_no_rights", channel=channel.mention)
+        return
     if not channel.permissions_for(interaction.guild.me).manage_webhooks:
         await say(interaction, "webhook_cmd.bot_rights", channel=channel.mention)
         return

@@ -87,6 +87,13 @@ class EmbedState:
 
     @property
     def list_options(self):
+        """Опции списка; если прикреплено другое меню — пусто (и оно не стирается от просмотра)."""
+        if self.interactive and self.interactive.get("type") == "list":
+            return self.interactive["options"]
+        return []
+
+    def ensure_list(self):
+        """Список вместо другого меню — только когда в него правда добавляют опцию."""
         if not self.interactive or self.interactive.get("type") != "list":
             self.interactive = {"type": "list", "options": []}
         return self.interactive["options"]
@@ -388,11 +395,13 @@ class VisibilityView(PanelView):
     @discord.ui.button(label="Публичный", emoji="🌐", style=discord.ButtonStyle.success)
     async def public(self, interaction, button):
         self.state.visibility = "public"
+        self.state.visibility_roles, self.state.visibility_levels = [], []
         await go_to_editor(interaction, self.state, back_target=(core.screen(interaction), self))
 
     @discord.ui.button(label="Приватный", emoji="🔒", style=discord.ButtonStyle.secondary)
     async def private(self, interaction, button):
         self.state.visibility = "private"
+        self.state.visibility_roles, self.state.visibility_levels = [], []
         await go_to_editor(interaction, self.state, back_target=(core.screen(interaction), self))
 
     @discord.ui.button(label="Ограниченный", emoji="🎭", style=discord.ButtonStyle.primary)
@@ -1041,9 +1050,24 @@ class ListOptionModal(Modal, title="ОПЦИЯ СПИСКА"):
 
 # ---------- выбор действия (общий для кнопок и опций списка) ----------
 
+def creator_of(interaction, state):
+    """
+    Чьи права действуют у кнопки: её создателя (владельца build'а). Админ,
+    правящий чужой build, не должен вешать действия, которые при клике
+    отклонятся по правам владельца («создатель потерял права»).
+    """
+    owner_id = getattr(state, "owner_id", None)
+    if owner_id is None or owner_id == interaction.user.id:
+        return interaction.user, get_user_level(interaction)
+    member = interaction.guild.get_member(owner_id)
+    owner_level = core.member_level(interaction.guild, member or owner_id)
+    level = min(owner_level, get_user_level(interaction), key=core.level_value)
+    return member or interaction.user, level
+
+
 class ActionPickSelect(discord.ui.Select):
     def __init__(self, interaction, state, pending, target, builder_view):
-        allowed = actions_for_level(get_user_level(interaction))
+        allowed = actions_for_level(creator_of(interaction, state)[1])
         options = [
             discord.SelectOption(label=row[0], description=(row[3] or "")[:100], value=row[0])
             for row in allowed[:25]
@@ -1122,7 +1146,8 @@ class ActionValueModal(Modal, title="ЗНАЧЕНИЕ"):
 
 
 async def commit_pending(interaction, state, pending, target, builder_view, raw_value):
-    value, error = validate_action_value(interaction, pending.get("action_key"), raw_value, style=pending.get("style"))
+    value, error = validate_action_value(interaction, pending.get("action_key"), raw_value, style=pending.get("style"),
+                                         actor=creator_of(interaction, state)[0])
     if error:
         await say(interaction, error)
         return
@@ -1131,7 +1156,7 @@ async def commit_pending(interaction, state, pending, target, builder_view, raw_
         if len(state.list_options) >= 25:
             await say(interaction, "embed.list.too_many")
             return
-        state.list_options.append(pending)
+        state.ensure_list().append(pending)
     else:
         if len(state.buttons) >= MAX_BUTTONS:
             await say(interaction, "embed.buttons.too_many", max=MAX_BUTTONS)
@@ -1615,11 +1640,18 @@ class MessageBuildFinalView(PanelView):
         super().__init__(back_target=back_target)
         self.build_id = build_id
 
-    async def _row(self, interaction, manage=False):
+    async def _row(self, interaction, manage=False, copy=False):
+        """
+        manage — менять/удалять; copy — забрать содержимое (экспорт, шаблон):
+        у непубличного build'а это тоже только автору и админам, иначе
+        ограничение обходилось бы копией.
+        """
         row = get_message_build(self.build_id)
         if not row or row[1] != interaction.guild.id or not build_visible(interaction, row):
             await say(interaction, "embed.build_not_found")
             return None
+        if copy and row[7] != "public":
+            manage = True
         if manage and not can_manage_build(interaction, row):
             await say(interaction, "embed.edit_denied")
             return None
@@ -1645,6 +1677,8 @@ class MessageBuildFinalView(PanelView):
         )
 
         async def selected(i):
+            if not await self._row(i):  # права могли смениться, пока панель открыта
+                return
             # отправка в несколько каналов может занять дольше 3 секунд
             await i.response.defer(ephemeral=True, thinking=True)
             sent, failed = await send_build(i, self.build_id, select.values)
@@ -1657,6 +1691,8 @@ class MessageBuildFinalView(PanelView):
 
         async def via_webhook(i, channel, name, avatar):
             import live
+            if not await self._row(i):
+                return
             await i.response.defer(ephemeral=True, thinking=True)
             message, error = await live.deliver_temp_webhook(i.guild, i.user, self.build_id, channel, name, avatar)
             text = (t("embed.send.sent", channels=t("embed.send.via_webhook", name=name, channel=message.channel.mention))
@@ -1697,21 +1733,22 @@ class MessageBuildFinalView(PanelView):
 
     @discord.ui.button(label="Сохранить как шаблон", emoji="💾", style=discord.ButtonStyle.secondary, row=1)
     async def save_template_button(self, interaction, button):
-        if not await self._row(interaction):
+        if not await self._row(interaction, copy=True):
             return
         await interaction.response.send_modal(SaveAsTemplateModal(self.build_id))
 
     @discord.ui.button(label="Экспорт JSON", emoji="📤", style=discord.ButtonStyle.secondary, row=1)
     async def export_json(self, interaction, button):
         from build_tools import send_export
-        row = await self._row(interaction)
+        row = await self._row(interaction, copy=True)
         if row:
             await send_export(interaction, row)
 
     @discord.ui.button(label="История", emoji="🕘", style=discord.ButtonStyle.secondary, row=1)
     async def history(self, interaction, button):
         from build_tools import VersionsView
-        if not await self._row(interaction):
+        # прошлые версии могли быть закрытыми — смотрят только автор и админы
+        if not await self._row(interaction, manage=True):
             return
         await interaction.response.edit_message(
             content=None,
@@ -1751,11 +1788,33 @@ class MessageBuildFinalView(PanelView):
         row = await self._row(interaction, manage=True)
         if not row:
             return
+        sent = len(get_sent_instances(self.build_id))
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "embed.delete_confirm", name=row[3], sent=sent),
+            view=BuildDeleteConfirmView(self, back_target=(core.screen(interaction), self)),
+        )
+
+    async def really_delete(self, interaction):
+        row = await self._row(interaction, manage=True)
+        if not row:
+            return
         if delete_message_build(self.build_id):
             core.audit(interaction, "build.deleted", "build", self.build_id, row[3])
             await interaction.response.edit_message(embed=panel_embed(interaction, "embed.deleted"), view=None)
         else:
             await say(interaction, "embed.build_not_found")
+
+
+class BuildDeleteConfirmView(PanelView):
+    texts = "embed.delete_confirm"
+
+    def __init__(self, final_view, back_target=None):
+        super().__init__(back_target=back_target)
+        self.final_view = final_view
+
+    @discord.ui.button(label="Да, удалить", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction, button):
+        await self.final_view.really_delete(interaction)
 
 
 def _group_sends(instances):
@@ -1780,13 +1839,15 @@ class SaveAsTemplateModal(Modal, title="СОХРАНИТЬ КАК ШАБЛОН")
 
     async def on_submit(self, interaction):
         row = get_message_build(self.build_id)
-        if not row or not build_visible(interaction, row):
+        if not row or row[1] != interaction.guild.id or not build_visible(interaction, row) \
+                or (row[7] != "public" and not can_manage_build(interaction, row)):
             await say(interaction, "embed.build_not_found")
             return
+        from actions import strip_secrets
         payload = {
             "content": row[4] or "",
             "embeds": _json(row[5], []),
-            "buttons": _json(row[6], []),
+            "buttons": strip_secrets(_json(row[6], [])),
             "interactive": _json(row[11], None),
             "layout": row[14] if len(row) > 14 else "split",
         }
@@ -1799,7 +1860,7 @@ class SaveAsTemplateModal(Modal, title="СОХРАНИТЬ КАК ШАБЛОН")
             payload_json=json.dumps(payload, ensure_ascii=False),
             visibility=visibility,
             category=self.category_input.value.strip() or "general",
-            allowed_role_ids_json=row[9],
+            allowed_role_ids_json="[]",
         )
         core.audit(interaction, "template.created", "template", tid, f"from build {self.build_id}")
         await say(interaction, "embed.save_template_modal.done", id=tid)
