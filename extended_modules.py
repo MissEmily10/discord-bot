@@ -315,7 +315,7 @@ class FormUseView(PanelView):
                 await say(ci, "embed.send.no_perm_user", channel=f"<#{select.values[0].id}>")
                 return
             if not core.bot_can_post(channel):
-                await say(ci, "embed.send.no_perm_bot", channel=channel.mention)
+                await say(ci, "embed.send.no_perm_bot", channel=channel.mention, perms=core.bot_missing_text(channel))
                 return
             from banner_render import banner_parts
             embed = panel_embed(ci, "forms.public_card", title=row[3], description=row[4] or t("forms.no_description"))
@@ -1234,7 +1234,7 @@ class RoleMenuActions(PanelView):
                 await say(ci, "embed.send.no_perm_user", channel=f"<#{select.values[0].id}>")
                 return
             if not core.bot_can_post(channel):
-                await say(ci, "embed.send.no_perm_bot", channel=channel.mention)
+                await say(ci, "embed.send.no_perm_bot", channel=channel.mention, perms=core.bot_missing_text(channel))
                 return
             menu_view = discord.ui.View(timeout=None)
             menu_view.add_item(RoleMenuSelect(self.menu_id, ci.guild, row))

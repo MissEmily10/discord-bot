@@ -166,22 +166,18 @@ def allowed_mentions_for(member, channel):
 
 
 def can_post(member, channel):
-    """-> None или ключ ошибки. Канал, ветка или форум; проверяются и автор, и бот."""
+    """-> None или ключ ошибки. Канал, ветка или форум; проверяется автор."""
     if member is None:
         return "live.error.author_gone"
-    me = channel.guild.me
     is_thread = isinstance(channel, discord.Thread)
-    for who, key in ((member, "embed.send.no_perm_user"), (me, "embed.send.no_perm_bot")):
-        if who is None:
-            return "embed.send.no_perm_bot"
-        if who is member and core.is_owner_id(member.id):
-            continue
-        perms = channel.permissions_for(who)
+    # Права самого бота заранее не проверяем: данные бота о сервере бывают
+    # неточными, и он отказывался писать туда, где мог. Пробуем отправить, а
+    # если Discord откажет — говорим, какого права не хватает (deliver).
+    if not core.is_owner_id(member.id):
+        perms = channel.permissions_for(member)
         can_send = perms.send_messages_in_threads if is_thread else perms.send_messages
         if not (perms.view_channel and can_send):
-            return key
-        if who is me and not perms.embed_links:
-            return key
+            return "embed.send.no_perm_user"
     if is_thread and channel.archived and channel.locked:
         return "live.error.thread_locked"
     return None
@@ -207,6 +203,7 @@ async def deliver(guild, author, build_id, channel, *, user=None, extra=None, tr
     track = track and not is_personal(data)
     mentions = allowed_mentions_for(author, channel)
     first, target = None, channel
+    dropped_embeds = False
     try:
         for index, part in enumerate(parts):
             if index == 0 and isinstance(channel, discord.ForumChannel):
@@ -216,12 +213,17 @@ async def deliver(guild, author, build_id, channel, *, user=None, extra=None, tr
             else:
                 msg = await target.send(allowed_mentions=mentions, **part)
             first = first or msg
+            if part_embeds(part) and getattr(msg, "embeds", None) == []:
+                # Discord принял сообщение, но выбросил embed'ы — нет «Встраивать ссылки»
+                dropped_embeds = True
             if track:
                 save_sent_instance(build_id, msg.id, target.id, guild.id, index)
     except discord.Forbidden:
-        return first, t("embed.send.forbidden", channel=channel.mention)
+        return first, t("embed.send.no_perm_bot", channel=channel.mention, perms=core.bot_missing_text(channel))
     except discord.HTTPException as error:
         return first, t("embed.send.http_error", channel=channel.mention, error=error)
+    if dropped_embeds:
+        return first, t("embed.send.no_perm_bot", channel=channel.mention, perms=t("perm.embed_links"))
     return first, None
 
 

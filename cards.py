@@ -434,8 +434,9 @@ class CardEditorView(PanelView):
             if channel is None or not core.can_post_in(i.user, channel):
                 await reply(i, "embed.send.no_perm_user", channel=f"<#{select.values[0].id}>")
                 return
-            if not core.bot_can_post(channel):
-                await reply(i, "embed.send.no_perm_bot", channel=channel.mention)
+            if core.bot_missing(channel, files=True):
+                await reply(i, "embed.send.no_perm_bot", channel=channel.mention,
+                            perms=core.bot_missing_text(channel, files=True))
                 return
             await i.response.defer()
             message = await channel.send(**card_message(fresh))

@@ -258,11 +258,29 @@ def can_post_in(member, channel):
 
 
 def bot_can_post(channel):
+    return not bot_missing(channel)
+
+
+BOT_POST_PERMS = ("view_channel", "send_messages", "embed_links")
+
+
+def bot_missing(channel, files=False):
+    """
+    Каких прав бота в канале не хватает по его данным о сервере -> [название права].
+    Это подсказка, а не приговор: окончательно решает Discord при отправке.
+    """
     me = channel.guild.me if channel is not None and channel.guild else None
     if me is None:
-        return False
+        return [t("perm.view_channel")]
     perms = channel.permissions_for(me)
-    return perms.view_channel and perms.send_messages and perms.embed_links
+    needed = list(BOT_POST_PERMS) + (["attach_files"] if files else [])
+    if isinstance(channel, discord.Thread):
+        needed[1] = "send_messages_in_threads"
+    return [t(f"perm.{name}") for name in needed if not getattr(perms, name, False)]
+
+
+def bot_missing_text(channel, files=False):
+    return ", ".join(bot_missing(channel, files)) or t("perm.unknown")
 
 
 # =========================

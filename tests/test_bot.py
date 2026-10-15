@@ -1518,6 +1518,40 @@ class EmojiPickerTests(unittest.TestCase):
             form_packs._doodles.clear()
 
 
+class BotPermissionTests(unittest.TestCase):
+    """Данные бота о правах неточны -> не отказываемся заранее; отказ Discord — с названием права."""
+
+    def test_send_when_cache_says_no(self):
+        import live
+        g = make_guild()
+        build_id = database.save_message_build(GUILD, STAFF, "Тест", "", json.dumps([{"title": "Привет"}]), "[]")
+
+        class BotBlind(FakeChannel):
+            def permissions_for(self, who):
+                if who is self.guild.me:  # по кэшу бот «ничего не может»
+                    return discord.Permissions.none()
+                return super().permissions_for(who)
+
+        channel = BotBlind(g, 9500)
+        message, error = run(live.deliver(g, g.members[STAFF], build_id, channel, track=False))
+        self.assertIsNone(error)
+        self.assertEqual(len(channel.sent), 1)
+
+        class Refuses(BotBlind):
+            async def send(self, **kwargs):
+                raise discord.Forbidden(types.SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions")
+
+        refused = Refuses(g, 9501)
+        message, error = run(live.deliver(g, g.members[STAFF], build_id, refused, track=False))
+        self.assertIsNone(message)
+        self.assertIn("«Встраивать ссылки»", error)
+        self.assertIn("«Отправлять сообщения»", error)
+        # участнику без права писать — по-прежнему нельзя
+        closed = FakeChannel(g, 9502, allow=False)
+        message, error = run(live.deliver(g, g.members[MEMBER], build_id, closed, track=False))
+        self.assertEqual(error, core.t("embed.send.no_perm_user", channel=closed.mention))
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

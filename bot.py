@@ -327,7 +327,7 @@ class ButtonSetActions(PanelView):
                 await ci.response.send_message(t("embed.send.no_perm_user", channel=f"<#{select.values[0].id}>"), ephemeral=True)
                 return
             if not core.bot_can_post(channel):
-                await ci.response.send_message(t("embed.send.no_perm_bot", channel=channel.mention), ephemeral=True)
+                await ci.response.send_message(t("embed.send.no_perm_bot", channel=channel.mention, perms=core.bot_missing_text(channel)), ephemeral=True)
                 return
             _, _, components = actions.render_source("s", self.set_id)
             await channel.send(embed=panel_embed(ci, "buttons.public_card", title=row[3]), view=components)
