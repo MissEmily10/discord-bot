@@ -183,8 +183,25 @@ async def require_command_access(interaction, command_name):
         return False
     if has_command_access(interaction, command_name):
         return True
-    await interaction.response.send_message(t("text_access_denied"), ephemeral=True)
+    await interaction.response.send_message(ephemeral=True, **message_for(interaction, "text_access_denied"))
     return False
+
+
+# Отказы в доступе показываются одной карточкой с универсальным баннером
+# «access denied» (access_denied.banner), а причина — текстом под ним.
+DENIAL_KEYS = {
+    "text_access_denied", "common.need_admin", "common.owner_only", "actions.no_access",
+    "actions.creator_revoked", "actions.build_no_access", "automation.denied", "embed.edit_denied",
+    "forms.review.no_rights",
+}
+
+
+def message_for(interaction, key, **params):
+    """Ответ бота по ключу: отказ в доступе — карточкой с баннером, остальное — текстом."""
+    text = t(key, **params)
+    if key in DENIAL_KEYS:
+        return {"embed": panel_embed(interaction, "access_denied", description=text, title="", danger=True)}
+    return {"content": text}
 
 
 # =========================
@@ -414,8 +431,18 @@ def resolve_thumbnail(interaction, context):
     return _resolve_image(interaction, context, "thumbnail")
 
 
+# Баннеры — только у главных экранов: стартовый экран каждой команды и
+# универсальный «доступ запрещён». На остальных экранах баннера нет.
+BANNER_SCREENS = (
+    "embed.home", "library.home", "interactive.home", "forms.review_home",
+    "logo.home", "eminemovna.home", "webhooks.home", "access_denied",
+)
+
+
 def resolve_banner(interaction, context):
-    """Широкий баннер экрана — показывается над текстом панели."""
+    """Широкий баннер экрана — показывается над текстом панели (только BANNER_SCREENS)."""
+    if context not in BANNER_SCREENS:
+        return None
     return _resolve_image(interaction, context, "banner")
 
 

@@ -35,6 +35,10 @@ CATALOG = {
     "thumbnail.select": "art:thumbnail.select.png",
     "thumbnail.logo": "art:thumbnail.logo.png",
     "text_access_denied": "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
+    # Универсальная карточка отказа: баннер из Figma + причина текстом.
+    "access_denied.title": "",
+    "access_denied.banner": "art:access_denied.banner.png",
+    "embed.home.banner": "art:embed.home.banner.png",
     "nav_back": "◀️ Назад",
     "nav_next": "▶️ Далее",
     "nav_cancel": "❌ Отмена",

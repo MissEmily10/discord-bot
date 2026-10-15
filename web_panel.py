@@ -127,7 +127,9 @@ def editable_keys():
         keys.append(key)
         if key.endswith(".title") and key[: -len(".title")] in contexts:
             screen = key[: -len(".title")]
-            keys += [screen + ".thumbnail", screen + ".banner"]
+            keys.append(screen + ".thumbnail")
+            if screen in core.BANNER_SCREENS:
+                keys.append(screen + ".banner")
     return keys
 
 
@@ -409,7 +411,7 @@ async def start(bot):
 async def send_panel_link(interaction):
     """Одноразовая ссылка на веб-панель (кнопка «Веб-панель» в /eminemovna). Только владелец."""
     if not core.is_owner(interaction):
-        await interaction.response.send_message(core.t("common.owner_only"), ephemeral=True)
+        await interaction.response.send_message(ephemeral=True, **core.message_for(interaction, "common.owner_only"))
         return
     if panel_port() is None or not panel_url():
         await interaction.response.send_message(core.t("panel.disabled"), ephemeral=True)

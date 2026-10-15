@@ -150,6 +150,13 @@ class FakeChannel:
         return types.SimpleNamespace(id=self.id * 1000 + len(self.sent), channel=self)
 
 
+def _shown(content, kwargs):
+    """Что увидит человек: текст сообщения или — для карточек вроде «доступ запрещён» — описание embed'а."""
+    if content is None and kwargs.get("embed") is not None:
+        return kwargs["embed"].description
+    return content
+
+
 class FakeResponse:
     def __init__(self):
         self.sent = []
@@ -161,7 +168,7 @@ class FakeResponse:
 
     async def send_message(self, content=None, **kwargs):
         self.done = True
-        self.sent.append(content)
+        self.sent.append(_shown(content, kwargs))
 
     async def send_modal(self, modal):
         self.done = True
@@ -185,7 +192,7 @@ class FakeInteraction:
         self.followups = []
 
     async def _followup(self, content=None, **kwargs):
-        self.followups.append(content)
+        self.followups.append(_shown(content, kwargs))
 
     @property
     def last(self):
@@ -1325,6 +1332,31 @@ class WebPanelTests(unittest.TestCase):
         finally:
             for key in ("embed.home.banner", "embed.home.thumbnail"):
                 core.reset_setting(key)
+            if old is None:
+                os.environ.pop("WEB_PANEL_URL", None)
+            else:
+                os.environ["WEB_PANEL_URL"] = old
+
+    def test_access_denied_card_and_banner_screens(self):
+        g = make_guild()
+        old = os.environ.get("WEB_PANEL_URL")
+        os.environ["WEB_PANEL_URL"] = "http://bot.example:8080"
+        try:
+            i = FakeInteraction(g, g.members[MEMBER])
+            message = core.message_for(i, "common.need_admin")
+            self.assertIn("access_denied.banner.png", message["embed"].banner_url)
+            self.assertEqual(message["embed"].description, core.t("common.need_admin"))
+            self.assertEqual(core.message_for(i, "embed.build_empty"), {"content": core.t("embed.build_empty")})
+            # баннер есть только у главных экранов
+            import web_panel
+            keys = web_panel.editable_keys()
+            self.assertIn("embed.home.banner", keys)
+            self.assertIn("access_denied.banner", keys)
+            self.assertNotIn("embed.buttons.banner", keys)
+            core.set_setting("embed.buttons.banner", "https://cdn/x.png")
+            self.assertIsNone(core.panel_embed(i, "embed.buttons", count=0, max=20, buttons="").banner_url)
+        finally:
+            core.reset_setting("embed.buttons.banner")
             if old is None:
                 os.environ.pop("WEB_PANEL_URL", None)
             else:

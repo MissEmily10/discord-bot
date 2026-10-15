@@ -56,7 +56,7 @@ def get_bot_commands(bot):
 
 
 async def deny(interaction, key):
-    await interaction.response.send_message(t(key), ephemeral=True)
+    await interaction.response.send_message(ephemeral=True, **core.message_for(interaction, key))
 
 
 # ============================================================

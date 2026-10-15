@@ -53,13 +53,13 @@ _ROLE_MENTION = re.compile(r"^<@&(\d+)>$")
 
 
 def say(interaction, key, **params):
-    return interaction.response.send_message(t(key, **params), ephemeral=True)
+    return interaction.response.send_message(ephemeral=True, **core.message_for(interaction, key, **params))
 
 
 async def reply(interaction, key, **params):
     """Ответ, даже если на interaction уже ответили (после defer/модалки)."""
     if interaction.response.is_done():
-        await interaction.followup.send(t(key, **params), ephemeral=True)
+        await interaction.followup.send(ephemeral=True, **core.message_for(interaction, key, **params))
     else:
         await say(interaction, key, **params)
 
