@@ -348,12 +348,13 @@ def pack_gif(cards, hold_ms=FRAME_MS):
     for n, frame in enumerate(frames[TYPE_STEPS::len(frames) // 3 or 1][:3]):
         sample.paste(frame.convert("RGB"), (0, frames[0].height * n))
     shared = sample.quantize(colors=255, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-    # самый частый цвет — фон: возвращаем ему точный цвет макета (палитра его чуть сдвигает)
-    _, background_index = max(shared.getcolors(256))
-    colors = shared.getpalette()
-    colors[background_index * 3:background_index * 3 + 3] = empty.convert("RGB").getpixel((2, 2))
-    shared.putpalette(colors)
     palette = [frame.convert("RGB").quantize(palette=shared, dither=Image.Dither.NONE) for frame in frames]
+    # палитра чуть сдвигает цвет фона — возвращаем ему точный цвет макета
+    background_index = palette[0].getpixel((2, 2))
+    colors = palette[0].getpalette()
+    colors[background_index * 3:background_index * 3 + 3] = empty.convert("RGB").getpixel((2, 2))
+    for frame in palette:
+        frame.putpalette(colors)
     output = io.BytesIO()
     palette[0].save(output, "GIF", save_all=True, append_images=palette[1:], duration=durations,
                     loop=0, optimize=False, disposal=1)
