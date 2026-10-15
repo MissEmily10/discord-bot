@@ -35,28 +35,33 @@ CATALOG = {
     "thumbnail.select": "art:thumbnail.select.png",
     "thumbnail.logo": "art:thumbnail.logo.png",
     "text_access_denied": "РЕПЛИКА ОС — ДОСТУП ЗАПРЕЩЁН",
-    # Универсальная карточка отказа: баннер из Figma + причина текстом.
+    # Универсальная карточка отказа: баннер + причина текстом.
+    # Баннеры экранов — анимированные GIF (scripts/render_banners.py).
     "access_denied.title": "",
-    "access_denied.banner": "art:access_denied.banner.png",
-    "embed.home.banner": "art:embed.home.banner.png",
-    "library.home.banner": "art:library.home.banner.png",
-    "interactive.home.banner": "art:interactive.home.banner.png",
+    "access_denied.banner": "art:access_denied.banner.gif",
+    "embed.home.banner": "art:embed.home.banner.gif",
+    "library.home.banner": "art:library.home.banner.gif",
+    "interactive.home.banner": "art:interactive.home.banner.gif",
     # автоматические сообщения; approved/rejected/public_card — шаблоны: бот
     # дописывает на фон название должности (banner_render.py)
     "forms.submission.banner": "art:forms.submission.banner.png",
     "forms.approved.banner": "art:forms.approved.base.png",
     "forms.rejected.banner": "art:forms.rejected.base.png",
     "forms.public_card.banner": "art:forms.public_card.base.png",
-    "forms.review_home.banner": "art:forms.review_home.banner.png",
-    "logo.home.banner": "art:logo.home.banner.png",
+    "forms.review_home.banner": "art:forms.review_home.banner.gif",
+    "logo.home.banner": "art:logo.home.banner.gif",
+    "eminemovna.home.banner": "art:eminemovna.home.banner.gif",
+    "webhooks.home.banner": "art:webhooks.home.banner.gif",
+    "select.public_menu.banner": "art:select.public_menu.banner.gif",
     "nav_back": "◀️ Назад",
     "nav_next": "▶️ Далее",
     "nav_cancel": "❌ Отмена",
     "nav_prev_emoji": "◀️",
     "nav_next_emoji": "▶️",
     "nav_page": "стр. {page}/{pages}",
-    # эмодзи на кнопках панелей: doodle — свои дудлы бота (panel_art/emoji/ui), standard — обычные
-    "ui_emoji_style": "doodle",
+    # эмодзи на кнопках панелей: 3d — объёмные иконки (panel_art/emoji/ui3d),
+    # doodle — дудлы (panel_art/emoji/ui), standard — обычные
+    "ui_emoji_style": "3d",
 
     # ================= ОБЩЕЕ =================
     "common.only_in_guild": "Эта функция работает только на сервере.",
@@ -994,9 +999,9 @@ CATALOG = {
     "design.modal.cancel_input": "Текст кнопки Отмена",
 
     # ================= ХАБЫ (docs/STRUCTURE.md) =================
-    "thumbnail.library": "art:thumbnail.templates.png",
-    "thumbnail.interactive": "art:thumbnail.buttons.png",
-    "thumbnail.eminemovna": "art:thumbnail.access.png",
+    "thumbnail.library": "art:thumbnail.library.png",
+    "thumbnail.interactive": "art:thumbnail.interactive.png",
+    "thumbnail.eminemovna": "art:thumbnail.eminemovna.png",
     "library.home.title": "БИБЛИОТЕКА",
     "library.home.text": "Всё сохранённое: готовые сообщения (их можно отправить снова, править, поставить в расписание) и шаблоны для новых.",
     "library.home.messages": "Сообщения",

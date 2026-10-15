@@ -1442,24 +1442,68 @@ class UiEmojiTests(unittest.TestCase):
     def test_panel_buttons_get_doodles(self):
         import ui_emoji
         import embed_module as em
+        names = sorted(set(ui_emoji.MAP.values()))
+        names += ["u3_" + name[len("ui_"):] for name in names]
         ui_emoji._loaded.update({name: discord.PartialEmoji(name=name, id=100000000000000000 + n)
-                                 for n, name in enumerate(sorted(set(ui_emoji.MAP.values())))})
+                                 for n, name in enumerate(names)})
+
+        def buttons():
+            view = em.EmbedEditorView(em.EmbedState(GUILD, STAFF), back_target=([], None))
+            return [c for row in view.to_components() for c in row["components"] if c["type"] == 2]
+
         try:
-            view = em.EmbedEditorView(em.EmbedState(GUILD, STAFF), back_target=([], None))
-            rows = view.to_components()
-            buttons = [c for row in rows for c in row["components"] if c["type"] == 2]
-            back = next(c for c in buttons if c.get("label") == "Назад")
-            self.assertEqual(back["emoji"]["name"], "ui_back")
-            arrows = [c["emoji"]["name"] for c in buttons if c.get("emoji") and c["emoji"]["name"] in ("ui_prev", "ui_next")]
-            self.assertEqual(arrows, ["ui_prev", "ui_next"])
-            self.assertTrue(any(c.get("emoji", {}).get("name") == "ui_edit" for c in buttons))
+            # по умолчанию — объёмные иконки
+            items = buttons()
+            back = next(c for c in items if c.get("label") == "Назад")
+            self.assertEqual(back["emoji"]["name"], "u3_back")
+            arrows = [c["emoji"]["name"] for c in items if c.get("emoji") and c["emoji"]["name"] in ("u3_prev", "u3_next")]
+            self.assertEqual(arrows, ["u3_prev", "u3_next"])
+            self.assertTrue(any(c.get("emoji", {}).get("name") == "u3_edit" for c in items))
+            core.set_setting("ui_emoji_style", "doodle")
+            items = buttons()
+            self.assertEqual(next(c for c in items if c.get("label") == "Назад")["emoji"]["name"], "ui_back")
+            self.assertTrue(any(c.get("emoji", {}).get("name") == "ui_edit" for c in items))
+            # объёмная не загрузилась — берётся дудл
+            core.set_setting("ui_emoji_style", "3d")
+            del ui_emoji._loaded["u3_edit"]
+            self.assertTrue(any(c.get("emoji", {}).get("name") == "ui_edit" for c in buttons()))
             core.set_setting("ui_emoji_style", "standard")
-            view = em.EmbedEditorView(em.EmbedState(GUILD, STAFF), back_target=([], None))
-            names = [c.get("emoji", {}).get("name") for row in view.to_components() for c in row["components"]]
+            names = [c.get("emoji", {}).get("name") for c in buttons()]
             self.assertNotIn("ui_back", names)
+            self.assertNotIn("u3_back", names)
         finally:
             core.reset_setting("ui_emoji_style")
             ui_emoji._loaded.clear()
+
+    def test_every_doodle_has_a_3d_icon(self):
+        import ui_emoji
+        doodles = {f[len("ui_"):] for f in os.listdir(ui_emoji.UI_DIR) if f.endswith(".png")}
+        icons = {f[len("u3_"):] for f in os.listdir(ui_emoji.UI3D_DIR) if f.endswith(".png")}
+        self.assertEqual(doodles, icons)
+        forms = {f[len("doodle_"):] for f in os.listdir(ui_emoji.EMOJI_DIR) if f.startswith("doodle_")}
+        forms3d = {f[len("d3_"):] for f in os.listdir(ui_emoji.DOODLE3D_DIR) if f.endswith(".png")}
+        self.assertEqual(forms, forms3d)
+        # каждая иконка из MAP существует
+        for name in set(ui_emoji.MAP.values()):
+            folder, prefix = (ui_emoji.DOODLE3D_DIR, "") if name.startswith("d3_") else (ui_emoji.UI_DIR, "")
+            self.assertTrue(os.path.exists(os.path.join(folder, name + ".png")), name)
+
+    def test_form_doodles_turn_3d(self):
+        import ui_emoji
+        import form_packs as fp
+        ui_emoji._loaded["d3_star"] = discord.PartialEmoji(name="d3_star", id=200000000000000001)
+        fp._doodles["doodle_star"] = "<:doodle_star:123456789012345678>"
+        try:
+            self.assertEqual(ui_emoji.doodle("<:doodle_star:123456789012345678>"), "<:d3_star:200000000000000001>")
+            self.assertEqual(ui_emoji.swap("🎉"), discord.PartialEmoji.from_str("🎉").name)
+            ui_emoji._loaded["d3_sun"] = discord.PartialEmoji(name="d3_sun", id=200000000000000002)
+            self.assertEqual(ui_emoji.swap("☀️").name, "d3_sun")
+            core.set_setting("ui_emoji_style", "doodle")
+            self.assertEqual(ui_emoji.doodle("<:doodle_star:123456789012345678>"), "<:doodle_star:123456789012345678>")
+        finally:
+            core.reset_setting("ui_emoji_style")
+            ui_emoji._loaded.clear()
+            fp._doodles.clear()
 
 
 class HintsTests(unittest.TestCase):
@@ -1578,7 +1622,7 @@ class WebPanelTests(unittest.TestCase):
         try:
             i = FakeInteraction(g, g.members[MEMBER])
             message = core.message_for(i, "common.need_admin")
-            self.assertIn("access_denied.banner.png", message["embed"].banner_url)
+            self.assertIn("access_denied.banner.gif", message["embed"].banner_url)
             self.assertEqual(message["embed"].description, core.t("common.need_admin"))
             self.assertEqual(core.message_for(i, "embed.build_empty"), {"content": core.t("embed.build_empty")})
             # баннер есть только у главных экранов
