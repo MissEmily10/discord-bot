@@ -137,7 +137,10 @@ def clean_line(line):
 # ============================================================
 
 def base_image(banner):
-    """Свой фон (загружен в веб-панель/модалкой) или простой фон в цветах бота."""
+    """Свой фон (загружен модалкой), готовый стиль (style:<ключ>) или сливочный фон."""
+    if (banner.get("base") or "").startswith("style:"):
+        import banner_styles
+        return banner_styles.render_base(banner["base"][6:])
     if banner.get("base"):
         import web_panel
         path = web_panel.ASSETS_DIR / banner["base"]
@@ -273,6 +276,14 @@ def line_label(line):
              size=line["size"])
 
 
+def _background_name(banner):
+    base = banner["base"] or ""
+    if base.startswith("style:"):
+        import banner_styles
+        return t("server_banner.base_style", name=banner_styles.STYLES.get(base[6:], ("—",))[0])
+    return t("server_banner.base_own") if base else t("server_banner.base_default")
+
+
 def home_embed(interaction, banner):
     guild = interaction.guild
     key = problem(guild)
@@ -285,8 +296,7 @@ def home_embed(interaction, banner):
         last += "\n⚠️ " + t(banner["last_error"])
     import live
     return panel_embed(interaction, "server_banner.home", status=status, lines=lines or t("server_banner.no_lines"),
-                       auto=auto, last=last, background=t("server_banner.base_own") if banner["base"]
-                       else t("server_banner.base_default"), variables=live.VARIABLE_HELP)
+                       auto=auto, last=last, background=_background_name(banner), variables=live.VARIABLE_HELP)
 
 
 async def open_home(interaction, back_target=None, edit=True):
@@ -307,7 +317,7 @@ async def open_home(interaction, back_target=None, edit=True):
 
 class ServerBannerView(PanelView):
     texts = "server_banner.home"
-    button_order = ("preview", "apply_now", "lines", "auto", "interval", "background")
+    button_order = ("style", "preview", "apply_now", "lines", "auto", "interval", "background")
 
     def refresh_labels(self, banner):
         self.auto.label = t("server_banner.home.auto_off_button" if banner["auto"]
@@ -319,6 +329,13 @@ class ServerBannerView(PanelView):
             await reply(interaction, "common.need_admin")
             return None
         return get_or_create(interaction.guild.id, interaction.user.id)
+
+    @discord.ui.button(label="Стиль", emoji="🎨", style=discord.ButtonStyle.primary)
+    async def style(self, interaction, button):
+        banner = await self._banner(interaction)
+        if banner:
+            await interaction.response.edit_message(view=StylePickView(back_target=(core.screen(interaction), self),
+                                                                       home_back=self.back_target))
 
     @discord.ui.button(label="Предпросмотр", emoji="👁️", style=discord.ButtonStyle.secondary)
     async def preview(self, interaction, button):
@@ -368,6 +385,86 @@ class ServerBannerView(PanelView):
         banner = await self._banner(interaction)
         if banner:
             await interaction.response.send_modal(BaseModal(banner, self.back_target))
+
+
+def apply_style(banner, key):
+    """Готовый стиль: фон + цвета строк (первая — заголовок, остальные — подписи)."""
+    import banner_styles
+    title, sub = banner_styles.colors(key)
+    banner["base"] = f"style:{key}"
+    for n, line in enumerate(banner["lines"]):
+        line["color"] = title if n == 0 else sub
+    save(banner)
+
+
+def styles_sheet(banner, texts):
+    """Все стили одной картинкой — с текущими строками сервера."""
+    import banner_styles
+    from PIL import ImageDraw as Draw
+    import banner_render
+    tile_w, tile_h, pad = 320, 180, 10
+    keys = list(banner_styles.STYLES)
+    sheet = Image.new("RGB", (4 * (tile_w + pad) + pad, 5 * (tile_h + 36) + pad), (43, 45, 49))
+    draw = Draw.Draw(sheet)
+    font = banner_render._font("fallback:Inter-SemiBold.otf", 16)
+    for n, key in enumerate(keys):
+        title, sub = banner_styles.colors(key)
+        trial = dict(banner, base=f"style:{key}", lines=[dict(line, color=title if i == 0 else sub)
+                                                         for i, line in enumerate(banner["lines"])])
+        tile = Image.open(io.BytesIO(render(trial, texts))).resize((tile_w, tile_h), Image.LANCZOS)
+        x, y = pad + (n % 4) * (tile_w + pad), pad + (n // 4) * (tile_h + 36)
+        sheet.paste(tile, (x, y))
+        draw.text((x, y + tile_h + 6), f"{n + 1}. {banner_styles.STYLES[key][0]}", font=font, fill=(230, 230, 230))
+    output = io.BytesIO()
+    sheet.save(output, "PNG", optimize=True)
+    return output.getvalue()
+
+
+class StylePickView(PanelView):
+    texts = "server_banner.styles"
+
+    def __init__(self, back_target, home_back):
+        super().__init__(back_target=back_target)
+        import banner_styles
+        self.home_back = home_back
+        keys = list(banner_styles.STYLES)
+        for row, bright in enumerate((False, True)):
+            select = discord.ui.Select(
+                placeholder=t("server_banner.styles.bright" if bright else "server_banner.styles.minimal")[:150],
+                row=row, options=[discord.SelectOption(label=f"{keys.index(key) + 1}. {name}"[:100], value=key)
+                                  for key, (name, is_bright, *_) in banner_styles.STYLES.items()
+                                  if is_bright == bright])
+            select.callback = self._picked(select)
+            self.add_item(select)
+
+    def _picked(self, select):
+        async def callback(interaction):
+            banner = get_banner(interaction.guild.id)
+            if not can_manage(interaction) or not banner:
+                await reply(interaction, "common.need_admin")
+                return
+            apply_style(banner, select.values[0])
+            core.audit(interaction, "server_banner.style", "guild", interaction.guild.id, select.values[0])
+            await open_home(interaction, back_target=self.home_back)
+            data = await render_for(interaction.guild, banner)
+            await interaction.followup.send(t("server_banner.preview"), ephemeral=True,
+                                            file=discord.File(io.BytesIO(data), filename="server_banner.png"))
+        return callback
+
+    @discord.ui.button(label="Все стили картинкой", emoji="🖼️", style=discord.ButtonStyle.secondary, row=2)
+    async def sheet(self, interaction, button):
+        banner = get_banner(interaction.guild.id)
+        if not can_manage(interaction) or not banner:
+            await reply(interaction, "common.need_admin")
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        import live
+        needed = {(m[1], m[2]) for line in banner["lines"] for m in VARIABLE.finditer(line["text"])}
+        variables = await live.collect(interaction.guild, needed) if needed else {}
+        texts = [substitute(line["text"], variables) for line in banner["lines"]]
+        data = await asyncio.to_thread(styles_sheet, banner, texts)
+        await interaction.followup.send(t("server_banner.styles.sheet_text"), ephemeral=True,
+                                        file=discord.File(io.BytesIO(data), filename="styles.png"))
 
 
 class LinesView(PanelView):

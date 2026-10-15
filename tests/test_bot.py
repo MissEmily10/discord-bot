@@ -2067,6 +2067,25 @@ class PackBannerTests(unittest.TestCase):
         self.assertEqual(image.info.get("loop"), 0)
 
 
+class ServerBannerTests(unittest.TestCase):
+    def test_every_style_renders_with_lines(self):
+        import banner_styles
+        import server_banner as sb
+        from PIL import Image
+        banner = {"guild_id": 1, "base": "", "lines": [sb.clean_line(line) for line in sb.DEFAULT_LINES]}
+        self.assertEqual(len(banner_styles.STYLES), 20)
+        for key in banner_styles.STYLES:
+            trial = dict(banner, base=f"style:{key}")
+            image = Image.open(io.BytesIO(sb.render(trial, ["Сервер", "участников: 10 · в войсе: 2"])))
+            self.assertEqual(image.size, sb.SIZE)
+
+    def test_bad_line_values_are_cleaned(self):
+        import server_banner as sb
+        line = sb.clean_line({"text": "x" * 500, "pos": "zz", "size": "XXL", "font": "comic", "color": "red"})
+        self.assertEqual((len(line["text"]), line["pos"], line["size"], line["font"], line["color"]),
+                         (200, "bl", "M", "coolvetica", "#201C1E"))
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
