@@ -2019,6 +2019,17 @@ class BannerFontTests(unittest.TestCase):
                         self.assertFalse(overlap, f"{name}: «{ch}» задевает надпись")
 
 
+class PackBannerTests(unittest.TestCase):
+    def test_pack_gif_cycles_forms(self):
+        import banner_render as b
+        from PIL import Image
+        data = b.pack_gif([("модератор", ""), ("artist", "напиши нам!")])
+        image = Image.open(io.BytesIO(data))
+        self.assertEqual(image.format, "GIF")
+        self.assertEqual(image.n_frames, 2)
+        self.assertEqual(image.info.get("loop"), 0)
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

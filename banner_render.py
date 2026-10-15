@@ -283,6 +283,27 @@ def render(screen, **values):
     return output.getvalue()
 
 
+FRAME_MS = 2200  # сколько показывается каждая должность в анимированном баннере пака
+
+
+def pack_gif(cards, frame_ms=FRAME_MS):
+    """
+    Анимированный баннер пака: карточки форм (название + надпись сверху)
+    сменяют друг друга по кругу. cards — [(название, надпись сверху)]. -> GIF (bytes)
+    """
+    frames = []
+    for name, tagline in cards:
+        values = {"name": name}
+        if tagline:
+            values["tagline"] = tagline
+        frame = Image.open(io.BytesIO(render("forms.public_card", **values))).convert("RGB")
+        frames.append(frame.quantize(colors=255, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE))
+    output = io.BytesIO()
+    frames[0].save(output, "GIF", save_all=True, append_images=frames[1:], duration=frame_ms,
+                   loop=0, optimize=True, disposal=1)
+    return output.getvalue()
+
+
 def banner_parts(interaction, screen, filename="banner.png", **values):
     """
     Баннер над карточкой: -> (embed с картинкой | None, discord.File | None).

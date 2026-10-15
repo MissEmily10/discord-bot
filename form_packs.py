@@ -11,6 +11,7 @@ accepted!») бот переводит сам; поправить можно в 
 """
 
 import asyncio
+import io
 import os
 import random
 import re
@@ -319,6 +320,25 @@ async def show_form_card(interaction, form_id, pack_id=None):
     await interaction.response.send_message(**kwargs)
 
 
+async def pack_banner(pack_id):
+    """
+    Анимированный баннер пака (GIF: должности сменяют друг друга).
+    -> (ссылка | None, bytes | None). Ссылка есть, когда настроен WEB_PANEL_URL —
+    тогда картинку можно поставить прямо в сообщение.
+    """
+    import banner_render
+    import web_panel
+    items = pack_items(pack_id)
+    if not items or not os.path.exists(banner_render.base_path("forms.public_card")):
+        return None, None
+    cards = [(form[3], tagline_for(pack_id, form[0])) for form, _ in items]
+    data = await asyncio.to_thread(banner_render.pack_gif, cards)
+    if not web_panel.panel_url():
+        return None, data
+    name, error = await asyncio.to_thread(web_panel.save_asset, data)
+    return (f"{web_panel.panel_url()}/assets/{name}" if name else None), data
+
+
 # ============================================================
 # ПАНЕЛИ: /interactive → Паки форм
 # ============================================================
@@ -381,7 +401,7 @@ async def open_pack(interaction, pack_id, back_target=None, edit=None):
 
 class PackView(PanelView):
     texts = "packs.pack"
-    button_order = ("add_form", "build_message", "edit_form", "remove_form", "rename", "delete_pack")
+    button_order = ("add_form", "build_message", "gif_banner", "edit_form", "remove_form", "rename", "delete_pack")
 
     def __init__(self, pack_id, back_target=None):
         super().__init__(back_target=back_target)
@@ -460,7 +480,29 @@ class PackView(PanelView):
         state.embeds = [{"title": t("packs.message.title"), "description": pack[4] or t("packs.message.text"),
                          "color": core.embed_color().value}]
         state.interactive = {"type": "form_packs", "packs": [self.pack_id]}
+        await interaction.response.defer()  # GIF рисуется пару секунд
+        url, _ = await pack_banner(self.pack_id)
+        if url:
+            state.embeds[0]["image"] = url  # анимированный баннер — сразу в сообщение
         await embed_module.go_to_editor(interaction, state, (core.screen(interaction), self))
+        if not url:
+            await interaction.followup.send(t("packs.banner.no_url"), ephemeral=True)
+
+    @discord.ui.button(label="Анимированный баннер", emoji="🎞️", style=discord.ButtonStyle.secondary)
+    async def gif_banner(self, interaction, button):
+        if not await self._pack(interaction):
+            return
+        if not pack_items(self.pack_id):
+            await reply(interaction, "packs.pack.empty_message")
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        url, data = await pack_banner(self.pack_id)
+        if data is None:
+            await interaction.followup.send(t("packs.banner.failed"), ephemeral=True)
+            return
+        text = t("packs.banner.ready", url=url) if url else t("packs.banner.ready_file")
+        await interaction.followup.send(text, file=discord.File(io.BytesIO(data), filename="pack_banner.gif"),
+                                        ephemeral=True)
 
     @discord.ui.button(label="Название и текст", emoji="📝", style=discord.ButtonStyle.secondary)
     async def rename(self, interaction, button):

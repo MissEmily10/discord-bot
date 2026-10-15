@@ -472,10 +472,7 @@ async def go_to_editor(interaction, state, back_target):
     # ведёт туда же, куда вёл изначально, а не обратно в выбор видимости.
     back_target = state.editor_back or back_target
     state.editor_back = back_target
-    await interaction.response.edit_message(
-        embeds=editor_embeds(state),
-        view=EmbedEditorView(state, back_target=back_target)
-    )
+    await edit_panel(interaction, embeds=editor_embeds(state), view=EmbedEditorView(state, back_target=back_target))
 
 
 # ============================================================
