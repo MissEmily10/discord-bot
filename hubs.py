@@ -88,6 +88,12 @@ class InteractiveHome(PanelView):
         await show(interaction, panel_embed(interaction, "forms.home"),
                    FormStartView(interaction.guild.id, interaction.user.id, back_target=(core.screen(interaction), self)))
 
+    @discord.ui.button(label="Живые картинки", emoji="🏆", style=discord.ButtonStyle.secondary)
+    async def live_cards(self, interaction, button):
+        import cards
+        await show(interaction, cards.home_embed(interaction),
+                   cards.CardsHome(interaction, back_target=(core.screen(interaction), self)))
+
     @discord.ui.button(label="Паки форм", emoji="🗂️", style=discord.ButtonStyle.secondary)
     async def form_packs(self, interaction, button):
         import form_packs

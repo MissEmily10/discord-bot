@@ -1384,6 +1384,60 @@ class FormPackTests(unittest.TestCase):
         fp._doodles.clear()
 
 
+class LiveCardTests(unittest.TestCase):
+    """Живые картинки: рейтинг, правка по кнопке, доступ выбранных людей и ролей."""
+
+    def test_scores_and_render(self):
+        import cards
+        card = {"title": "Ивент", "data": {"rows": []}}
+        self.assertIsNone(cards.set_score(card, "Эмилия", "10"))
+        self.assertIsNone(cards.set_score(card, "эмилия", "+5"))
+        self.assertIsNone(cards.set_score(card, "Кот", "15"))
+        self.assertIsNone(cards.set_score(card, "Пёс", "-3"))
+        self.assertEqual(cards.set_score(card, "X", "много"), "cards.error.bad_value")
+        self.assertEqual(cards.set_score(card, " ", "1"), "cards.error.no_name")
+        rows = cards.sorted_rows(card)
+        self.assertEqual([(r["name"], r["score"]) for r in rows], [("Кот", 15), ("Эмилия", 15), ("Пёс", -3)])
+        png = cards.render_rating(card["title"], rows)
+        self.assertEqual(PILImage.open(io.BytesIO(png)).width, 1200)
+        self.assertEqual(PILImage.open(io.BytesIO(cards.render_rating("Пусто", []))).width, 1200)
+
+    def test_edit_access_and_refresh(self):
+        import cards
+        g = make_guild()
+        card_id = cards.create_card(GUILD, STAFF, "Рейтинг")
+        card = cards.get_card(card_id)
+        owner = FakeInteraction(g, g.members[STAFF])
+        member = FakeInteraction(g, g.members[MEMBER])
+        self.assertTrue(cards.can_edit(owner, card))
+        self.assertFalse(cards.can_edit(member, card))
+        card["editor_roles"] = [g.safe.id]
+        g.members[MEMBER].roles.append(g.safe)
+        self.assertTrue(cards.can_edit(member, card))
+        self.assertFalse(cards.can_manage(member, card))  # менять очки — да, доступ и удаление — нет
+        # опубликованная картинка перерисовывается после правки
+        edits = []
+
+        class Message:
+            async def edit(self, **kwargs):
+                edits.append(kwargs)
+
+        channel = FakeChannel(g, 9400)
+
+        async def fetch_message(message_id):
+            return Message()
+
+        channel.fetch_message = fetch_message
+        card["channel_id"], card["message_id"] = channel.id, 1
+        cards.save_card(card)
+        self.assertIsNone(cards.set_score(card, "Эмилия", "7"))
+        self.assertTrue(run(cards.refresh_message(g, card)))
+        self.assertEqual(edits[0]["attachments"][0].filename, "card.png")
+        self.assertEqual(edits[0]["view"].children[0].custom_id, f"rb:cd:{card_id}")
+        message = cards.card_message(cards.get_card(card_id))
+        self.assertEqual(message["embed"].image.url, "attachment://card.png")
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()
