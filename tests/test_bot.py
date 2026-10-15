@@ -1911,25 +1911,62 @@ class ReferenceInboxTests(unittest.TestCase):
 
 
 class EmojiExportTests(unittest.TestCase):
-    def test_upload_skips_existing_and_stops_when_full(self):
+    def test_upload_adds_new_replaces_redrawn_and_stops_when_full(self):
         import emoji_export
-        created = []
+        import emoji_sync
+        created, deleted = [], []
+
+        class Emoji(types.SimpleNamespace):
+            async def delete(self, reason=None):
+                deleted.append(self.name)
+                guild.emojis.remove(self)
 
         class Guild:
+            id = 4242
             emoji_limit = 30
-            emojis = [types.SimpleNamespace(name="doodle_star", animated=False)]
+
+            def __init__(self):
+                self.emojis = [Emoji(name="doodle_star", animated=False, id=1),
+                               Emoji(name="doodle_crown", animated=False, id=2)]
 
             async def create_custom_emoji(self, name, image, reason=None):
                 created.append(name)
-                self.emojis.append(types.SimpleNamespace(name=name, animated=False))
+                emoji = Emoji(name=name, animated=False, id=1000 + len(created))
+                self.emojis.append(emoji)
+                return emoji
 
         guild = Guild()
-        added, skipped, no_room, errors = run(emoji_export.upload(guild, "forms"))
-        self.assertEqual(skipped, 1)            # doodle_star уже был
-        self.assertEqual(added, 29)             # 30 мест минус уже занятое
-        self.assertEqual(no_room, 20)           # остальным места не хватило
+        star = [data for name, path in emoji_export.files_of("forms") if name == "doodle_star"
+                for data in [open(path, "rb").read()]][0]
+        emoji_sync.remember("guild:4242", "doodle_star", emoji_sync.file_hash(star))  # star не менялся
+        added, skipped, no_room, errors, replaced = run(emoji_export.upload(guild, "forms"))
+        self.assertEqual(skipped, 1)            # doodle_star — та же картинка
+        self.assertEqual(replaced, 1)           # doodle_crown — хэша нет: считаем перерисованным
+        self.assertEqual(deleted, ["doodle_crown"])
+        self.assertEqual(added, 28)             # 30 мест минус два занятых
+        self.assertEqual(no_room, 20)
         self.assertNotIn("doodle_star", created)
         self.assertEqual(len(emoji_export.files_of("all")), 86)
+        # повторный запуск ничего не меняет
+        created.clear()
+        added, skipped, no_room, errors, replaced = run(emoji_export.upload(guild, "forms"))
+        self.assertEqual((added, replaced, created), (0, 0, []))
+
+    def test_remap_ids_updates_saved_emoji(self):
+        import emoji_sync
+        from database import get_connection
+        connection = get_connection()
+        connection.execute("CREATE TABLE IF NOT EXISTS remap_probe (id INTEGER PRIMARY KEY, data TEXT)")
+        connection.execute("INSERT INTO remap_probe (data) VALUES (?)", ('{"emoji": "<:doodle_cat:111>"}',))
+        connection.commit()
+        connection.close()
+        self.assertGreaterEqual(emoji_sync.remap_ids(111, 222), 1)
+        connection = get_connection()
+        value = connection.execute("SELECT data FROM remap_probe").fetchone()[0]
+        connection.execute("DROP TABLE remap_probe")
+        connection.commit()
+        connection.close()
+        self.assertEqual(value, '{"emoji": "<:doodle_cat:222>"}')
 
     def test_ping_by_user_role_or_empty_text(self):
         import emoji_export

@@ -6,6 +6,9 @@
 Стрелки перелистывания, «Назад» и «Отмена» бот оформляет сам — в
 настройках их больше нет.
 Кнопки, которые собирают участники в /embed, не трогаются никогда.
+
+Перерисованный PNG бот замечает сам (emoji_sync: хэш файла) и заменяет
+эмодзи в хранилище приложения при следующем запуске.
 """
 
 import asyncio
@@ -58,19 +61,34 @@ async def upload_folder(bot, folder, store):
         state["errors"].append(f"список эмодзи приложения: {error}")
         state["done"] = True
         return
+    import emoji_sync
     for file in sorted(os.listdir(folder)):
         name, ext = os.path.splitext(file)
         if ext.lower() != ".png":
             continue
+        with open(os.path.join(folder, file), "rb") as handle:
+            data = handle.read()
         emoji = existing.get(name)
-        if emoji is None:
+        changed = emoji is not None and emoji_sync.is_changed("app", name, data)
+        if emoji is None or changed:
             try:
-                with open(os.path.join(folder, file), "rb") as handle:
-                    emoji = await bot.create_application_emoji(name=name, image=handle.read())
+                if changed:  # картинку перерисовали — старый эмодзи заменяем новым
+                    await emoji.delete()
+                fresh = await bot.create_application_emoji(name=name, image=data)
             except discord.HTTPException as error:
                 core._log.warning("Эмодзи %s не загружен: %s", name, error)
                 state["errors"].append(f"{name}: {error}")
-                continue
+                if not changed:
+                    continue
+                fresh = None
+            if fresh is not None:
+                if changed:
+                    emoji_sync.remap_ids(emoji.id, fresh.id)
+                    state["replaced"] = state.get("replaced", 0) + 1
+                emoji_sync.remember("app", name, emoji_sync.file_hash(data))
+                emoji = fresh
+            elif changed:
+                continue  # старый уже удалён, новый не залился — пропускаем имя
         store[name] = emoji
         state["loaded"] += 1
     state["done"] = True

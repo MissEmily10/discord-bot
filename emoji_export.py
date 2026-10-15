@@ -4,7 +4,8 @@
 Владелец бота упоминает бота на нужном сервере (@бот, можно со словом
 «эмодзи») или пишет /emoji с галочкой «залить_наши_сюда» — бот отвечает, сколько
 там свободных мест, и даёт кнопки: залить все, только дудлы форм или только
-дудлы кнопок. Эмодзи с тем же именем, что уже есть на сервере, пропускаются.
+дудлы кнопок. Эмодзи с тем же именем пропускаются, а если картинку
+перерисовали — заменяются новой (emoji_sync).
 Боту нужно право «Управлять выражениями» (Manage Expressions).
 """
 
@@ -46,22 +47,36 @@ def summary(guild):
 
 
 async def upload(guild, which, progress=None):
-    """-> (залито, уже было, не влезло, ошибки)."""
-    existing = {e.name for e in guild.emojis}
-    added = skipped = no_room = 0
+    """
+    -> (залито, уже было, не влезло, ошибки, заменено). Эмодзи с тем же именем,
+    но другой картинкой (перерисовали в Figma) удаляется и заливается заново.
+    """
+    import emoji_sync
+    scope = f"guild:{guild.id}"
+    existing = {e.name: e for e in guild.emojis}
+    added = skipped = no_room = replaced = 0
     errors = []
     last_report = time.time()
     for name, path in files_of(which):
-        if name in existing:
+        with open(path, "rb") as handle:
+            data = handle.read()
+        old = existing.get(name)
+        if old is not None and not emoji_sync.is_changed(scope, name, data):
             skipped += 1
             continue
-        if free_slots(guild) <= 0:
+        if old is None and free_slots(guild) <= 0:
             no_room += 1
             continue
         try:
-            with open(path, "rb") as handle:
-                await guild.create_custom_emoji(name=name, image=handle.read(), reason="эмодзи бота")
-            added += 1
+            if old is not None:
+                await old.delete(reason="эмодзи бота перерисованы")
+            fresh = await guild.create_custom_emoji(name=name, image=data, reason="эмодзи бота")
+            emoji_sync.remember(scope, name, emoji_sync.file_hash(data))
+            if old is not None:
+                emoji_sync.remap_ids(old.id, fresh.id)
+                replaced += 1
+            else:
+                added += 1
         except discord.Forbidden:
             errors.append(t("emoji_export.no_rights"))
             break
@@ -69,8 +84,8 @@ async def upload(guild, which, progress=None):
             errors.append(f"{name}: {error}")
         if progress and time.time() - last_report > 5:
             last_report = time.time()
-            await progress(added)
-    return added, skipped, no_room, errors
+            await progress(added + replaced)
+    return added, skipped, no_room, errors, replaced
 
 
 class ExportView(PanelView):
@@ -94,8 +109,8 @@ class ExportView(PanelView):
             except discord.HTTPException:
                 pass
 
-        added, skipped, no_room, errors = await upload(guild, which, progress)
-        text = t("emoji_export.done", added=added, skipped=skipped, free=free_slots(guild))
+        added, skipped, no_room, errors, replaced = await upload(guild, which, progress)
+        text = t("emoji_export.done", added=added, replaced=replaced, skipped=skipped, free=free_slots(guild))
         if no_room:
             text += "\n" + t("emoji_export.no_room", count=no_room)
         if errors:
