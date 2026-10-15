@@ -1058,6 +1058,24 @@ async def _build_refresh(interaction, value, creator_id=None, **_):
     await interaction.followup.send(t("actions.build_refresh.done", updated=updated + added), ephemeral=True)
 
 
+_COUNTER_COOLDOWN = 3
+_last_counter = {}  # (guild_id, user_id, имя) -> ts последнего нажатия
+
+
+def counter_wait(guild_id, user_id, name, now=None):
+    """Сколько секунд ещё ждать этому участнику до следующего нажатия (0 — можно)."""
+    now = time.monotonic() if now is None else now
+    key = (guild_id, user_id, name)
+    wait = _COUNTER_COOLDOWN - (now - _last_counter[key]) if key in _last_counter else 0
+    if wait > 0:
+        return wait
+    _last_counter[key] = now
+    if len(_last_counter) > 5000:  # не копим старые записи бесконечно
+        for old in [k for k, ts in _last_counter.items() if now - ts > _COUNTER_COOLDOWN]:
+            _last_counter.pop(old, None)
+    return 0
+
+
 async def _counter_change(interaction, value, **_):
     import live
     from database import change_counter
@@ -1067,6 +1085,11 @@ async def _counter_change(interaction, value, **_):
         await reply(interaction, "actions.counter.bad_value")
         return
     name, op, number = parsed
+    # кнопка доступна всем: без паузы счётчик накручивают автокликером
+    wait = counter_wait(interaction.guild.id, interaction.user.id, name)
+    if wait > 0:
+        await reply(interaction, "actions.counter.cooldown", seconds=int(wait) + 1)
+        return
     if op == "=":
         result = change_counter(interaction.guild.id, name, set_to=number)
     else:

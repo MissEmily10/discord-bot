@@ -639,7 +639,7 @@ class FormListView(PanelView):
     def __init__(self, interaction, back_target=None):
         super().__init__(back_target=back_target)
         rows = [row for row in get_forms(interaction.guild.id) if form_visible(interaction, get_form(row[0]))]
-        for fid, owner, name, visibility, category, roles, updated in rows[:20]:
+        for fid, owner, name, visibility, category, roles, updated in rows:
             b = discord.ui.Button(label=f"{(name or '')[:60]} · #{fid}", style=discord.ButtonStyle.secondary)
 
             async def cb(i, fid=fid):
@@ -711,7 +711,7 @@ class TemplateListView(PanelView):
         favorites = get_user_favorite_template_ids(interaction.user.id)
         rows = [row for row in get_templates(interaction.guild.id) if template_visible(interaction, get_template(row[0]))]
         rows.sort(key=lambda row: row[0] not in favorites)  # избранные — первыми
-        for tid, owner, name, typ, *_ in rows[:20]:
+        for tid, owner, name, typ, *_ in rows:
             marker = " ★" if tid in favorites else ""
             b = discord.ui.Button(label=f"{(name or '')[:48]}{marker} · {typ}", style=discord.ButtonStyle.secondary)
 
@@ -880,7 +880,7 @@ class WebhookListView(PanelView):
     def __init__(self, interaction, back_target):
         super().__init__(back_target=back_target)
         rows = get_webhooks(interaction.guild.id, None if is_admin(interaction) else interaction.user.id)
-        for rid, owner, wid, cid, name, avatar, created, updated in rows[:20]:
+        for rid, owner, wid, cid, name, avatar, created, updated in rows:
             b = discord.ui.Button(label=(name or "")[:70], style=discord.ButtonStyle.secondary)
 
             async def cb(i, rid=rid):
@@ -1326,7 +1326,7 @@ class SelectHome(PanelView):
     async def menus(self, i, b):
         view = PanelView(back_target=(core.screen(i), self))
         rows = [row for row in get_role_menus(i.guild.id) if owns_or_admin(i, row[1])]
-        for mid, owner, name, roles_json, max_values, updated in rows[:20]:
+        for mid, owner, name, roles_json, max_values, updated in rows:
             btn = discord.ui.Button(label=f"{(name or '')[:60]} · #{mid}", style=discord.ButtonStyle.secondary)
 
             async def cb(ci, mid=mid):

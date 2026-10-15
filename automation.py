@@ -318,7 +318,7 @@ def build_options(interaction, exclude=()):
     rows = [
         row for row in get_message_builds(interaction.guild.id)
         if row[0] not in exclude and build_visible(interaction, get_message_build(row[0]))
-    ][:25]
+    ]
     return [
         discord.SelectOption(label=f"{(name or t('embed.default_name'))[:90]} · #{bid}", value=str(bid))
         for bid, owner, name, *_ in rows
@@ -358,10 +358,10 @@ class SchedulesView(PanelView):
         self.build_id = build_id
         rows = get_schedules(build_id=build_id)
         if rows:
-            select = discord.ui.Select(
+            select = core.PagedSelect(
                 placeholder=t("automation.schedules.manage")[:150], row=1,
                 options=[discord.SelectOption(label=t("automation.schedule.option", id=r[0], repeat=interval_text(r[6]))[:100],
-                                              value=str(r[0])) for r in rows[:25]],
+                                              value=str(r[0])) for r in rows],
             )
 
             async def picked(i):
@@ -372,7 +372,7 @@ class SchedulesView(PanelView):
                     view=ScheduleItemView(self.build_id, int(select.values[0]), back_target=self.back_target),
                 )
 
-            select.callback = picked
+            select.on_pick = picked
             self.add_item(select)
 
     @discord.ui.button(label="Добавить", emoji="➕", style=discord.ButtonStyle.success)
@@ -512,10 +512,10 @@ class TriggersView(PanelView):
         self.build_id = build_id
         rows = get_triggers(build_id=build_id)
         if rows:
-            select = discord.ui.Select(
+            select = core.PagedSelect(
                 placeholder=t("automation.triggers.manage")[:150], row=1,
                 options=[discord.SelectOption(label=t("automation.trigger.option", id=r[0], event=t(f"automation.event.{r[4]}"))[:100],
-                                              value=str(r[0])) for r in rows[:25]],
+                                              value=str(r[0])) for r in rows],
             )
 
             async def picked(i):
@@ -526,7 +526,7 @@ class TriggersView(PanelView):
                     view=TriggerItemView(self.build_id, int(select.values[0]), back_target=self.back_target),
                 )
 
-            select.callback = picked
+            select.on_pick = picked
             self.add_item(select)
 
     async def _start(self, interaction):
@@ -773,8 +773,8 @@ class BuildSettingsView(PanelView):
         from database import get_child_builds
         exclude = {self.build_id, *get_child_builds(self.build_id)}
         view = PanelView(back_target=(core.screen(interaction), self), timeout=300)
-        options = [discord.SelectOption(label=t("automation.settings.no_parent")[:100], value="0")] + build_options(interaction, exclude)[:24]
-        select = discord.ui.Select(placeholder=t("automation.settings.pick_parent")[:150], options=options)
+        options = [discord.SelectOption(label=t("automation.settings.no_parent")[:100], value="0")] + build_options(interaction, exclude)
+        select = core.PagedSelect(placeholder=t("automation.settings.pick_parent")[:150], options=options)
 
         async def picked(i):
             if not await _build_row(i, self.build_id):
@@ -788,7 +788,7 @@ class BuildSettingsView(PanelView):
             core.audit(i, "build.parent_set", "build", self.build_id, f"parent={parent_id}")
             await self.show(i)
 
-        select.callback = picked
+        select.on_pick = picked
         view.add_item(select)
         await interaction.response.edit_message(embed=panel_embed(interaction, "automation.parent"), view=view)
 
@@ -856,7 +856,7 @@ class VariantConditionView(PanelView):
         if not options:
             await say(interaction, "embed.build_pick.none")
             return
-        select = discord.ui.Select(placeholder=t("automation.variant.pick_build")[:150], options=options)
+        select = core.PagedSelect(placeholder=t("automation.variant.pick_build")[:150], options=options)
 
         async def picked(i):
             if not await _build_row(i, build_id):
@@ -871,7 +871,7 @@ class VariantConditionView(PanelView):
             core.audit(i, "build.variant_added", "build", build_id, json.dumps(condition, ensure_ascii=False))
             await self.settings_view.show(i)
 
-        select.callback = picked
+        select.on_pick = picked
         view.add_item(select)
         await interaction.response.edit_message(embed=panel_embed(interaction, "automation.variant_build"), view=view)
 

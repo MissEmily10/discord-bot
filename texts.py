@@ -54,6 +54,8 @@ CATALOG = {
     "nav_back": "Назад",
     "nav_next": "▶️ Далее",
     "nav_cancel": "Отмена",
+    "nav_options_prev": "Назад — страница {page} из {pages}",
+    "nav_options_next": "Ещё ({left}) — страница {page} из {pages}",
     "nav_page": "стр. {page}/{pages}",
     # /emoji — скачать эмодзи файлом (emoji_cmd.py)
     # референсы стиля пачками (reference_inbox.py)
@@ -403,6 +405,7 @@ CATALOG = {
     "actions.build_refresh.cooldown": "⏳ Эти сообщения только что обновлялись — попробуй через {seconds} сек.",
     "actions.counter.bad_value": "Счётчик: имя и изменение, например `очки +1`, `очки -5` или `очки =0`.",
     "actions.counter.done": "Счётчик **{name}**: {value}",
+    "actions.counter.cooldown": "⏳ Не так быстро — нажми ещё раз через {seconds} сек.",
     "embed.value_hint.counter.change": "очки +1  ·  очки -1  ·  очки =0",
     "embed.value_hint.build.goto": "ID Message Build",
     "embed.value_hint.build.refresh": "ID Message Build",
@@ -884,8 +887,9 @@ CATALOG = {
     "live.error.webhook_create": "Discord не дал создать вебхук: `{error}` (имя не может содержать «discord» или «clyde»)",
     "embed.send.via_webhook": "через вебхук «{name}» в {channel}",
     "embed.send_pick.text": "Выбери до 5 каналов, веток или форумов — или «Через вебхук» (от имени вебхука). После отправки спрошу, сохранить ли сообщение в «Мои сохранённые».",
+    "embed.send_failed.saved": "💾 Черновик сохранён: **#{id}** — он в «Мои сохранённые». Поправь права бота в канале и отправь оттуда ещё раз.",
     "embed.send_failed.title": "НЕ ОТПРАВЛЕНО",
-    "embed.send_failed.text": "{result}\n\nСообщение не сохранено. Вернись назад, чтобы выбрать другой канал.",
+    "embed.send_failed.text": "{result}\n\nСообщение пока не сохранено. Вернись назад и выбери другой канал — или сохрани черновик, чтобы отправить позже.",
     "embed.sent_saved.title": "ОТПРАВЛЕНО",
     "embed.sent_saved.text": "{result}\n\nИзменения сохранены в Message Build `{id}`.",
     "embed.save_after.title": "ОТПРАВЛЕНО",

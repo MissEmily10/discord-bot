@@ -322,7 +322,7 @@ class EmbedHomeView(PanelView):
             if template_visible(interaction, get_template(row[0]))
         ]
         view = PanelView(back_target=(core.screen(interaction), self))
-        for tid, owner, name, *_ in rows[:20]:
+        for tid, owner, name, *_ in rows:
             btn = discord.ui.Button(label=f"{(name or t('embed.default_name'))[:60]} · #{tid}", style=discord.ButtonStyle.secondary)
 
             async def cb(i, tid=tid):
@@ -353,7 +353,7 @@ class SavedBuildsListView(PanelView):
             row for row in get_message_builds(interaction.guild.id)
             if build_visible(interaction, get_message_build(row[0]))
         ]
-        for bid, owner, name, vis, cat, updated in rows[:20]:
+        for bid, owner, name, vis, cat, updated in rows:
             btn = discord.ui.Button(label=f"{(name or t('embed.default_name'))[:60]} · #{bid}", style=discord.ButtonStyle.secondary)
 
             async def cb(i, bid=bid):
@@ -1065,12 +1065,12 @@ def creator_of(interaction, state):
     return member or interaction.user, level
 
 
-class ActionPickSelect(discord.ui.Select):
+class ActionPickSelect(core.PagedSelect):
     def __init__(self, interaction, state, pending, target, builder_view):
         allowed = actions_for_level(creator_of(interaction, state)[1])
         options = [
             discord.SelectOption(label=row[0], description=(row[3] or "")[:100], value=row[0])
-            for row in allowed[:25]
+            for row in allowed
         ] or [discord.SelectOption(label=t("embed.no_actions")[:100], value="__none__")]
         super().__init__(placeholder=t("embed.pick_action")[:150], options=options, row=0)
         self.state = state
@@ -1078,7 +1078,7 @@ class ActionPickSelect(discord.ui.Select):
         self.target = target
         self.builder_view = builder_view
 
-    async def callback(self, interaction):
+    async def pick(self, interaction):
         action_key = self.values[0]
         if action_key == "__none__":
             await say(interaction, "embed.no_actions_allowed")
@@ -1097,14 +1097,14 @@ class ActionPickSelect(discord.ui.Select):
         await interaction.response.send_modal(ActionValueModal(self.state, self.pending, self.target, self.builder_view))
 
 
-class BuildPickSelect(discord.ui.Select):
+class BuildPickSelect(core.PagedSelect):
     """Выбор сохранённого Message Build, который кнопка будет показывать."""
 
     def __init__(self, interaction, state, pending, target, builder_view):
         rows = [
             row for row in get_message_builds(interaction.guild.id)
             if row[0] != state.build_id and build_visible(interaction, get_message_build(row[0]))
-        ][:25]
+        ]
         options = [
             discord.SelectOption(
                 label=f"{(name or t('embed.default_name'))[:90]} · #{bid}",
@@ -1119,7 +1119,7 @@ class BuildPickSelect(discord.ui.Select):
         self.target = target
         self.builder_view = builder_view
 
-    async def callback(self, interaction):
+    async def pick(self, interaction):
         if self.values[0] == "__none__":
             await say(interaction, "embed.build_pick.none")
             return
@@ -1207,9 +1207,9 @@ class FormAttachView(PanelView):
         if not rows:
             self.add_item(discord.ui.Button(label=t("embed.form_attach.empty")[:80], disabled=True))
             return
-        select = discord.ui.Select(
+        select = core.PagedSelect(
             placeholder=t("embed.form_attach.placeholder")[:150],
-            options=[discord.SelectOption(label=f"{(row[2] or '')[:90]} · #{row[0]}", value=str(row[0])) for row in rows[:25]],
+            options=[discord.SelectOption(label=f"{(row[2] or '')[:90]} · #{row[0]}", value=str(row[0])) for row in rows],
         )
 
         async def picked(i):
@@ -1222,7 +1222,7 @@ class FormAttachView(PanelView):
             })
             await back_to_hub(i, self.hub)
 
-        select.callback = picked
+        select.on_pick = picked
         self.add_item(select)
 
 
@@ -1484,7 +1484,7 @@ async def send_from_editor(interaction, state, channels, hub, webhook=None):
             state.build_id = None
         await interaction.edit_original_response(
             embed=panel_embed(interaction, "embed.send_failed", result=result),
-            view=PanelView(back_target=hub_screen),
+            view=SendFailedView(state, back_target=hub_screen),
         )
         return
     if is_build_listed(build_id):
@@ -1494,6 +1494,25 @@ async def send_from_editor(interaction, state, channels, hub, webhook=None):
         embed = panel_embed(interaction, "embed.save_after", result=result)
         view = SaveAfterSendView(build_id, state)
     await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+
+class SendFailedView(PanelView):
+    """Ничего не ушло: можно вернуться и поправить — или сохранить черновик, чтобы не потерять."""
+
+    def __init__(self, state, back_target):
+        super().__init__(back_target=back_target)
+        self.state = state
+
+    @discord.ui.button(label="Сохранить черновик", emoji="💾", style=discord.ButtonStyle.success)
+    async def save_draft(self, interaction, button):
+        build_id = await persist_state(interaction, self.state, listed=True)
+        if build_id is None:
+            return
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "embed.saved_build", description=t(
+                "embed.send_failed.saved", id=build_id)),
+            view=MessageBuildFinalView(build_id, back_target=None),
+        )
 
 
 WEBHOOK_AVATAR_MAX = 8 * 1024 * 1024

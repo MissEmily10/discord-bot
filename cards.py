@@ -367,9 +367,9 @@ class CardEditorView(PanelView):
             await reply(interaction, "cards.rating.empty")
             return
         view = PanelView(back_target=(core.screen(interaction), self), timeout=600)
-        select = discord.ui.Select(placeholder=t("cards.editor.pick_row")[:150], options=[
+        select = core.PagedSelect(placeholder=t("cards.editor.pick_row")[:150], options=[
             discord.SelectOption(label=row["name"][:100], description=score_text(row["score"])[:100], value=str(n))
-            for n, row in enumerate(rows[:25])])
+            for n, row in enumerate(rows)])
 
         async def picked(i):
             fresh = await self._card(i)
@@ -379,7 +379,7 @@ class CardEditorView(PanelView):
             fresh["data"]["rows"] = [row for row in fresh["data"]["rows"] if row["name"] != name]
             await apply_change(i, fresh)
 
-        select.callback = picked
+        select.on_pick = picked
         view.add_item(select)
         await interaction.response.edit_message(view=view)
 
@@ -522,8 +522,8 @@ class CardsHome(PanelView):
         super().__init__(back_target=back_target)
         cards = [card for card in get_cards(interaction.guild.id) if can_edit(interaction, card)]
         if cards:
-            select = discord.ui.Select(placeholder=t("cards.home.pick")[:150], options=[
-                discord.SelectOption(label=(card["title"] or "—")[:100], value=str(card["id"])) for card in cards[:25]])
+            select = core.PagedSelect(placeholder=t("cards.home.pick")[:150], options=[
+                discord.SelectOption(label=(card["title"] or "—")[:100], value=str(card["id"])) for card in cards])
 
             async def picked(i):
                 card = get_card(int(select.values[0]))
@@ -533,7 +533,7 @@ class CardsHome(PanelView):
                 await i.response.edit_message(embed=editor_embed(i, card),
                                               view=CardEditorView(card["id"], back_target=(core.screen(i), self)))
 
-            select.callback = picked
+            select.on_pick = picked
             self.add_item(select)
 
     @discord.ui.button(label="Новый рейтинг", emoji="🏆", style=discord.ButtonStyle.success)

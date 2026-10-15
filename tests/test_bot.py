@@ -1947,6 +1947,49 @@ class EmojiExportTests(unittest.TestCase):
         self.assertFalse(emoji_export.pinged(msg(content="эмодзи")))
 
 
+class LongListTests(unittest.TestCase):
+    def test_paged_select_turns_pages(self):
+        async def scenario():
+            options = [discord.SelectOption(label=f"item {n}", value=str(n)) for n in range(60)]
+            picked = []
+
+            async def on_pick(i):
+                picked.append(select.values[0])
+
+            select = core.PagedSelect(options=options, placeholder="x", on_pick=on_pick)
+            view = core.PanelView()
+            view.add_item(select)
+            self.assertLessEqual(len(select.options), 25)
+            self.assertEqual(select.options[-1].value, core.PagedSelect.NEXT)
+            edited = []
+            response = types.SimpleNamespace(edit_message=lambda **kw: _async(edited.append(kw)))
+            select._values = [core.PagedSelect.NEXT]
+            await select.callback(types.SimpleNamespace(response=response))
+            self.assertEqual(select.page, 1)
+            self.assertEqual(select.options[0].value, core.PagedSelect.PREV)
+            self.assertEqual(select.options[1].value, "23")
+            select._values = ["30"]
+            await select.callback(types.SimpleNamespace(response=response))
+            self.assertEqual(picked, ["30"])
+        run(scenario())
+
+    def test_panel_view_keeps_more_than_25_buttons(self):
+        async def scenario():
+            view = core.PanelView(back_target=("e", None))
+            for n in range(40):
+                view.add_item(discord.ui.Button(label=f"b{n}"))
+            view.to_components()
+            self.assertLessEqual(len(view.children), 25)
+            self.assertEqual(len(view._pages), 8)
+            labels = [b.label for page in view._pages for b in page]
+            self.assertEqual(labels, [f"b{n}" for n in range(40)])
+        run(scenario())
+
+
+async def _async(value=None):
+    return value
+
+
 class BannerFontTests(unittest.TestCase):
     def test_design_fonts_and_cyrillic_fallback(self):
         import banner_render as b

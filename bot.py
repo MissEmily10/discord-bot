@@ -340,7 +340,7 @@ class ButtonSetListView(PanelView):
             if button_set_visible(interaction, get_button_set(row[0]))
         ]
 
-        for set_id, creator_id, name, visibility, category, updated_at in rows[:20]:
+        for set_id, creator_id, name, visibility, category, updated_at in rows:
             button = discord.ui.Button(label=f"{(name or '')[:60]} · #{set_id}", style=discord.ButtonStyle.secondary)
 
             async def callback(interaction, set_id=set_id):

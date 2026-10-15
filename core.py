@@ -670,6 +670,59 @@ class Modal(discord.ui.Modal):
 # PANEL VIEW — базовый класс с "Назад"
 # =========================
 
+class PagedSelect(discord.ui.Select):
+    """
+    Выпадающий список без потолка в 25 пунктов: если пунктов больше, в конце
+    появляется «Ещё ▶», в начале — «◀ Назад», и список листается на месте.
+
+    Выбор обрабатывает on_pick(interaction) или метод pick в подклассе;
+    self.values[0] — выбранное значение, как у обычного Select.
+    """
+
+    PER_PAGE = 23  # + два пункта листания
+    PREV, NEXT = "__page_prev__", "__page_next__"
+
+    def __init__(self, options, placeholder=None, on_pick=None, **kwargs):
+        self.all_options = list(options)
+        self.page = 0
+        self.on_pick = on_pick
+        super().__init__(placeholder=placeholder, options=self._page_options(), **kwargs)
+
+    @property
+    def pages(self):
+        return max(1, -(-len(self.all_options) // self.PER_PAGE)) if len(self.all_options) > 25 else 1
+
+    def _page_options(self):
+        if len(self.all_options) <= 25:
+            return self.all_options
+        start = self.page * self.PER_PAGE
+        chunk = self.all_options[start:start + self.PER_PAGE]
+        options = []
+        if self.page > 0:
+            options.append(discord.SelectOption(
+                label=t("nav_options_prev", page=self.page, pages=self.pages)[:100], value=self.PREV, emoji="◀️"))
+        options += chunk
+        if self.page < self.pages - 1:
+            options.append(discord.SelectOption(
+                label=t("nav_options_next", page=self.page + 2, pages=self.pages,
+                        left=len(self.all_options) - start - len(chunk))[:100],
+                value=self.NEXT, emoji="▶️"))
+        return options
+
+    async def callback(self, interaction):
+        value = self.values[0] if self.values else None
+        if value in (self.PREV, self.NEXT):
+            self.page = max(0, min(self.pages - 1, self.page + (1 if value == self.NEXT else -1)))
+            self.options = self._page_options()
+            await interaction.response.edit_message(view=self.view)
+            return
+        await self.pick(interaction)
+
+    async def pick(self, interaction):
+        if self.on_pick is not None:
+            await self.on_pick(interaction)
+
+
 class PanelView(discord.ui.View):
     """
     Базовый класс для всех панелей бота.
@@ -698,6 +751,20 @@ class PanelView(discord.ui.View):
     # Порядок кнопок по важности (имена методов); не указанные — следом, как в коде.
     button_order = ()
 
+    # Discord пускает в одно сообщение 25 компонентов. Кнопки действий сверх
+    # этого откладываем: они всё равно показываются по PAGE_SIZE на странице.
+    MAX_LIVE_ITEMS = 20
+
+    def add_item(self, item):
+        if (isinstance(item, discord.ui.Button) and not getattr(item, "_panel_nav", False)
+                and not getattr(self, "_pages_ready", False) and len(self.children) >= self.MAX_LIVE_ITEMS):
+            if not hasattr(self, "_overflow"):
+                self._overflow = []
+            self._overflow.append(item)
+            item._view = self
+            return self
+        return super().add_item(item)
+
     def to_components(self):
         self._apply_pages()
         import ui_emoji  # дудл-эмодзи на кнопках вместо обычных
@@ -719,6 +786,8 @@ class PanelView(discord.ui.View):
         self._pages_ready = True
         actions = [c for c in self.children
                    if isinstance(c, discord.ui.Button) and not getattr(c, "_panel_nav", False)]
+        actions += getattr(self, "_overflow", [])
+        self._overflow = []
         if len(actions) <= self.PAGE_SIZE:
             return
         names = {}

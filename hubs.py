@@ -146,19 +146,19 @@ class ReviewHome(PanelView):
         if not forms:
             self.add_item(discord.ui.Button(label=t("forms.review_home.empty")[:80], disabled=True))
             return
-        select = discord.ui.Select(
+        select = core.PagedSelect(
             placeholder=t("forms.review_home.placeholder")[:150],
             options=[discord.SelectOption(
                 label=t("forms.review_home.option", name=form[3], pending=pending)[:100], value=str(form[0]),
                 emoji="🔒" if get_form_status(form[0])[0] else None,
-            ) for form, pending in forms[:25]],
+            ) for form, pending in forms],
         )
 
         async def picked(i):
             form = get_form(int(select.values[0]))
             await show(i, submissions_embed(i, form), SubmissionListView(i, form[0], back_target=(core.screen(i), self)))
 
-        select.callback = picked
+        select.on_pick = picked
         self.add_item(select)
 
 
@@ -188,7 +188,7 @@ class SubmissionListView(PanelView):
         pending = get_form_submissions(form_id)
         if not pending:
             return
-        select = discord.ui.Select(
+        select = core.PagedSelect(
             placeholder=t("forms.review_list.placeholder")[:150],
             options=[discord.SelectOption(
                 label=t("forms.review_list.option", id=sid, user=_member_name(interaction.guild, applicant))[:100],
@@ -200,7 +200,7 @@ class SubmissionListView(PanelView):
             sid = int(select.values[0])
             await show(i, submission_embed(i, sid), SubmissionReviewView(sid, back_target=(core.screen(i), self)))
 
-        select.callback = picked
+        select.on_pick = picked
         self.add_item(select)
 
     async def _form(self, interaction):

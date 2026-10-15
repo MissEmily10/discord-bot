@@ -912,7 +912,7 @@ class ActionRegistryView(PanelView):
     def __init__(self, back_target):
         super().__init__(back_target=back_target)
         rows = get_actions()
-        for key, min_level, dangerous, description, enabled, use_level in rows[:20]:
+        for key, min_level, dangerous, description, enabled, use_level in rows:
             button = discord.ui.Button(label=key, style=discord.ButtonStyle.secondary)
 
             async def callback(interaction, key=key):

@@ -341,15 +341,15 @@ class PacksHome(PanelView):
         super().__init__(back_target=back_target)
         packs = get_packs(interaction.guild.id)
         if packs:
-            select = discord.ui.Select(
+            select = core.PagedSelect(
                 placeholder=t("packs.home.pick")[:150],
-                options=[discord.SelectOption(label=name[:100], value=str(pid)) for pid, _, name, _ in packs[:25]],
+                options=[discord.SelectOption(label=name[:100], value=str(pid)) for pid, _, name, _ in packs],
             )
 
             async def picked(i):
                 await open_pack(i, int(select.values[0]), back_target=(core.screen(i), self))
 
-            select.callback = picked
+            select.on_pick = picked
             self.add_item(select)
 
     @discord.ui.button(label="Создать пак", emoji="➕", style=discord.ButtonStyle.success)
@@ -400,16 +400,16 @@ class PackView(PanelView):
             await reply(interaction, "packs.pack.no_forms")
             return
         view = PanelView(back_target=(core.screen(interaction), self), timeout=600)
-        select = discord.ui.Select(
+        select = core.PagedSelect(
             placeholder=t("packs.pack.pick_form")[:150],
-            options=[discord.SelectOption(label=form[3][:100], value=str(form[0])) for form in forms[:25]],
+            options=[discord.SelectOption(label=form[3][:100], value=str(form[0])) for form in forms],
         )
 
         async def picked(i):
             form = next(form for form in forms if str(form[0]) == select.values[0])
             await on_pick(i, form)
 
-        select.callback = picked
+        select.on_pick = picked
         view.add_item(select)
         await interaction.response.edit_message(view=view)
 

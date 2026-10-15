@@ -138,8 +138,8 @@ class StylePickView(PanelView):
         super().__init__(timeout=300)
         from database import get_logo_styles
         styles = get_logo_styles(interaction.guild.id)
-        select = discord.ui.Select(placeholder=t("refs.pick_style")[:150], options=[
-            discord.SelectOption(label=(row[3] or "—")[:100], value=str(row[0])) for row in styles[:25]])
+        select = core.PagedSelect(placeholder=t("refs.pick_style")[:150], options=[
+            discord.SelectOption(label=(row[3] or "—")[:100], value=str(row[0])) for row in styles])
 
         async def picked(i):
             if not _logo().can_manage_styles(i):
@@ -155,7 +155,7 @@ class StylePickView(PanelView):
             await i.followup.send(t("refs.collect.added", added=added, skipped=skipped, total=total,
                                     max=_logo().MAX_REFERENCES), ephemeral=True)
 
-        select.callback = picked
+        select.on_pick = picked
         self.add_item(select)
 
 

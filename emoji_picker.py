@@ -83,13 +83,13 @@ class EmojiPickerView(PanelView):
             )
             select.callback = self._picked(select)
             self.add_item(select)
-        guild_emojis = [emoji for emoji in getattr(interaction.guild, "emojis", []) if emoji.available][:25]
+        guild_emojis = [emoji for emoji in getattr(interaction.guild, "emojis", []) if emoji.available]
         if guild_emojis:
-            select = discord.ui.Select(
+            select = core.PagedSelect(
                 placeholder=t("emoji_picker.server")[:150], row=2,
                 options=[_option(str(emoji), emoji.name) for emoji in guild_emojis],
             )
-            select.callback = self._picked(select)
+            select.on_pick = self._picked(select)
             self.add_item(select)
 
     def _picked(self, select):
