@@ -1,7 +1,8 @@
 """
 Перенести наши эмодзи (дудлы форм и кнопок, panel_art/emoji) на сервер.
 
-Владелец бота упоминает бота на нужном сервере (@бот) — бот отвечает, сколько
+Владелец бота упоминает бота на нужном сервере (@бот, можно со словом
+«эмодзи») или пишет /emoji с галочкой «залить_наши_сюда» — бот отвечает, сколько
 там свободных мест, и даёт кнопки: залить все, только дудлы форм или только
 дудлы кнопок. Эмодзи с тем же именем, что уже есть на сервере, пропускаются.
 Боту нужно право «Управлять выражениями» (Manage Expressions).
@@ -86,11 +87,10 @@ class ExportView(PanelView):
             await interaction.response.send_message(t("emoji_export.no_rights"), ephemeral=True)
             return
         await interaction.response.edit_message(content=t("emoji_export.working"), view=None)
-        message = interaction.message
-
+        # edit_original_response работает и для скрытых (ephemeral) сообщений
         async def progress(added):
             try:
-                await message.edit(content=t("emoji_export.progress", added=added))
+                await interaction.edit_original_response(content=t("emoji_export.progress", added=added))
             except discord.HTTPException:
                 pass
 
@@ -101,7 +101,10 @@ class ExportView(PanelView):
         if errors:
             text += "\n⚠️ " + "; ".join(errors[:3])[:500]
         core._log.info("emoji export to %s: +%s", guild.id, added)
-        await message.edit(content=text)
+        try:
+            await interaction.edit_original_response(content=text)
+        except discord.HTTPException:
+            await interaction.followup.send(text, ephemeral=True)
 
     @discord.ui.button(label="Все", emoji="📦", style=discord.ButtonStyle.success)
     async def all(self, interaction, button):
@@ -116,17 +119,51 @@ class ExportView(PanelView):
         await self._run(interaction, "buttons")
 
 
+def pinged(message):
+    """Бота упомянули: самим ботом (@Purr) или его ролью (тоже выглядит как @Purr)."""
+    guild = message.guild
+    if guild is None or guild.me is None:
+        return False
+    if guild.me in message.mentions or any(u.id == guild.me.id for u in message.mentions):
+        return True
+    own_role = guild.self_role
+    if own_role is not None and own_role in message.role_mentions:
+        return True
+    raw = message.content or ""
+    return f"<@{guild.me.id}>" in raw or f"<@!{guild.me.id}>" in raw
+
+
+async def offer(channel_or_message, guild):
+    """Сводка + кнопки переноса (ответом на сообщение или в канал)."""
+    send = channel_or_message.reply if isinstance(channel_or_message, discord.Message) else channel_or_message.send
+    kwargs = {"mention_author": False} if isinstance(channel_or_message, discord.Message) else {}
+    await send(summary(guild), view=ExportView(guild.id), **kwargs)
+
+
 async def on_message(message):
-    """Владелец упомянул бота словом «эмодзи» — предложить перенос эмодзи на этот сервер."""
-    me = message.guild.me if message.guild else None
-    if me is None or message.author.bot or me not in message.mentions:
+    """Владелец упомянул бота — предложить перенос эмодзи на этот сервер.
+
+    Слово «эмодзи» не обязательно: без Message Content Intent Discord может
+    не отдать боту текст, и тогда бот молчал бы.
+    """
+    if message.author.bot or not pinged(message):
         return
     if not core.is_owner_id(message.author.id):
+        core._log.info("emoji export ping from non-owner %s (OWNER_ID=%s)", message.author.id, core.OWNER_ID)
+        try:
+            await message.reply(t("emoji_export.not_owner"), mention_author=False, delete_after=20)
+        except discord.HTTPException:
+            pass
         return
     text = (message.content or "").lower()
-    if "эмодз" not in text and "emoji" not in text and "смайл" not in text:
-        return
-    await message.reply(summary(message.guild), view=ExportView(message.guild.id), mention_author=False)
+    words = text.replace(f"<@{message.guild.me.id}>", "").replace(f"<@!{message.guild.me.id}>", "").strip()
+    if words and not any(k in words for k in ("эмодз", "emoji", "смайл", "<@&")):
+        return  # пинг по другому делу — не мешаем
+    core._log.info("emoji export offer in guild %s", message.guild.id)
+    try:
+        await offer(message, message.guild)
+    except discord.Forbidden:
+        core._log.warning("emoji export: no permission to reply in channel %s", message.channel.id)
 
 
 def register(bot):

@@ -1931,6 +1931,21 @@ class EmojiExportTests(unittest.TestCase):
         self.assertNotIn("doodle_star", created)
         self.assertEqual(len(emoji_export.files_of("all")), 86)
 
+    def test_ping_by_user_role_or_empty_text(self):
+        import emoji_export
+        me = types.SimpleNamespace(id=555)
+        role = types.SimpleNamespace(id=777)
+        guild = types.SimpleNamespace(me=me, self_role=role)
+
+        def msg(content="", mentions=(), roles=()):
+            return types.SimpleNamespace(guild=guild, content=content, mentions=list(mentions),
+                                         role_mentions=list(roles))
+
+        self.assertTrue(emoji_export.pinged(msg(mentions=[me])))           # @Purr без текста
+        self.assertTrue(emoji_export.pinged(msg(roles=[role])))            # пинг роли бота
+        self.assertTrue(emoji_export.pinged(msg(content="<@555> эмодзи")))
+        self.assertFalse(emoji_export.pinged(msg(content="эмодзи")))
+
 
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
