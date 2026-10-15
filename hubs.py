@@ -58,6 +58,11 @@ class LibraryHome(PanelView):
         await show(interaction, panel_embed(interaction, "templates.home"),
                    TemplateHome(back_target=(core.screen(interaction), self)))
 
+    @discord.ui.button(label="Картинки", emoji="🖼️", style=discord.ButtonStyle.secondary)
+    async def images(self, interaction, button):
+        import image_library
+        await image_library.open_home(interaction, back_target=(core.screen(interaction), self))
+
 
 # ============================================================
 # /interactive
@@ -89,22 +94,44 @@ class InteractiveHome(PanelView):
         await show(interaction, panel_embed(interaction, "forms.home"),
                    FormStartView(interaction.guild.id, interaction.user.id, back_target=(core.screen(interaction), self)))
 
-    @discord.ui.button(label="Живые картинки", emoji="🏆", style=discord.ButtonStyle.secondary)
-    async def live_cards(self, interaction, button):
-        import cards
-        await show(interaction, cards.home_embed(interaction),
-                   cards.CardsHome(interaction, back_target=(core.screen(interaction), self)))
-
     @discord.ui.button(label="Паки форм", emoji="🗂️", style=discord.ButtonStyle.secondary)
     async def form_packs(self, interaction, button):
         import form_packs
         await show(interaction, form_packs.home_embed(interaction),
                    form_packs.PacksHome(interaction, back_target=(core.screen(interaction), self)))
 
-    @discord.ui.button(label="Баннер сервера", emoji="🖼️", style=discord.ButtonStyle.secondary)
+
+
+# ============================================================
+# /pictures — картинки бота отдельно от кнопок и форм
+# ============================================================
+
+class PicturesHome(PanelView):
+    texts = "pictures.home"
+    button_order = ("live_cards", "templates_sheet", "server_banner", "image_library")
+
+    @discord.ui.button(label="Живые картинки", emoji="🏆", style=discord.ButtonStyle.primary)
+    async def live_cards(self, interaction, button):
+        import cards
+        await show(interaction, cards.home_embed(interaction),
+                   cards.CardsHome(interaction, back_target=(core.screen(interaction), self)))
+
+    @discord.ui.button(label="Все шаблоны", emoji="🖼️", style=discord.ButtonStyle.secondary)
+    async def templates_sheet(self, interaction, button):
+        import cards
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        files = await cards.templates_sheets()
+        await interaction.followup.send(t("pictures.sheet"), files=files, ephemeral=True)
+
+    @discord.ui.button(label="Баннер сервера", emoji="🎨", style=discord.ButtonStyle.secondary)
     async def server_banner(self, interaction, button):
         import server_banner
         await server_banner.open_home(interaction, back_target=(core.screen(interaction), self))
+
+    @discord.ui.button(label="Библиотека картинок", emoji="📚", style=discord.ButtonStyle.secondary)
+    async def image_library(self, interaction, button):
+        import image_library
+        await image_library.open_home(interaction, back_target=(core.screen(interaction), self))
 
 
 # ============================================================
@@ -424,6 +451,14 @@ def register_hubs(bot, make_button_sets):
             return
         await interaction.response.send_message(embed=panel_embed(interaction, "interactive.home"),
                                                 view=InteractiveHome(make_button_sets), ephemeral=True)
+
+    @bot.tree.command(name="pictures", description="Живые картинки, баннер сервера и библиотека картинок")
+    @app_commands.guild_only()
+    async def pictures(interaction):
+        if not await core.require_command_access(interaction, "pictures"):
+            return
+        await interaction.response.send_message(embed=panel_embed(interaction, "pictures.home"),
+                                                view=PicturesHome(), ephemeral=True)
 
     @bot.tree.command(name="forms", description="Проверка заявок по формам")
     @app_commands.guild_only()

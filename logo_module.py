@@ -420,10 +420,11 @@ def generation_file(generation_id):
     return row, pathlib.Path(row[6]).read_bytes()
 
 
-class LogoActionButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rb:lg:(?P<gid>\d+):(?P<act>apply|again|nobg)"):
+class LogoActionButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rb:lg:(?P<gid>\d+):(?P<act>apply|again|nobg|save)"):
     LABELS = {"apply": ("logo.result.apply", "🎭", discord.ButtonStyle.success),
               "again": ("logo.result.again", "🔁", discord.ButtonStyle.secondary),
-              "nobg": ("logo.result.nobg", "✂️", discord.ButtonStyle.secondary)}
+              "nobg": ("logo.result.nobg", "✂️", discord.ButtonStyle.secondary),
+              "save": ("logo.result.save", "📚", discord.ButtonStyle.secondary)}
 
     def __init__(self, generation_id, act, *, item=None):
         if item is None:
@@ -444,6 +445,14 @@ class LogoActionButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rb:
             return
         if row[2] != interaction.user.id and not can_manage_styles(interaction):
             await say(interaction, "logo.result.not_yours")
+            return
+        if self.act == "save":  # в библиотеку картинок — потом брать из бота, а не с телефона
+            import image_library
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            item_id, problem = await image_library.save_image(interaction.guild.id, interaction.user.id,
+                                                              (row[5] or t("library_images.kind.logo"))[:80], "logo", data)
+            await interaction.followup.send(t(problem) if problem else t("library_images.saved", id=item_id),
+                                            ephemeral=True)
             return
         if self.act == "apply":
             await interaction.response.send_message(
@@ -526,7 +535,7 @@ async def send_result(interaction, style_row, mode, brief, png, source_bytes=Non
                                      mode, brief, png, source_bytes)
     core.audit(interaction, "logo.generated", "logo", generation_id, mode)
     view = discord.ui.View(timeout=None)
-    for act in ("apply", "again", "nobg"):
+    for act in ("apply", "again", "nobg", "save"):
         view.add_item(LogoActionButton(generation_id, act))
     embed = panel_embed(
         interaction, "logo.result",

@@ -1466,6 +1466,55 @@ class CardTemplateTests(unittest.TestCase):
         self.assertEqual(len(table["data"]["rows"]), 1)
         self.assertEqual(cc.apply_value(table, "x", who="Кот", column=9), "cards.error.bad_column")
 
+    def test_every_template_in_every_theme(self):
+        import card_templates as ct
+        from PIL import Image as PILImage
+        for template in ct.SPECS:
+            for theme in ct.THEMES:
+                png = ct.sample(template, theme)
+                self.assertEqual(PILImage.open(io.BytesIO(png)).width, 1200, (template, theme))
+            empty = ct.default_data(template)
+            self.assertTrue(ct.render({"template": template}, "", empty))  # пустые данные не роняют
+
+    def test_generic_command_semantics(self):
+        import card_commands as cc
+        import card_templates as ct
+
+        def card(template):
+            return {"template": template, "data": ct.default_data(template)}
+
+        quote = card("quote")
+        self.assertIsNone(cc.apply_value(quote, "Мур"))
+        self.assertIsNone(cc.apply_value(quote, "Кот", who="автор"))
+        self.assertEqual((quote["data"]["text"], quote["data"]["author"]), ("Мур", "Кот"))
+        poll = card("poll")
+        self.assertIsNone(cc.apply_value(poll, "Мафия | 3"))
+        self.assertIsNone(cc.apply_value(poll, "+2", who="Мафия"))
+        self.assertIsNone(cc.apply_value(poll, "Какой ивент?", who="вопрос"))
+        self.assertEqual(poll["data"]["rows"], [["Мафия", 5]])
+        versus = card("versus")
+        self.assertIsNone(cc.apply_value(versus, "+1", who="счёт слева"))
+        self.assertEqual(versus["data"]["left_score"], 1)
+        countdown = card("countdown")
+        self.assertEqual(cc.apply_value(countdown, "когда-нибудь"), "cards.error.bad_date")
+        self.assertIsNone(cc.apply_value(countdown, "25.12 20:00"))
+        checklist = card("checklist")
+        self.assertIsNone(cc.apply_value(checklist, "Призы | нет"))
+        self.assertIsNone(cc.apply_value(checklist, "да", who="Призы"))
+        self.assertEqual(checklist["data"]["rows"], [["Призы", "да"]])
+        self.assertEqual(cc.apply_value(card("streak"), "x", who="1", column=1), "cards.error.no_rows")
+
+    def test_dates(self):
+        import card_templates as ct
+        from datetime import datetime
+        base = datetime(2026, 10, 15, 12, 0)
+        self.assertEqual(ct.parse_when("25.12 20:00", base), datetime(2026, 12, 25, 20, 0))
+        self.assertEqual(ct.parse_when("01.02", base), datetime(2027, 2, 1))
+        self.assertEqual(ct.parse_when("10:00", base), datetime(2026, 10, 16, 10, 0))
+        self.assertIsNone(ct.parse_when("31.02", base))
+        self.assertEqual(ct.plural(3, "день", "дня", "дней"), "дня")
+        self.assertEqual(ct.plural(11, "день", "дня", "дней"), "дней")
+
     def test_command_names(self):
         import card_commands as cc
         self.assertEqual(cc.clean_name("/Очки Клана"), "очки_клана")
@@ -1481,6 +1530,30 @@ class CardTemplateTests(unittest.TestCase):
         message = run(cards.card_message(card, g))
         self.assertEqual(message["file"].filename, "card.png")
         cards.delete_card(card_id)
+
+
+class ImageLibraryTests(unittest.TestCase):
+    def test_save_list_share(self):
+        import image_library as il
+        import tempfile
+        import web_panel
+        old = web_panel.ASSETS_DIR
+        web_panel.ASSETS_DIR = pathlib.Path(tempfile.mkdtemp())
+        try:
+            from PIL import Image as PILImage
+            buffer = io.BytesIO()
+            PILImage.new("RGB", (10, 10), (255, 0, 0)).save(buffer, "PNG")
+            item_id, problem = run(il.save_image(GUILD, STAFF, "Тест", "card", buffer.getvalue()))
+            self.assertIsNone(problem)
+            self.assertEqual(run(il.save_image(GUILD, STAFF, "x", "card", b"not an image"))[1], "library_images.bad_file")
+            self.assertIn(item_id, [item["id"] for item in il.visible_images(GUILD, STAFF)])
+            self.assertNotIn(item_id, [item["id"] for item in il.visible_images(GUILD, 999)])
+            il._query("UPDATE image_library SET shared = 1 WHERE id = ?", (item_id,), write=True)
+            self.assertIn(item_id, [item["id"] for item in il.visible_images(GUILD, 999)])
+            self.assertEqual(il.read_file(il.get_image(item_id)), buffer.getvalue())
+            il._query("DELETE FROM image_library WHERE id = ?", (item_id,), write=True)
+        finally:
+            web_panel.ASSETS_DIR = old
 
 
 class UiEmojiTests(unittest.TestCase):
@@ -2543,7 +2616,7 @@ class ViewSmokeTests(unittest.TestCase):
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
         self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
-                                        "emoji", "В референсы стиля"]))
+                                        "emoji", "pictures", "В референсы стиля"]))
 
 
 if __name__ == "__main__":

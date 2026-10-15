@@ -317,7 +317,7 @@ async def open_home(interaction, back_target=None, edit=True):
 
 class ServerBannerView(PanelView):
     texts = "server_banner.home"
-    button_order = ("style", "preview", "apply_now", "lines", "auto", "interval", "background")
+    button_order = ("style", "preview", "apply_now", "lines", "auto", "interval", "background", "save_to_library")
 
     def refresh_labels(self, banner):
         self.auto.label = t("server_banner.home.auto_off_button" if banner["auto"]
@@ -346,6 +346,19 @@ class ServerBannerView(PanelView):
         data = await render_for(interaction.guild, banner)
         await interaction.followup.send(t("server_banner.preview"), ephemeral=True,
                                         file=discord.File(io.BytesIO(data), filename="server_banner.png"))
+
+    @discord.ui.button(label="В библиотеку", emoji="📚", style=discord.ButtonStyle.secondary)
+    async def save_to_library(self, interaction, button):
+        banner = await self._banner(interaction)
+        if not banner:
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        import image_library
+        data = await render_for(interaction.guild, banner)
+        item_id, problem = await image_library.save_image(interaction.guild.id, interaction.user.id,
+                                                          t("server_banner.home.title").capitalize(), "banner", data)
+        await interaction.followup.send(t(problem) if problem else t("library_images.saved", id=item_id),
+                                        ephemeral=True)
 
     @discord.ui.button(label="Поставить сейчас", emoji="📤", style=discord.ButtonStyle.primary)
     async def apply_now(self, interaction, button):

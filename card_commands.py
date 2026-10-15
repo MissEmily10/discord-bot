@@ -44,9 +44,9 @@ def taken_names(bot, guild_id, except_card=None):
 def build_command(card_id, name):
     """Команда для одной картинки (имя — с сервера, обработчик знает id картинки)."""
 
-    @app_commands.describe(значение="+5, -1, =10, цель 500, текст или «Аня | дизайн | пт»",
-                           кто="Рейтинг/таблица: имя или номер строки",
-                           столбец="Таблица: номер столбца (одна ячейка)")
+    @app_commands.describe(значение="+5, -1, =10, текст, дата 25.12 20:00 или строка «Аня | дизайн | пт»",
+                           кто="Название поля (автор, цель…), имя или номер строки",
+                           столбец="Номер столбца — поменять одну ячейку строки")
     async def handler(interaction: discord.Interaction, значение: str, кто: str = None, столбец: int = None):
         await run(interaction, card_id, значение, кто, столбец)
 
@@ -54,26 +54,35 @@ def build_command(card_id, name):
 
 
 def apply_value(card, value, who=None, column=None):
-    """Изменение по шаблону картинки. -> None или ключ ошибки."""
+    """
+    Изменение по шаблону картинки. -> None или ключ ошибки.
+    кто = название поля («автор», «цель», «счёт слева») — меняется это поле;
+    кто = имя/номер строки (или значение с «|») — строка; без «кто» — главное поле.
+    """
     import cards
     import card_templates as ct
     data, template = card["data"], card["template"]
+    value = (value or "").strip()
     if template == "rating":
         if not who:
             return "cards.error.no_name"
-        if value.strip().lower() in ("убрать", "удалить", "remove"):
+        if value.lower() in ("убрать", "удалить", "remove"):
             data["rows"] = [row for row in data["rows"] if row["name"].lower() != who.strip().lower()]
             return None
         return cards.set_score(card, who, value)
+    field = ct.field_by_label(template, who) if who else None
+    if field:
+        return ct.set_field(template, data, field, value)
+    fields = ct.spec(template).get("fields", [])
+    if column and not ct.has_rows(template):
+        return "cards.error.no_rows"
+    if ct.has_rows(template) and (who or "|" in value or not fields or column):
+        return ct.set_row(template, data, who or "", value, column)
+    if not fields:
+        return "cards.error.bad_value"
     if template == "progress":
         return ct.set_progress(data, value)
-    if template == "counter":
-        return ct.change_number(data, "value", value.strip().lstrip("="))
-    if template == "text":
-        return ct.set_text(data, value)
-    if template == "table":
-        return ct.set_table(data, who or "", value, column)
-    return "cards.error.bad_value"
+    return ct.set_field(template, data, fields[0][0], value)
 
 
 async def run(interaction, card_id, value, who=None, column=None):
