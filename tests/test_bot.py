@@ -1552,6 +1552,37 @@ class BotPermissionTests(unittest.TestCase):
         self.assertEqual(error, core.t("embed.send.no_perm_user", channel=closed.mention))
 
 
+class MessageEditActionTests(unittest.TestCase):
+    """«Редактировать сообщение»: из Message Build — панель build'а, иначе — окно с текстом и embed'ом."""
+
+    def test_routes(self):
+        g = make_guild()
+        build_id = database.save_message_build(GUILD, ADMIN, "Правила", "", json.dumps([{"title": "Правила"}]), "[]")
+        database.save_sent_instance(build_id, 777000, 9600, GUILD, 0)
+        admin = FakeInteraction(g, g.members[ADMIN])
+        shown = {}
+
+        async def send_message(content=None, **kwargs):
+            shown.update(kwargs)
+
+        admin.response.send_message = send_message
+        bot_author = types.SimpleNamespace(id=g.me.id)
+        message = types.SimpleNamespace(id=777000, author=bot_author, embeds=[discord.Embed(title="Правила")],
+                                        content="")
+        run(actions._message_edit(admin, "", target_message=message))
+        import embed_module as em
+        self.assertIsInstance(shown["view"], em.MessageBuildFinalView)
+        self.assertTrue(shown["ephemeral"])
+        # обычное сообщение бота — окно с текстом, заголовком и текстом карточки
+        other = types.SimpleNamespace(id=888000, author=bot_author, embeds=[discord.Embed(title="Старое", description="d")],
+                                      content="")
+        admin2 = FakeInteraction(g, g.members[ADMIN])
+        run(actions._message_edit(admin2, "", target_message=other))
+        modal = admin2.response.modals[0]
+        self.assertEqual(modal.title_input.default, "Старое")
+        self.assertEqual(len(modal.children), 3)
+
+
 class HintsTests(unittest.TestCase):
     def test_panels_explain_their_buttons(self):
         g = make_guild()

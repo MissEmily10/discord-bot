@@ -707,6 +707,15 @@ def get_sent_instances(build_id):
     return rows
 
 
+def get_instance_build(message_id):
+    """-> id Message Build, из которого отправлено это сообщение, или None."""
+    connection = get_connection()
+    row = connection.execute("SELECT build_id FROM sent_instances WHERE message_id = ? ORDER BY id DESC LIMIT 1",
+                             (message_id,)).fetchone()
+    connection.close()
+    return row[0] if row else None
+
+
 def delete_sent_instance(message_id):
     connection = get_connection()
     connection.execute("DELETE FROM sent_instances WHERE message_id = ?", (message_id,))

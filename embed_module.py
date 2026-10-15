@@ -1393,11 +1393,12 @@ async def finish_message_build(interaction, state):
     if interaction.guild is None:
         await say(interaction, "common.only_in_guild")
         return
-    existed = state.build_id is not None and is_build_listed(state.build_id)
+    existed = state.build_id is not None
     build_id = await persist_state(interaction, state, listed=True)
     if build_id is None:
         return
-    key = "embed.saved_build.updated" if existed else "embed.saved_build.text"
+    # правили уже отправленное — напоминаем обновить копии в каналах
+    key = "embed.saved_build.updated" if existed and get_sent_instances(build_id) else "embed.saved_build.text"
     await edit_panel(interaction,
         content=None,  # убираем подсказку импорта, если была
         embed=panel_embed(interaction, "embed.saved_build", description=t(
@@ -1406,6 +1407,22 @@ async def finish_message_build(interaction, state):
         )),
         view=MessageBuildFinalView(build_id, back_target=None)
     )
+
+
+async def open_build_panel(interaction, build_id):
+    """
+    Кнопка «Редактировать сообщение» на сообщении из Message Build: панель этого
+    build'а (видно только нажавшему) — «Редактировать», «Обновить отправленные»…
+    """
+    row = get_message_build(build_id)
+    if not row or not can_manage_build(interaction, row):
+        await say(interaction, "embed.edit_denied")
+        return
+    embed = panel_embed(interaction, "embed.saved_build", title=t("embed.edit_existing.title"),
+                        description=t("embed.edit_existing.text", name=row[3], id=build_id,
+                                      sent=len(get_sent_instances(build_id))))
+    await interaction.response.send_message(embed=embed, view=MessageBuildFinalView(build_id, back_target=None),
+                                            ephemeral=True)
 
 
 async def send_from_editor(interaction, state, channels, hub, webhook=None):

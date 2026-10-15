@@ -579,6 +579,11 @@ def build_native_select_view(kind):
 # ============================================================
 
 class MessageEditModal(Modal, title="РЕДАКТИРОВАТЬ СООБЩЕНИЕ"):
+    """
+    Сообщение не из Message Build: текст над ним и (если есть) заголовок и
+    текст первого embed'а. Сообщения из Message Build правятся целиком —
+    в конструкторе (см. _message_edit).
+    """
     texts = "actions.edit_modal"
 
     content_input = discord.ui.TextInput(
@@ -592,14 +597,30 @@ class MessageEditModal(Modal, title="РЕДАКТИРОВАТЬ СООБЩЕНИ
         super().__init__()
         self.target_message = target_message
         self.content_input.default = (target_message.content or "")[:2000]
+        self.embed = target_message.embeds[0] if target_message.embeds else None
+        if self.embed is not None:
+            self.title_input = discord.ui.TextInput(label=t("actions.edit_modal.embed_title")[:45], required=False,
+                                                    max_length=256, default=(self.embed.title or "")[:256])
+            self.description_input = discord.ui.TextInput(
+                label=t("actions.edit_modal.embed_description")[:45], required=False,
+                style=discord.TextStyle.paragraph, max_length=4000, default=(self.embed.description or "")[:4000])
+            self.add_item(self.title_input)
+            self.add_item(self.description_input)
 
     async def on_submit(self, interaction):
         content = self.content_input.value.strip() or None
-        if content is None and not self.target_message.embeds:
+        embeds = list(self.target_message.embeds)
+        if self.embed is not None:
+            changed = self.embed.copy()
+            changed.title = self.title_input.value.strip() or None
+            changed.description = self.description_input.value.strip() or None
+            embeds[0] = changed
+        if content is None and not any(e.title or e.description or e.fields or e.image for e in embeds):
             await say(interaction, "actions.edit_modal.empty")
             return
         try:
-            await self.target_message.edit(content=content)
+            await self.target_message.edit(content=content, embeds=embeds,
+                                           allowed_mentions=discord.AllowedMentions.none())
         except discord.NotFound:
             await say(interaction, "actions.edit_modal.gone")
             return
@@ -787,6 +808,15 @@ async def _message_edit(interaction, value, target_message=None, **_):
         return
     if target_message.author.id != interaction.client.user.id:
         await reply(interaction, "actions.edit_not_bot")
+        return
+    from database import get_instance_build
+    build_id = get_instance_build(target_message.id)
+    row = get_message_build(build_id) if build_id else None
+    if row and interaction.guild is not None and row[1] == interaction.guild.id:
+        # сообщение из Message Build: правим сам build (весь вид, кнопки, картинки),
+        # потом «Обновить отправленные» меняет это и остальные копии
+        import embed_module
+        await embed_module.open_build_panel(interaction, build_id)
         return
     await interaction.response.send_modal(MessageEditModal(target_message))
 
