@@ -2769,7 +2769,7 @@ class ViewSmokeTests(unittest.TestCase):
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
         self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
-                                        "emoji", "emoji_wipe", "pictures", "whisper", "В референсы стиля",
+                                        "emoji", "pictures", "whisper", "В референсы стиля",
                                     "В цитаты дня", "Шепнуть"]))
 
 
