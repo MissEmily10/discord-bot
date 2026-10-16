@@ -100,6 +100,16 @@ class InteractiveHome(PanelView):
         await show(interaction, form_packs.home_embed(interaction),
                    form_packs.PacksHome(interaction, back_target=(core.screen(interaction), self)))
 
+    @discord.ui.button(label="Цитата дня", emoji="💬", style=discord.ButtonStyle.secondary)
+    async def quotes(self, interaction, button):
+        import quotes
+        await quotes.open_home(interaction, back_target=(core.screen(interaction), self))
+
+    @discord.ui.button(label="Шепталка", emoji="📩", style=discord.ButtonStyle.secondary)
+    async def whispers(self, interaction, button):
+        import whispers
+        await whispers.open_home(interaction, back_target=(core.screen(interaction), self))
+
 
 
 # ============================================================

@@ -7,6 +7,7 @@
 
 import asyncio
 import io
+import time
 import json
 import os
 import pathlib
@@ -1562,6 +1563,60 @@ class VariablesTests(unittest.TestCase):
         self.assertEqual(substitute("{random:а|а}", {"random": lambda arg: arg.split("|")[0]}), "а")
 
 
+class QuotesTests(unittest.TestCase):
+    def test_collect_and_pick_winner(self):
+        import quotes as q
+
+        def message(mid, author, text):
+            return types.SimpleNamespace(id=mid, content=text, author=types.SimpleNamespace(id=author),
+                                         channel=types.SimpleNamespace(id=5))
+
+        gid = 777001
+        a, problem = q.add_quote(gid, message(1, 10, "кот  —  это  жидкость"), 20)
+        self.assertIsNone(problem)
+        self.assertEqual(q.add_quote(gid, message(1, 10, "кот"), 21)[1], "quotes.already")
+        self.assertEqual(q.add_quote(gid, message(2, 10, "   "), 20)[1], "quotes.no_text")
+        b, _ = q.add_quote(gid, message(3, 11, "x" * 400), 20)
+        pending = q.pending_quotes(gid)
+        self.assertEqual([p["text"] for p in pending][0], "кот — это жидкость")
+        self.assertEqual(len(pending[1]["text"]), q.MAX_TEXT)
+        self.assertIsNone(q.winner(pending, {}))
+        self.assertEqual(q.winner(pending, {a: 2, b: 2})["id"], a)  # ничья — кто раньше
+        self.assertEqual(q.winner(pending, {a: 1, b: 3})["id"], b)
+        self.assertEqual(q.parse_time("9.05"), "09:05")
+        self.assertIsNone(q.parse_time("25:00"))
+        q._q("DELETE FROM quotes WHERE guild_id = ?", (gid,), write=True)
+
+
+class WhisperTests(unittest.TestCase):
+    def test_checks_blocks_and_rate(self):
+        import whispers as w
+        gid = 777002
+        guild = types.SimpleNamespace(id=gid)
+        me = types.SimpleNamespace(id=1, bot=False)
+        friend = types.SimpleNamespace(id=2, bot=False)
+        self.assertIsNone(w.check(guild, me, friend, False))
+        self.assertEqual(w.check(guild, me, me, False), "whispers.self")
+        self.assertEqual(w.check(guild, me, types.SimpleNamespace(id=3, bot=True), False), "whispers.no_bots")
+        w._q("INSERT INTO whisper_blocks (guild_id, recipient_id, sender_id) VALUES (?, 2, 1)", (gid,), write=True)
+        self.assertEqual(w.check(guild, me, friend, False), "whispers.blocked")
+        w.set_optout(gid, 2, True)
+        self.assertEqual(w.check(guild, me, friend, False), "whispers.opted_out")
+        w.set_optout(gid, 2, False)
+        w._q("DELETE FROM whisper_blocks WHERE guild_id = ?", (gid,), write=True)
+        now = int(time.time())
+        for _ in range(w.RATE_PER_TARGET):
+            w._q("INSERT INTO whispers (guild_id, sender_id, recipient_id, created_at) VALUES (?, 1, 2, ?)",
+                 (gid, now), write=True)
+        self.assertEqual(w.check(guild, me, friend, False), "whispers.rate_one")
+        w._q("DELETE FROM whispers WHERE guild_id = ?", (gid,), write=True)
+        settings = w.get_settings(gid)
+        settings["allow_images"] = 0
+        w.save_settings(settings)
+        self.assertEqual(w.check(guild, me, friend, True), "whispers.no_images")
+        w._q("DELETE FROM whisper_settings WHERE guild_id = ?", (gid,), write=True)
+
+
 class ImageLibraryTests(unittest.TestCase):
     def test_save_list_share(self):
         import image_library as il
@@ -2646,7 +2701,8 @@ class ViewSmokeTests(unittest.TestCase):
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
         self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
-                                        "emoji", "pictures", "В референсы стиля"]))
+                                        "emoji", "pictures", "whisper", "В референсы стиля",
+                                    "В цитаты дня", "Шепнуть"]))
 
 
 if __name__ == "__main__":

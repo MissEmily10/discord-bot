@@ -49,6 +49,8 @@ COMMAND_MIN_LEVELS = {
     "forms": "staff",
     "eminemovna": "staff",
     "pictures": "staff",
+    "quotes": "member",
+    "whisper": "member",
 }
 
 
@@ -403,7 +405,8 @@ def danger_color(guild_id=None):
 COMMAND_OF = {
     "automation": "embed", "build_tools": "embed", "messages": "embed", "live": "embed",
     "design": "access", "actions": "embed", "packs": "forms", "cards": "pictures",
-    "server_banner": "pictures", "library_images": "library",
+    "server_banner": "pictures", "library_images": "library", "quotes": "interactive",
+    "whispers": "interactive", "variables": "pictures",
 }
 # Команды, у которых есть своя общая картинка (thumbnail.<команда> / banner.<команда>).
 BRANDED_COMMANDS = ("embed", "forms", "access", "buttons", "templates", "webhooks", "select", "logo",

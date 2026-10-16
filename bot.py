@@ -29,6 +29,8 @@ import media
 import hubs
 import form_packs
 import cards
+import quotes
+import whispers
 import ui_emoji
 import web_panel
 from extended_modules import register_extended
@@ -77,13 +79,15 @@ async def setup_hook():
     core.ensure_default_actions()
     # кнопки/списки в уже отправленных сообщениях работают после рестарта
     bot.add_dynamic_items(*actions.DYNAMIC_ITEMS, *extended_modules.DYNAMIC_ITEMS, *logo_module.DYNAMIC_ITEMS,
-                          *form_packs.DYNAMIC_ITEMS, *cards.DYNAMIC_ITEMS)
+                          *form_packs.DYNAMIC_ITEMS, *cards.DYNAMIC_ITEMS, *quotes.DYNAMIC_ITEMS,
+                          *whispers.DYNAMIC_ITEMS)
     await web_panel.start(bot)
     automation.setup(bot)  # расписание, триггеры, живое обновление
     await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)
     import server_banner
     server_banner.start(bot)  # баннер сервера с живыми цифрами — обновление по расписанию
     asyncio.create_task(cards.refresh_loop(bot))  # живые картинки с переменными
+    quotes.start(bot)  # цитата дня: голосование по расписанию и итоги
     # дудл-эмодзи (меню паков форм и кнопки панелей) — в фоне: первая заливка долгая
     asyncio.create_task(form_packs.load_doodles(bot))
     ui_emoji.start(bot)
@@ -385,6 +389,8 @@ import reference_inbox  # noqa: E402
 reference_inbox.register(bot)
 import emoji_export  # noqa: E402
 emoji_export.register(bot)
+quotes.register(bot)
+whispers.register(bot)
 
 
 # =========================
