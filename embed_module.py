@@ -927,7 +927,8 @@ class InteractiveHubView(PanelView):
 
 async def back_to_hub(interaction, hub):
     """Вернуться в хаб интерактива с актуальной сводкой."""
-    await interaction.response.edit_message(
+    await edit_panel(
+        interaction,
         embed=panel_embed(interaction, "embed.interactive", description=interactive_summary(hub.state)),
         view=InteractiveHubView(hub.state, back_target=hub.back_target),
     )

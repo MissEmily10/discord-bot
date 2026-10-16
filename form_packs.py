@@ -617,11 +617,35 @@ def packs_picker(interaction, state, on_done, back_target):
 
     async def picked(i):
         state.interactive = clean_interactive(i.guild.id, {"packs": select.values})
+        await i.response.defer()  # анимированный баннер рисуется пару секунд
+        note = await add_pack_banner(state)
         await on_done(i)
+        if note:
+            await i.followup.send(t(note), ephemeral=True)
 
     select.callback = picked
     view.add_item(select)
     return view
+
+
+async def add_pack_banner(state):
+    """
+    Анимированный баннер первого пака — картинкой в сообщение, если своей картинки
+    там ещё нет (свою бот не трогает). -> ключ подсказки или None.
+    """
+    packs = (state.interactive or {}).get("packs") or []
+    if not packs:
+        return None
+    if not state.embeds:
+        state.embeds = [{"color": core.embed_color().value}]
+    first = state.embeds[0]
+    if first.get("image"):
+        return None
+    url, _ = await pack_banner(packs[0])
+    if not url:
+        return "packs.banner.no_url"
+    first["image"] = url
+    return None
 
 
 DYNAMIC_ITEMS = [FormPackSelect]
