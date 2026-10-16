@@ -1532,6 +1532,36 @@ class CardTemplateTests(unittest.TestCase):
         cards.delete_card(card_id)
 
 
+class VariablesTests(unittest.TestCase):
+    def test_lists_and_exclusions(self):
+        import variables as v
+        from datetime import datetime
+
+        class Voice:
+            def __init__(self, cid, name, people):
+                self.id, self.name = cid, name
+                self.members = [types.SimpleNamespace(bot=False, display_name=p, voice=None) for p in people]
+
+        a, b, afk = Voice(101, "Клан", ["Аня", "Кот"]), Voice(102, "Музыка", ["Пёс"]), Voice(103, "AFK", ["Сон"])
+        guild = types.SimpleNamespace(channels=[a, b, afk], roles=[], members=[], member_count=4)
+        pick = lambda arg: [c.id for c in v.pick_channels(guild, arg, kinds=(Voice,))]
+        self.assertEqual(pick(None), [101, 102, 103])
+        self.assertEqual(pick("Клан, музыка"), [101, 102])
+        self.assertEqual(pick("-AFK"), [101, 102])
+        self.assertEqual(pick("<#102>"), [102])
+        self.assertEqual(pick("101,-101"), [])
+        self.assertEqual(v.split_items("Клан общий, -AFK"), [(True, "Клан общий"), (False, "AFK")])
+        today = datetime(2026, 10, 16)
+        self.assertEqual(v.days_until("25.12", today), 70)
+        self.assertEqual(v.days_since("01.10.2026", today), 15)
+        self.assertIsNone(v.days_until("скоро", today))
+
+    def test_variable_regex_takes_spaced_lists(self):
+        from actions import VARIABLE, substitute
+        self.assertEqual(VARIABLE.search("в войсе {voice:Клан общий, -AFK}!")[2], "Клан общий, -AFK")
+        self.assertEqual(substitute("{random:а|а}", {"random": lambda arg: arg.split("|")[0]}), "а")
+
+
 class ImageLibraryTests(unittest.TestCase):
     def test_save_list_share(self):
         import image_library as il

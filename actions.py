@@ -272,7 +272,9 @@ def inherit_style(embeds, parent_embeds):
     return result
 
 
-VARIABLE = re.compile(r"\{([a-z_]+)(?::([^{}\s]{1,40}))?\}")
+# {имя} или {имя:аргумент}; аргумент — до 300 символов без фигурных скобок и переносов
+# (списки каналов/ролей с пробелами в именах: {voice:Клан общий, -AFK}). См. variables.py.
+VARIABLE = re.compile(r"\{([a-z_]+)(?::([^{}\n]{1,300}))?\}")
 _TEXT_KEYS = ("title", "description", "author_name", "footer_text")
 
 

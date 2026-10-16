@@ -108,7 +108,7 @@ class InteractiveHome(PanelView):
 
 class PicturesHome(PanelView):
     texts = "pictures.home"
-    button_order = ("live_cards", "templates_sheet", "server_banner", "image_library")
+    button_order = ("live_cards", "templates_sheet", "server_banner", "image_library", "variables")
 
     @discord.ui.button(label="Живые картинки", emoji="🏆", style=discord.ButtonStyle.primary)
     async def live_cards(self, interaction, button):
@@ -132,6 +132,12 @@ class PicturesHome(PanelView):
     async def image_library(self, interaction, button):
         import image_library
         await image_library.open_home(interaction, back_target=(core.screen(interaction), self))
+
+    @discord.ui.button(label="Переменные", emoji="🧩", style=discord.ButtonStyle.secondary)
+    async def variables(self, interaction, button):
+        import variables
+        await show(interaction, variables.library_embed(interaction),
+                   variables.VariablesView(back_target=(core.screen(interaction), self)))
 
 
 # ============================================================
