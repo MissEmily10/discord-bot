@@ -394,6 +394,8 @@ emoji_export.register(bot)
 quotes.register(bot)
 whispers.register(bot)
 activity.register(bot)
+import emoji_wipe  # noqa: E402  ВРЕМЕННО: /emoji_wipe — удалить файл и эту строку, когда не нужна
+emoji_wipe.register(bot)
 
 
 # =========================
