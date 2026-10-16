@@ -67,6 +67,15 @@ THEME_GRADIENTS = {
 }
 for _key, _extra in THEME_GRADIENTS.items():
     THEMES[_key].update(_extra)
+# свои цвета у стекла и глитча (тема на них не влияет, в выборе темы их нет)
+STYLE_PALETTES = {
+    "glass": dict(bg=(92, 52, 64), ink=(244, 240, 236), muted=(226, 196, 206), accent=LIME, accent2=BLUE,
+                  soft=(112, 70, 84), head=(244, 240, 236), head_ink=(92, 52, 64), grad=(LIME, PINK),
+                  tile=((120, 78, 92), (150, 112, 128))),
+    "glitch": dict(bg=(22, 20, 24), ink=(238, 236, 240), muted=(150, 146, 156), accent=LIME, accent2=PINK,
+                   soft=(40, 36, 44), head=LIME, head_ink=(22, 20, 24), grad=(LIME, PINK),
+                   tile=((40, 36, 44), (62, 54, 70))),
+}
 
 # Стиль = приёмы оформления поверх темы (цвета берутся из темы):
 #   accent — чем залит главный акцент: gradient / solid / soft / outline / stripes / dots / duo
@@ -74,9 +83,11 @@ for _key, _extra in THEME_GRADIENTS.items():
 #   radius — множитель скруглений (0 — острые углы), stroke — толщина обводки, shadow — жёсткая тень
 #   header — что под заголовком: fade / bar / underline / highlight / dots / box / none; case — lower / upper
 #   bg     — узор фона: plain / dots / grid / frame / corner / band / confetti; bang — «!» справа
-def _style(name, accent, tile, radius, stroke, shadow, header, case, bg, bang=True):
+#   fx     — особый приём: glass (стекло), sticker3d (объёмный бок + 3D-дудлы), glitch (расслоение, сканлайны)
+#   palette — свои цвета стиля вместо темы (у стекла и глитча)
+def _style(name, accent, tile, radius, stroke, shadow, header, case, bg, bang=True, fx=None, palette=None):
     return dict(name=name, accent=accent, tile=tile, radius=radius, stroke=stroke, shadow=shadow, header=header,
-                case=case, bg=bg, bang=bang)
+                case=case, bg=bg, bang=bang, fx=fx, palette=palette)
 
 
 STYLE_DEFS = {
@@ -99,7 +110,10 @@ STYLE_DEFS = {
     "soft": _style("Мягкий", "gradient", "gradient", 1.6, 0, 0, "fade", "lower", "plain"),
     "poster": _style("Плакат", "solid", "solid", 0.0, 0, 0, "box", "upper", "band"),
     "dotted": _style("Пунктир", "dots", "outline", 1.0, 2, 0, "dots", "lower", "plain"),
-    "glass": _style("Стекло", "gradient", "gradient", 1.0, 0, 0, "underline", "upper", "corner"),
+    "glass": _style("Стекло", "gradient", "solid", 1.0, 0, 0, "fade", "lower", "glass", palette="glass", fx="glass"),
+    "sticker3d": _style("3D-наклейки", "solid", "solid", 1.2, 4, 0, "highlight", "lower", "plain", bang=False,
+                        fx="sticker3d"),
+    "glitch": _style("Глитч", "gradient", "solid", 0.6, 0, 0, "fade", "lower", "scan", palette="glitch", fx="glitch"),
 }
 STYLES = {key: value["name"] for key, value in STYLE_DEFS.items()}
 DEFAULT_STYLE = "figma"
@@ -490,7 +504,13 @@ def _r(cv, box, radius):
     return int(max(0, min(radius * cv.st["radius"], (x1 - x0) / 2, (y1 - y0) / 2)))
 
 
-def _shadow(cv, box, radius):
+def _shadow(cv, box, radius, fill=None):
+    if cv.st.get("fx") == "sticker3d":  # объёмный бок вниз, как у 3D-эмодзи
+        x0, y0, x1, y1 = box
+        side = mix(fill or cv.theme["soft"], cv.theme["ink"], 0.45)
+        cv.draw.rounded_rectangle((x0, y0 + 4, x1, y1 + 12), radius=radius, fill=cv.theme["ink"])
+        cv.draw.rounded_rectangle((x0 + 4, y0 + 4, x1 - 4, y1 + 8), radius=max(0, radius - 2), fill=side)
+        return
     if cv.st["shadow"]:
         off = cv.st["shadow"]
         x0, y0, x1, y1 = box
@@ -502,11 +522,27 @@ def _outline(cv, box, radius, outline=True, color=None):
         cv.draw.rounded_rectangle(box, radius=radius, outline=color or cv.theme["ink"], width=cv.st["stroke"])
 
 
+def glass_box(cv, box, radius, alpha=40):
+    """Матовое стекло: белый с прозрачностью и светлая кромка поверх фона."""
+    x0, y0, x1, y1 = [int(v) for v in box]
+    if x1 <= x0 or y1 <= y0:
+        return
+    layer = Image.new("RGBA", (x1 - x0 + 1, y1 - y0 + 1), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rounded_rectangle((0, 0, layer.width - 1, layer.height - 1), radius=radius,
+                                            fill=(255, 255, 255, alpha), outline=(255, 255, 255, 90), width=2)
+    base = cv.image.crop((x0, y0, x1 + 1, y1 + 1)).convert("RGBA")
+    base.alpha_composite(layer)
+    cv.image.paste(base.convert("RGB"), (x0, y0))
+
+
 def shape(cv, box, radius, fill, outline=True):
     """Плашка в духе стиля: скругление, обводка и тень берутся из стиля."""
     r = _r(cv, box, radius)
+    if cv.st.get("fx") == "glass" and fill in (cv.theme["soft"], cv.theme["bg"]):
+        glass_box(cv, box, r)
+        return
     if outline:
-        _shadow(cv, box, r)
+        _shadow(cv, box, r, fill)
     cv.draw.rounded_rectangle(box, radius=r, fill=fill)
     _outline(cv, box, r, outline)
 
@@ -539,7 +575,7 @@ def accent_fill(cv, box, radius, outline=True, vertical=False):
     c, kind = cv.theme, cv.st["accent"]
     r = _r(cv, box, radius)
     if outline:
-        _shadow(cv, box, r)
+        _shadow(cv, box, r, c["grad"][1] if kind == "gradient" else c["accent"])
     if kind == "gradient":
         grad_box(cv, box, r, c["grad"], (0.26, 0.79) if not vertical else (0.08, 1.0), vertical=vertical,
                  bottom_up=vertical)
@@ -582,8 +618,11 @@ def tile_fill(cv, box, radius, outline=True):
     """Второстепенная плашка — по стилю: градиент светлый → голубой, сплошная или только контур."""
     c, kind = cv.theme, cv.st["tile"]
     r = _r(cv, box, radius)
+    if cv.st.get("fx") == "glass":
+        glass_box(cv, box, r, 52)
+        return
     if outline:
-        _shadow(cv, box, r)
+        _shadow(cv, box, r, c["soft"])
     if kind == "gradient":
         grad_box(cv, box, r, c["tile"], (0.0, 1.0), vertical=True)
     elif kind == "outline":
@@ -598,6 +637,15 @@ def background(cv):
     c, kind, d = cv.theme, cv.st["bg"], cv.draw
     w, h = cv.image.size
     faint = tuple(int(a * 0.85 + b * 0.15) for a, b in zip(c["bg"], c["muted"]))
+    if kind == "glass":
+        cv.image.paste(glass_background(w, h), (0, 0))
+        return
+    if kind == "scan":
+        for y in range(0, h, 4):
+            d.line((0, y, w, y), fill=mix(c["bg"], (0, 0, 0), 0.35), width=1)
+        for x in range(0, w, 80):
+            d.line((x, 0, x, h), fill=mix(c["bg"], c["muted"], 0.08), width=1)
+        return
     if kind == "dots":
         for y in range(24, h, 34):
             for x in range(24, w, 34):
@@ -626,20 +674,103 @@ def background(cv):
             d.rounded_rectangle((x, y, x + size, y + size // 2), radius=3, fill=rng.choice(colors))
 
 
+_glass_cache = {}
+
+
+def glass_background(w, h):
+    """Фон «стекла» как на баннерах бота: размытые пятна серо-голубого, бордо и тёмного."""
+    from PIL import ImageFilter
+    key = (w, h)
+    if key not in _glass_cache:
+        base = gradient((w, h), ((150, 160, 172), (54, 26, 34)), (0.0, 1.0), vertical=True).convert("RGB")
+        blobs = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(blobs)
+        for x, y, r, col in ((0.15, 0.2, 0.45, (120, 82, 94)), (0.85, 0.15, 0.4, (176, 150, 168)),
+                             (0.7, 0.9, 0.5, (122, 22, 38)), (0.1, 0.95, 0.35, (60, 30, 40))):
+            d.ellipse(((x - r) * w, (y - r * 0.6) * h * 1.6, (x + r) * w, (y + r * 0.6) * h * 1.6), fill=col + (150,))
+        blobs = blobs.filter(ImageFilter.GaussianBlur(max(w, h) * 0.07))
+        out = base.convert("RGBA")
+        out.alpha_composite(blobs)
+        _glass_cache[key] = out.convert("RGB")
+    return _glass_cache[key].copy()
+
+
+DOODLE_DIR = os.path.join(ROOT, "panel_art", "emoji")
+
+
+def _stickers(cv, title):
+    """3D-дудлы справа в шапке (вместо «!») — набор зависит от названия, чтобы не прыгал."""
+    import random as _random
+    files = sorted(f for f in os.listdir(DOODLE_DIR) if f.startswith("doodle_") and f.endswith(".png")) \
+        if os.path.isdir(DOODLE_DIR) else []
+    if not files:
+        return
+    rng = _random.Random(sum(map(ord, title or "")))
+    picks = rng.sample(files, 2)
+    for (x, y, size, angle), name in zip(((WIDTH - PAD - 230, 34, 118, -12), (WIDTH - PAD - 112, 62, 104, 10)), picks):
+        im = Image.open(os.path.join(DOODLE_DIR, name)).convert("RGBA").resize((size, size), Image.LANCZOS)
+        im = im.rotate(angle, resample=Image.BICUBIC, expand=True)
+        cv.image.paste(im, (x, y), im)
+
+
+def glitch(image, seed=3):
+    """
+    Глитч: салатовая и розовая кромки у светлых контуров (сдвиг влево/вправо),
+    сканлайны и цветные «сбои» на полях. Сам текст и плашки не рвём — читается.
+    """
+    import random as _random
+    from PIL import ImageFilter
+    rng = _random.Random(seed)
+    base = image.convert("RGBA")
+    w, h = base.size
+    light = image.convert("L").point(lambda v: 255 if v > 150 else 0)
+    edges = Image.eval(light, lambda v: v).filter(ImageFilter.FIND_EDGES).point(lambda v: 255 if v > 40 else 0)
+    edges = edges.filter(ImageFilter.MaxFilter(3))
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    for color, dx in ((LIME, -4), (PINK, 4)):
+        tint = Image.new("RGBA", (w, h), color + (0,))
+        tint.putalpha(edges.point(lambda v: int(v * 0.75)))
+        out.paste(tint, (dx, 0), tint)
+    result = base.copy()
+    result.alpha_composite(out)
+    # исходник поверх кромок — сами буквы остаются чистыми
+    keep = light.filter(ImageFilter.MinFilter(3))
+    result.paste(base, (0, 0), keep)
+    d = ImageDraw.Draw(result)
+    # «сбои» на правом поле и в шапке
+    for _ in range(6):
+        x = rng.randrange(w - PAD + 6, w - 8)
+        y = rng.randrange(HEAD, max(HEAD + 1, h - 20))
+        d.rectangle((x, y, min(w - 4, x + rng.randrange(10, 30)), y + rng.randrange(3, 8)),
+                    fill=rng.choice((LIME, PINK, (238, 236, 240))) + (220,))
+    for _ in range(3):
+        x = rng.randrange(PAD + 820, w - PAD - 120)
+        y = rng.randrange(150, 182)
+        d.rectangle((x, y, x + rng.randrange(20, 60), y + 4), fill=rng.choice((LIME, PINK)) + (200,))
+    # сканлайны
+    lines = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(lines)
+    for y in range(0, h, 3):
+        ld.line((0, y, w, y), fill=(0, 0, 0, 30))
+    result.alpha_composite(lines)
+    return result.convert("RGB")
+
+
 class Canvas:
     """Картинка шаблона: шапка (заголовок, линия-акцент с растворением, «!») и тема."""
 
     def __init__(self, title, data, body_height, accent=True):
-        self.theme = THEMES.get(data.get("theme"), THEMES["cream"])
         self.style = data.get("style") if data.get("style") in STYLE_DEFS else DEFAULT_STYLE
         self.st = STYLE_DEFS[self.style]
+        self.theme = STYLE_PALETTES.get(self.st.get("palette")) or THEMES.get(data.get("theme"), THEMES["cream"])
         self.height = HEAD + body_height + PAD
         self.image = Image.new("RGB", (WIDTH, self.height), self.theme["bg"])
         self.draw = ImageDraw.Draw(self.image)
         c, st = self.theme, self.st
         background(self)
         bang = data.get("bang", True) and st["bang"]
-        right = WIDTH - PAD - (140 if bang else 0)
+        stickers = st.get("fx") == "sticker3d"
+        right = WIDTH - PAD - (140 if bang else 260 if stickers else 0)
         text = (title or "").upper() if st["case"] == "upper" else (title or "").lower()
         shown, title_font = fit(text, "title", 104 if st["case"] == "lower" else 92, right - PAD, 40)
         title_w = title_font.getlength(shown)
@@ -663,6 +794,8 @@ class Canvas:
                 self.draw.ellipse((PAD + n * 22, 150, PAD + n * 22 + 10, 160), fill=c["accent"] if n % 2 else c["ink"])
         if bang:
             self.draw.text((WIDTH - PAD - 28, 150), "!", font=font("bold", 170), fill=c["accent2"], anchor="ms")
+        if stickers:
+            _stickers(self, title)
 
     def caption(self, text, y):
         if text:
@@ -670,6 +803,8 @@ class Canvas:
             self.draw.text((PAD, y), shown, font=fnt, fill=self.theme["muted"], anchor="ls")
 
     def png(self):
+        if self.st.get("fx") == "glitch":
+            self.image = glitch(self.image)
         output = io.BytesIO()
         self.image.save(output, "PNG", optimize=True)
         return output.getvalue()

@@ -1480,11 +1480,22 @@ class CardTemplateTests(unittest.TestCase):
     def test_every_style(self):
         import card_templates as ct
         from PIL import Image as PILImage
-        self.assertEqual(len(ct.STYLE_DEFS), 20)
+        self.assertEqual(len(ct.STYLE_DEFS), 22)
+        self.assertLessEqual(len(ct.STYLES), 25)  # выбор стиля — один список Discord
         for style in ct.STYLE_DEFS:
             for template in ("progress", "poll", "versus", "calendar", "spotlight", "chart", "table"):
                 png = ct.sample(template, "night", style)
                 self.assertEqual(PILImage.open(io.BytesIO(png)).width, 1200, (template, style))
+
+    def test_glass_and_glitch_keep_own_colors(self):
+        import card_templates as ct
+        from PIL import Image as PILImage
+        # у стекла и глитча свои цвета: тема картинки на них не влияет
+        for style in ("glass", "glitch"):
+            a = PILImage.open(io.BytesIO(ct.sample("counter", "cream", style))).convert("RGB")
+            b = PILImage.open(io.BytesIO(ct.sample("counter", "lime", style))).convert("RGB")
+            self.assertEqual(a.getpixel((600, 300)), b.getpixel((600, 300)), style)
+        self.assertNotIn("glass", ct.THEME_NAMES)
 
     def test_generic_command_semantics(self):
         import card_commands as cc
