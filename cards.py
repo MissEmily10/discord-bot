@@ -837,8 +837,62 @@ class RowModal(_CardModal):
                                                              self.cells.value))
 
 
+class StylePickView(PanelView):
+    """Создание картинки, шаг 2: стиль — макет из Figma или классика (с примером каждого)."""
+
+    def __init__(self, template, back_target):
+        import card_templates as ct
+        super().__init__(back_target=back_target, timeout=600)
+        self.template = template
+        select = discord.ui.Select(placeholder=t("cards.style_pick.placeholder")[:150], options=[
+            discord.SelectOption(label=name[:100], value=key, default=key == ct.DEFAULT_STYLE)
+            for key, name in ct.STYLES.items()])
+
+        async def picked(i):
+            await i.response.send_modal(TitleModal(None, template_name(self.template), create=True,
+                                                   template=self.template, style=select.values[0]))
+
+        select.callback = picked
+        self.add_item(select)
+
+    @discord.ui.button(label="Показать все стили", emoji="👁️", style=discord.ButtonStyle.secondary)
+    async def show_styles(self, interaction, button):
+        import asyncio
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        png = await asyncio.to_thread(styles_sheet, self.template)
+        await interaction.followup.send(t("cards.style_pick.examples"), ephemeral=True,
+                                        file=discord.File(io.BytesIO(png), filename="styles.png"))
+
+
+def styles_sheet(template, theme="cream"):
+    """Один шаблон во всех стилях — сетка 4 в ряд с подписями. -> PNG."""
+    import banner_render
+    import card_templates as ct
+    tiles = []
+    for n, (key, name) in enumerate(ct.STYLES.items(), 1):
+        tile = Image.open(io.BytesIO(ct.sample(template, theme, key))).convert("RGB")
+        tile.thumbnail((400, 1200))
+        tiles.append((f"{n}. {name}", tile))
+    label_font = banner_render._font("fallback:Inter-SemiBold.otf", 18)
+    cols, width, gap = 4, 400, 12
+    rows = [tiles[i:i + cols] for i in range(0, len(tiles), cols)]
+    height = sum(max(tile.height for _, tile in row) + 30 + gap for row in rows) + gap
+    sheet = Image.new("RGB", (cols * (width + gap) + gap, height), (43, 45, 49))
+    draw = ImageDraw.Draw(sheet)
+    y = gap
+    for row in rows:
+        for i, (label, tile) in enumerate(row):
+            x = gap + i * (width + gap)
+            draw.text((x, y + 20), label, font=label_font, fill=(230, 230, 230), anchor="ls")
+            sheet.paste(tile, (x, y + 28))
+        y += max(tile.height for _, tile in row) + 30 + gap
+    output = io.BytesIO()
+    sheet.save(output, "PNG", optimize=True)
+    return output.getvalue()
+
+
 class ThemeView(PanelView):
-    """Тема картинки (цвета) и «!» справа."""
+    """Тема картинки (цвета), стиль (макет / классика) и «!» справа."""
 
     def __init__(self, card, back_target):
         import card_templates as ct
@@ -858,6 +912,21 @@ class ThemeView(PanelView):
 
         select.callback = picked
         self.add_item(select)
+        style = discord.ui.Select(placeholder=t("cards.style_pick.placeholder")[:150], options=[
+            discord.SelectOption(label=name[:100], value=key,
+                                 default=key == (card["data"].get("style") or ct.DEFAULT_STYLE))
+            for key, name in ct.STYLES.items()])
+
+        async def picked_style(i):
+            fresh = get_card(self.card_id)
+            if not can_edit(i, fresh):
+                await reply(i, "cards.denied")
+                return
+            fresh["data"]["style"] = style.values[0]
+            await apply_change(i, fresh)
+
+        style.callback = picked_style
+        self.add_item(style)
         bang = discord.ui.Button(label=t("cards.theme.bang_off" if card["data"].get("bang", True)
                                          else "cards.theme.bang_on")[:80], style=discord.ButtonStyle.secondary,
                                  emoji="❗")
@@ -890,17 +959,21 @@ class TitleModal(Modal, title="НАЗВАНИЕ"):
     texts = "cards.title_modal"
     name = discord.ui.TextInput(label="Название картинки", max_length=60)
 
-    def __init__(self, card_id, current="", create=False, template="rating"):
+    def __init__(self, card_id, current="", create=False, template="rating", style=None):
         super().__init__()
         self.card_id = card_id
         self.create = create
         self.template = template
+        self.style = style
         self.name.default = current
 
     async def on_submit(self, interaction):
         title = self.name.value.strip()
         if self.create:
             card = get_card(create_card(interaction.guild.id, interaction.user.id, title, self.template))
+            if self.style:
+                card["data"]["style"] = self.style
+                save_card(card)
             core.audit(interaction, "card.created", "card", card["id"], title)
             await interaction.response.edit_message(embed=editor_embed(interaction, card),
                                                     view=CardEditorView(card["id"]))
@@ -956,7 +1029,12 @@ class CardsHome(PanelView):
 
         async def picked(i):
             key = select.values[0]
-            await i.response.send_modal(TitleModal(None, template_name(key), create=True, template=key))
+            if key == "rating":  # у рейтинга пока один вид
+                await i.response.send_modal(TitleModal(None, template_name(key), create=True, template=key))
+                return
+            await i.response.edit_message(embed=panel_embed(i, "cards.style_pick", hints=False,
+                                                            kind=template_name(key)),
+                                          view=StylePickView(key, back_target=(core.screen(i), view)))
 
         select.callback = picked
         view.add_item(select)

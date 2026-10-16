@@ -1477,6 +1477,15 @@ class CardTemplateTests(unittest.TestCase):
             empty = ct.default_data(template)
             self.assertTrue(ct.render({"template": template}, "", empty))  # пустые данные не роняют
 
+    def test_every_style(self):
+        import card_templates as ct
+        from PIL import Image as PILImage
+        self.assertEqual(len(ct.STYLE_DEFS), 20)
+        for style in ct.STYLE_DEFS:
+            for template in ("progress", "poll", "versus", "calendar", "spotlight", "chart", "table"):
+                png = ct.sample(template, "night", style)
+                self.assertEqual(PILImage.open(io.BytesIO(png)).width, 1200, (template, style))
+
     def test_generic_command_semantics(self):
         import card_commands as cc
         import card_templates as ct
