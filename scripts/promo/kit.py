@@ -48,7 +48,7 @@ def chapter(v, n, total, title, steps, icon, dur=1.8):
 # ---------- заставка и финал ----------
 
 def intro(v, command, tagline, dur=3.4):
-    thumb = img(f"panel_art/thumbnail.{v.name}.png", 300)
+    thumb = img(getattr(v, "thumb", f"panel_art/thumbnail.{v.name}.png"), 300)
 
     def draw(layer, p, now):
         d = ImageDraw.Draw(layer)
@@ -64,7 +64,7 @@ def intro(v, command, tagline, dur=3.4):
 
 def outro(v, title, items, dur=9.0):
     check = img(u("confirm"), 56)
-    thumb = img(f"panel_art/thumbnail.{v.name}.png", 170)
+    thumb = img(getattr(v, "thumb", f"panel_art/thumbnail.{v.name}.png"), 170)
 
     def draw(layer, p, now):
         d = ImageDraw.Draw(layer)

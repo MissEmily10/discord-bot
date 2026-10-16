@@ -499,11 +499,20 @@ class Frame:
     def sidebar(self, c, d, s):
         X, Y = self.X, self.Y
         d.rectangle((X(RAIL), Y(0), X(CHAT_X), Y(WIN_H)), fill=rgb(C["side"]))
-        d.text((X(RAIL + 16), Y(16)), s["server"], font=font(15, "bold"), fill=rgb(C["header"]))
-        d.line((X(RAIL), Y(HEADER_H), X(CHAT_X), Y(HEADER_H)), fill=rgb("#1F2023"), width=px(1))
-        d.text((X(RAIL + 16), Y(66)), "ТЕКСТОВЫЕ КАНАЛЫ", font=font(11, "bold"), fill=rgb(C["muted"]))
+        off = 0
+        if s.get("server_banner"):
+            # баннер сервера над каналами, как в Discord
+            bw = CHANNELS
+            banner = img(s["server_banner"], (px(bw), px(bw * 9 / 16)))
+            c.alpha_composite(banner, (X(RAIL), Y(0)))
+            off = bw * 9 / 16 - HEADER_H + 8
+        else:  # на баннере название уже есть
+            d.text((X(RAIL + 16), Y(16)), s["server"], font=font(15, "bold"), fill=rgb(C["header"]))
+        if not s.get("server_banner"):
+            d.line((X(RAIL), Y(HEADER_H), X(CHAT_X), Y(HEADER_H)), fill=rgb("#1F2023"), width=px(1))
+        d.text((X(RAIL + 16), Y(66 + off)), "ТЕКСТОВЫЕ КАНАЛЫ", font=font(11, "bold"), fill=rgb(C["muted"]))
         for n, ch in enumerate(s["channels"]):
-            yy = 86 + n * 34
+            yy = 86 + off + n * 34
             active = ch == s["channel"]
             if active:
                 d.rounded_rectangle((X(RAIL + 8), Y(yy), X(CHAT_X - 8), Y(yy + 30)), radius=px(4), fill=rgb("#404249"))
@@ -883,7 +892,7 @@ class Frame:
     # ---------- правая колонка ----------
     def panel(self, c, d, s):
         x = PANEL_X
-        th = img(f"panel_art/thumbnail.{self.v.name}.png", 120)
+        th = img(getattr(self.v, "thumb", f"panel_art/thumbnail.{self.v.name}.png"), 120)
         c.alpha_composite(th, (x, 74))
         d.text((x + 136, 104), self.v.title, font=ImageFont.truetype(str(ROOT / "fonts" / FONTS["bold"]), 58),
                fill=rgb("#F2EEEA"), anchor="lm")

@@ -1,7 +1,13 @@
 # Промо-ролики команд
 
 Ролики «как в Discord» для сайта: `/embed`, `/interactive`, `/forms`, `/library`,
-`/logo`, `/webhook`. Готовые MP4 (1080p, со звуком) — в `promo/`.
+`/logo`, `/webhook`, `/pictures`. Готовые MP4 (1080p, со звуком) — в `promo/`.
+
+Картинки для `/pictures` (шаблоны живых картинок, баннеры сервера) рисует настоящий
+код бота из ветки main: `python3 scripts/promo/make_pictures_assets.py /путь/к/копии/main`
+→ `scripts/promo/assets/pictures/`.
+
+Проверка, что курсор попадает в кнопки: `python3 scripts/promo/check_clicks.py`.
 
 ## Пересобрать
 
