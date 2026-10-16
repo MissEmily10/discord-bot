@@ -468,10 +468,17 @@ def register_hubs(bot, make_button_sets):
         await interaction.response.send_message(embed=panel_embed(interaction, "interactive.home"),
                                                 view=InteractiveHome(make_button_sets), ephemeral=True)
 
-    @bot.tree.command(name="pictures", description="Живые картинки, баннер сервера и библиотека картинок")
+    import variables as variables_panel
+
+    @bot.tree.command(name="pictures", description="Живые картинки, баннер сервера, библиотека картинок, переменные")
     @app_commands.guild_only()
-    async def pictures(interaction):
+    @app_commands.describe(переменная="Найти переменную — начни писать: войс, топ, слово…")
+    @app_commands.autocomplete(переменная=variables_panel.autocomplete)
+    async def pictures(interaction, переменная: str = None):
         if not await core.require_command_access(interaction, "pictures"):
+            return
+        if переменная:
+            await variables_panel.open_card(interaction, переменная, new_message=True)
             return
         await interaction.response.send_message(embed=panel_embed(interaction, "pictures.home"),
                                                 view=PicturesHome(), ephemeral=True)

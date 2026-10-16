@@ -7,8 +7,9 @@
 Минус перед элементом — исключить: {voice:-AFK} — все войсы, кроме AFK.
 Категория = все её каналы: {voice:Игры,-Игры-тихая}.
 
-Значения считает live.collect (подставляет actions.substitute); здесь —
-список переменных для «Библиотеки переменных» и разбор аргументов.
+Здесь — разбор аргументов (каналы, роли, даты) и панель «Переменные»
+(поиск, разделы, карточка, конструктор). Сам каталог — variable_catalog.py,
+значения считает live.collect, подставляет actions.substitute.
 """
 
 import random
@@ -17,46 +18,7 @@ from datetime import datetime
 
 import discord
 
-# (имя, группа, описание, пример, вид аргумента: None / channels / roles / text / date)
-VARIABLES = [
-    ("server", "Сервер", "название сервера", "{server}", None),
-    ("member_count", "Сервер", "сколько всего участников", "{member_count}", None),
-    ("members", "Сервер", "участники с выбором: люди, боты", "{members:люди} · {members:боты}", "text"),
-    ("online", "Сервер", "сколько сейчас онлайн (считает Discord)", "{online}", None),
-    ("boosts", "Сервер", "сколько бустов", "{boosts}", None),
-    ("boost_level", "Сервер", "уровень буста (0–3)", "{boost_level}", None),
-    ("voice", "Голосовые", "сколько людей в войсе; можно выбрать каналы, категории и исключения",
-     "{voice} · {voice:Клан,Музыка} · {voice:-AFK} · {voice:Игры,-Тихая}", "channels"),
-    ("voice_list", "Голосовые", "кто сейчас в войсе — имена через запятую (до 15)",
-     "{voice_list:Клан}", "channels"),
-    ("streaming", "Голосовые", "сколько людей сейчас стримят (демонстрация экрана)",
-     "{streaming} · {streaming:Кино}", "channels"),
-    ("role", "Роли", "сколько участников с ролью; несколько ролей — без повторов",
-     "{role:Модератор} · {role:Модератор,Хелпер}", "roles"),
-    ("role_online", "Роли", "сколько участников с ролью сейчас не офлайн (нужен доступ к статусам)",
-     "{role_online:Модератор}", "roles"),
-    ("counter", "Счётчики", "значение счётчика (кнопки «Счётчик» в /embed)", "{counter:очки}", "text"),
-    ("date", "Время", "сегодняшняя дата", "{date}", None),
-    ("time", "Время", "время сейчас", "{time}", None),
-    ("weekday", "Время", "день недели", "{weekday}", None),
-    ("days_until", "Время", "сколько дней до даты", "{days_until:25.12}", "date"),
-    ("days_since", "Время", "сколько дней прошло с даты", "{days_since:01.09.2026}", "date"),
-    ("submissions", "Заявки", "сколько заявок (можно по форме: ID формы)", "{submissions} · {submissions:12}", "text"),
-    ("pending", "Заявки", "заявок ждут проверки", "{pending}", "text"),
-    ("approved", "Заявки", "принято заявок", "{approved}", "text"),
-    ("rejected", "Заявки", "отклонено заявок", "{rejected}", "text"),
-    ("last_submission", "Заявки", "последняя заявка: форма, кто, когда", "{last_submission}", "text"),
-    ("random", "Разное", "случайный вариант из списка через |", "{random:привет|хай|йоу}", "text"),
-    ("user", "Разное", "упоминание того, кто нажал кнопку (только в кнопках и триггерах)", "{user}", None),
-    ("user_name", "Разное", "имя того, кто нажал кнопку", "{user_name}", None),
-]
-NAMES = {name for name, *_ in VARIABLES}
 WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
-
-
-def help_line():
-    """Короткая строка со всеми переменными — для подсказок в панелях."""
-    return " ".join("{" + name + "}" for name, *_ in VARIABLES if name not in ("user", "user_name"))
 
 
 def split_items(arg):
@@ -170,62 +132,36 @@ def days_since(arg, today):
     return (today.date() - target.date()).days
 
 
-def fill(variables, guild, names, today):
-    """Добавить в variables значения переменных этого модуля (те, что используются)."""
-    if names & {"voice", "voice_list", "streaming"}:
-        variables["voice"] = lambda arg: len(people_in(pick_channels(guild, arg)))
-
-        def voice_list(arg):
-            people = people_in(pick_channels(guild, arg))
-            names_ = [member.display_name for member in people[:15]]
-            return (", ".join(names_) + (" …" if len(people) > 15 else "")) or "—"
-
-        variables["voice_list"] = voice_list
-        variables["streaming"] = lambda arg: sum(
-            1 for member in people_in(pick_channels(guild, arg)) if member.voice and member.voice.self_stream)
-
-    def role_count(arg):
-        roles = pick_roles(guild, arg)
-        if not roles:
-            return None
-        return len({member.id for role in roles for member in role.members})
-
-    variables["role"] = role_count
-    variables["role_online"] = lambda arg: len({
-        member.id for role in pick_roles(guild, arg) for member in role.members
-        if member.status != discord.Status.offline}) if pick_roles(guild, arg) else None
-
-    def members(arg):
-        everyone = getattr(guild, "members", [])
-        kind = (arg or "").strip().lower()
-        if kind in ("люди", "humans", "people"):
-            return sum(1 for member in everyone if not member.bot)
-        if kind in ("боты", "bots"):
-            return sum(1 for member in everyone if member.bot)
-        return guild.member_count or len(everyone)
-
-    variables["members"] = members
-    variables["weekday"] = WEEKDAYS[today.weekday()]
-    variables["days_until"] = lambda arg: days_until(arg, today)
-    variables["days_since"] = lambda arg: days_since(arg, today)
-    variables["random"] = lambda arg: random.choice([part.strip() for part in arg.split("|")]) if arg else None
-    return variables
-
-
 # ============================================================
-# ПАНЕЛЬ: «Переменные» — список и конструктор
+# ПАНЕЛЬ: «Переменные» — разделы, поиск, карточка, конструктор
 # ============================================================
 
 import core  # noqa: E402
-from core import PanelView, t, panel_embed  # noqa: E402
+from core import PanelView, Modal, t, panel_embed  # noqa: E402
+
+
+def _catalog():
+    import variable_catalog
+    return variable_catalog
 
 
 def library_embed(interaction):
-    groups = {}
-    for name, group, about, example, _ in VARIABLES:
-        groups.setdefault(group, []).append(f"`{example}` — {about}")
-    text = "\n\n".join(f"**{group}**\n" + "\n".join(lines) for group, lines in groups.items())
-    return panel_embed(interaction, "variables.home", rows=text[:3500])
+    vc = _catalog()
+    import activity
+    sections = "\n".join(f"▸ **{name}** — {sum(1 for item in vc.VARS if item.section == name)}"
+                          for name in vc.SECTIONS)
+    content = t("variables.content_on") if (interaction.client.intents.message_content or activity.content_seen) \
+        else t("variables.content_off")
+    return panel_embed(interaction, "variables.home", count=len(vc.VARS), sections=sections, content=content)
+
+
+def list_lines(items):
+    return "\n".join(f"`{{{item.name}}}` — {item.title}" for item in items)[:3800]
+
+
+def var_options(items):
+    return [discord.SelectOption(label=("{" + item.name + "}")[:100], description=item.title[:100], value=item.name)
+            for item in items]
 
 
 class VariablesView(PanelView):
@@ -233,59 +169,227 @@ class VariablesView(PanelView):
 
     def __init__(self, back_target=None):
         super().__init__(back_target=back_target)
-        select = discord.ui.Select(placeholder=t("variables.pick")[:150], options=[
-            discord.SelectOption(label="{" + name + "}", description=about[:100], value=name)
-            for name, _, about, _, kind in VARIABLES if kind in ("channels", "roles")])
+        vc = _catalog()
+        select = discord.ui.Select(placeholder=t("variables.pick_section")[:150], row=0, options=[
+            discord.SelectOption(label=name[:100], value=name,
+                                 description=t("variables.section_count",
+                                               n=sum(1 for item in vc.VARS if item.section == name))[:100])
+            for name in vc.SECTIONS])
 
         async def picked(i):
-            name = select.values[0]
-            kind = next(k for n, *_, k in VARIABLES if n == name)
-            await i.response.edit_message(embed=panel_embed(i, f"variables.build_{kind}", name=name),
-                                          view=BuildView(name, kind, back_target=(core.screen(i), self)))
+            items = [item for item in vc.VARS if item.section == select.values[0]]
+            await show_list(i, select.values[0], items, back_target=(core.screen(i), self))
 
         select.callback = picked
         self.add_item(select)
 
+    @discord.ui.button(label="Найти", emoji="🔍", style=discord.ButtonStyle.primary, row=1)
+    async def find(self, interaction, button):
+        await interaction.response.send_modal(SearchModal(back_target=(core.screen(interaction), self)))
+
+
+async def show_list(interaction, title, items, back_target):
+    embed = panel_embed(interaction, "variables.list", hints=False, title=title,
+                        rows=list_lines(items) or t("variables.nothing_found"), count=len(items))
+    view = PanelView(back_target=back_target, timeout=900)
+    if items:
+        select = core.PagedSelect(placeholder=t("variables.open")[:150], options=var_options(items))
+
+        async def picked(i):
+            await open_card(i, select.values[0], back_target=(core.screen(i), view))
+
+        select.on_pick = picked
+        view.add_item(select)
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class SearchModal(Modal, title="ПОИСК"):
+    def __init__(self, back_target):
+        super().__init__(title=t("variables.search_modal.title")[:45])
+        self.back_target = back_target
+        self.query = discord.ui.TextInput(label=t("variables.search_modal.query")[:45], max_length=60,
+                                          placeholder=t("variables.search_modal.placeholder")[:100])
+        self.add_item(self.query)
+
+    async def on_submit(self, interaction):
+        items = _catalog().search(self.query.value)
+        await show_list(interaction, t("variables.found", query=self.query.value[:40]), items, self.back_target)
+
+
+async def preview(interaction, text):
+    """Значение примера прямо сейчас на этом сервере."""
+    import live
+    from actions import VARIABLE, substitute
+    needed = {(m[1], m[2]) for m in VARIABLE.finditer(text)}
+    values = await live.collect(interaction.guild, needed, user=interaction.user)
+    return substitute(text, values)
+
+
+def card_embed(interaction, item, previews):
+    vc = _catalog()
+    examples = "\n".join(f"`{example}` → {value}" for example, value in previews)[:1800]
+    needs = f"\n\n⚠️ {vc.NEEDS_TEXT[item.needs]}" if item.needs else ""
+    return panel_embed(interaction, "variables.card", hints=False, title=item.title,
+                       name=item.name, about=item.about, args=item.args or t("variables.no_args"),
+                       examples=examples, needs=needs, section=item.section)
+
+
+async def open_card(interaction, name, back_target=None, new_message=False):
+    vc = _catalog()
+    item = vc.BY_NAME.get(name)
+    if item is None:
+        await interaction.response.send_message(t("variables.nothing_found"), ephemeral=True)
+        return
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True) if new_message else await interaction.response.defer()
+    previews = []
+    for example in item.examples[:4]:
+        try:
+            value = await preview(interaction, example)
+        except Exception:
+            value = "—"
+        value = str(value).replace("\n", " · ")
+        previews.append((example, (value[:150] + "…") if len(value) > 150 else value))
+    view = CardView(item, back_target=back_target)
+    embed = card_embed(interaction, item, previews)
+    if new_message:
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    else:
+        await interaction.edit_original_response(embed=embed, view=view)
+
+
+class CardView(PanelView):
+    texts = "variables.card"
+
+    def __init__(self, item, back_target=None):
+        super().__init__(back_target=back_target, timeout=900)
+        self.item = item
+        if not item.builder:
+            self.remove_item(self.build)
+
+    @discord.ui.button(label="Собрать", emoji="🧩", style=discord.ButtonStyle.primary)
+    async def build(self, interaction, button):
+        kind = self.item.builder
+        back = (core.screen(interaction), self)
+        if kind == "word":
+            await interaction.response.send_modal(WordModal(self.item, back))
+            return
+        view = BuildView(self.item, back_target=back)
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "variables.build", hints=False, name=self.item.name,
+                              help=t(f"variables.build_help.{kind}")), view=view)
+
+
+PERIOD_OPTIONS = (("всё", "за всё время"), ("сегодня", "сегодня"), ("вчера", "вчера"), ("неделя", "за 7 дней"),
+                  ("месяц", "за 30 дней"))
+
 
 class BuildView(PanelView):
-    """Каналы/роли выбираются списками Discord — бот собирает {voice:ID,-ID} сам (ID не ломаются при переименовании)."""
+    """Конструктор: каналы/роли — списками Discord (бот ставит ID — не ломаются при переименовании), период, топ."""
 
-    def __init__(self, name, kind, back_target=None):
+    def __init__(self, item, back_target=None):
         super().__init__(back_target=back_target, timeout=900)
-        self.name, self.kind = name, kind
-        self.include, self.exclude = [], []
-        if kind == "channels":
-            types = [discord.ChannelType.voice, discord.ChannelType.stage_voice, discord.ChannelType.category]
+        self.item = item
+        self.include, self.exclude, self.period, self.top = [], [], "всё", None
+        kind = item.builder
+        if kind in ("channels", "voice"):
+            types = ([discord.ChannelType.voice, discord.ChannelType.stage_voice, discord.ChannelType.category]
+                     if kind == "voice" else
+                     [discord.ChannelType.text, discord.ChannelType.news, discord.ChannelType.category,
+                      discord.ChannelType.voice])
             first = discord.ui.ChannelSelect(placeholder=t("variables.include_channels")[:150], channel_types=types,
                                              min_values=0, max_values=25, row=0)
             second = discord.ui.ChannelSelect(placeholder=t("variables.exclude_channels")[:150], channel_types=types,
                                               min_values=0, max_values=25, row=1)
-        else:
-            first = discord.ui.RoleSelect(placeholder=t("variables.include_roles")[:150], min_values=0,
+            first.callback = self._set("include", first)
+            second.callback = self._set("exclude", second)
+            self.add_item(first)
+            self.add_item(second)
+        if kind == "roles":
+            roles = discord.ui.RoleSelect(placeholder=t("variables.include_roles")[:150], min_values=0,
                                           max_values=25, row=0)
-            second = None
+            roles.callback = self._set("include", roles)
+            self.add_item(roles)
+        if "период" in item.args:
+            period = discord.ui.Select(placeholder=t("variables.pick_period")[:150], row=2, options=[
+                discord.SelectOption(label=label, value=value) for value, label in PERIOD_OPTIONS])
 
-        async def chose_first(i):
-            self.include = [item.id for item in first.values]
-            await self.show(i)
-
-        first.callback = chose_first
-        self.add_item(first)
-        if second is not None:
-            async def chose_second(i):
-                self.exclude = [item.id for item in second.values]
+            async def chose_period(i):
+                self.period = period.values[0]
                 await self.show(i)
 
-            second.callback = chose_second
-            self.add_item(second)
+            period.callback = chose_period
+            self.add_item(period)
+        if "число мест" in item.args:
+            top = discord.ui.Select(placeholder=t("variables.pick_top")[:150], row=3, options=[
+                discord.SelectOption(label=t("variables.top_n", n=n), value=str(n)) for n in (1, 3, 5, 10, 15, 25)])
+
+            async def chose_top(i):
+                self.top = int(top.values[0])
+                await self.show(i)
+
+            top.callback = chose_top
+            self.add_item(top)
+
+    def _set(self, field, select):
+        async def callback(i):
+            setattr(self, field, [item.id for item in select.values])
+            await self.show(i)
+        return callback
 
     def result(self):
         parts = [str(i) for i in self.include] + [f"-{i}" for i in self.exclude]
-        return "{" + self.name + (":" + ",".join(parts) if parts else "") + "}"
+        if self.top:
+            parts.insert(0, str(self.top))
+        if self.period != "всё":
+            parts.append(self.period)
+        return "{" + self.item.name + (":" + ",".join(parts) if parts else "") + "}"
 
     async def show(self, interaction):
-        what = [f"<#{i}>" if self.kind == "channels" else f"<@&{i}>" for i in self.include]
-        without = [f"<#{i}>" for i in self.exclude]
-        await interaction.response.edit_message(embed=panel_embed(
-            interaction, "variables.result", hints=False, code=self.result(),
-            include=", ".join(what) or t("variables.everything"), exclude=", ".join(without) or "—"), view=self)
+        await interaction.response.defer()
+        code = self.result()
+        try:
+            value = str(await preview(interaction, code))
+        except Exception:
+            value = "—"
+        await interaction.edit_original_response(embed=panel_embed(
+            interaction, "variables.result", hints=False, code=code, value=value[:1500]), view=self)
+
+
+class WordModal(Modal, title="СЛОВО"):
+    def __init__(self, item, back_target):
+        super().__init__(title=t("variables.word_modal.title")[:45])
+        self.item, self.back_target = item, back_target
+        self.word = discord.ui.TextInput(label=t("variables.word_modal.word")[:45], max_length=40,
+                                         placeholder=t("variables.word_modal.placeholder")[:100])
+        self.top = discord.ui.TextInput(label=t("variables.word_modal.top")[:45], max_length=2, required=False)
+        self.period = discord.ui.TextInput(label=t("variables.word_modal.period")[:45], max_length=10,
+                                           required=False, placeholder="всё / сегодня / неделя / месяц")
+        self.add_item(self.word)
+        if "число мест" in item.args:
+            self.add_item(self.top)
+        self.add_item(self.period)
+
+    async def on_submit(self, interaction):
+        parts = [self.word.value.strip().replace(",", " ")]
+        if self.top.value.strip().isdigit():
+            parts.append(self.top.value.strip())
+        if self.period.value.strip():
+            parts.append(self.period.value.strip().lower())
+        code = "{" + self.item.name + ":" + ",".join(parts) + "}"
+        await interaction.response.defer()
+        value = str(await preview(interaction, code))
+        view = PanelView(back_target=self.back_target, timeout=600)
+        await interaction.edit_original_response(embed=panel_embed(
+            interaction, "variables.result", hints=False, code=code, value=value[:1500] + "\n\n" +
+            t("variables.word_note")), view=view)
+
+
+async def autocomplete(interaction, current):
+    """Подсказки для /pictures переменная: — поиск по каталогу на лету."""
+    from discord import app_commands
+    return [app_commands.Choice(name=f"{{{item.name}}} — {item.title}"[:100], value=item.name)
+            for item in _catalog().search(current)[:25]]

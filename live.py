@@ -45,9 +45,7 @@ ONLINE_CACHE_SECONDS = 300
 PERSONAL_VARIABLES = {"user", "user_name"}
 SUBMISSION_VARIABLES = {"submissions", "pending", "approved", "rejected", "last_submission"}
 
-import variables as _variables
-
-VARIABLE_HELP = _variables.help_line()
+VARIABLE_HELP = "{member_count} {voice} {online} {messages_top} {word_count:слово} {date} … — все: /pictures → «Переменные»"
 
 _online_cache = {}  # guild_id -> (ts, value)
 
@@ -97,8 +95,10 @@ async def collect(guild, needed, user=None, extra=None):
     variables["time"] = current.strftime("%H:%M")
     if "online" in names:
         variables["online"] = await _online(guild)
-    # голосовые, роли, люди/боты, дни до/после, случайное — variables.py
-    _variables.fill(variables, guild, names, current.replace(tzinfo=None))
+    # всё из каталога переменных (variable_catalog.py): войс, роли, активность, слова, даты…
+    import variable_catalog
+    ctx = variable_catalog.Ctx(guild, current.replace(tzinfo=None), user=user, bot=_bot)
+    variables.update(variable_catalog.compute_all(ctx, names))
 
     if "counter" in names:
         counters = get_counters(guild.id)
@@ -147,7 +147,9 @@ async def parts_for(guild, build_id, user=None, extra=None, data=None):
 
 
 def is_personal(data):
-    return any(name in PERSONAL_VARIABLES for name, _ in used_variables(data))
+    import variable_catalog
+    personal = PERSONAL_VARIABLES | {item.name for item in variable_catalog.VARS if item.needs == "button"}
+    return any(name in personal for name, _ in used_variables(data))
 
 
 # ============================================================

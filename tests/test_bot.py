@@ -1617,6 +1617,74 @@ class WhisperTests(unittest.TestCase):
         w._q("DELETE FROM whisper_settings WHERE guild_id = ?", (gid,), write=True)
 
 
+class ActivityAndCatalogTests(unittest.TestCase):
+    def test_words_by_root_and_phrases(self):
+        import activity
+        self.assertEqual(activity.count_words("Какашка! какашку, КАКАШКАМИ и какао", {"какашк"}), {"какашк": 3})
+        self.assertEqual(activity.count_words("спокойной ночи всем, спокойной ночи", {"спокойной ночи"}),
+                         {"спокойной ночи": 2})
+        self.assertEqual(activity.normalize_word("  Ёлка "), "елка")
+
+    def test_counts_roundtrip(self):
+        import activity
+        from datetime import datetime
+        gid = 777003
+        activity.track_word(gid, "какашк")
+        day = activity.today()
+        activity._messages[(gid, day, 1, 50)] += 3
+        activity._messages[(gid, day, 2, 50)] += 5
+        activity._words[(gid, "какашк", day, 1)] += 2
+        today = datetime.strptime(day, "%Y-%m-%d")
+        rows = activity.messages_by_user(gid, None, today)
+        self.assertEqual(rows, [(2, 5), (1, 3)])
+        self.assertEqual(activity.messages_by_user(gid, 0, today, channels=[999]), [])
+        self.assertEqual(activity.words_by_user(gid, "Какашк", 7, today), [(1, 2)])
+        from database import get_connection
+        connection = get_connection()
+        for table in ("act_messages", "act_words", "act_tracked_words"):
+            connection.execute(f"DELETE FROM {table} WHERE guild_id = ?", (gid,))
+        connection.commit()
+        connection.close()
+        activity._tracked.pop(gid, None)
+
+    def test_catalog_search_and_every_variable_runs(self):
+        import discord as d
+        from datetime import datetime, timezone
+        import variable_catalog as vc
+        self.assertGreaterEqual(len(vc.VARS), 90)
+        self.assertEqual(len(vc.BY_NAME), len(vc.VARS))  # имена не повторяются
+        self.assertEqual(vc.search("кто больше пишет")[0].name, "messages_top")
+        self.assertIn("word_top", [item.name for item in vc.search("слово")[:3]])
+        args = vc.parse("5, неделя, Флуд, -Спам, строка")
+        self.assertEqual((args.top, args.period, args.items, args.inline), (5, 7, ["Флуд", "-Спам"], True))
+        role = types.SimpleNamespace(id=5, name="Модератор", members=[], is_default=lambda: False)
+        people = [types.SimpleNamespace(id=i, name=n, display_name=n, bot=b, status=d.Status.online, voice=None,
+                                        joined_at=datetime(2026, 1, i, tzinfo=timezone.utc), top_role=role)
+                  for i, n, b in ((1, "Аня", False), (2, "Кот", False), (3, "Бот", True))]
+        role.members = people[:2]
+        guild = types.SimpleNamespace(
+            id=777004, name="Purr", member_count=3, members=people, premium_subscription_count=2, premium_tier=1,
+            premium_subscribers=people[:1], created_at=datetime(2025, 1, 1, tzinfo=timezone.utc), owner=people[0],
+            channels=[], text_channels=[], voice_channels=[], stage_channels=[],
+            roles=[types.SimpleNamespace(id=1, name="@everyone", members=[], is_default=lambda: True), role],
+            emojis=[], stickers=[], get_member=lambda i: next((m for m in people if m.id == i), None),
+            get_channel=lambda i: None, get_role=lambda i: role if i == 5 else None)
+        ctx = vc.Ctx(guild, datetime(2026, 10, 16, 12, 0), user=people[0])
+        for item in vc.VARS:
+            if item.compute is None:
+                continue
+            for example in item.examples:
+                arg = example[len(item.name) + 2:-1] if ":" in example else None
+                item.compute(ctx, arg)  # не падает
+        self.assertEqual(vc.BY_NAME["role"].compute(ctx, "Модератор"), 2)
+        self.assertEqual(vc.BY_NAME["members"].compute(ctx, "боты"), 1)
+        from database import get_connection
+        connection = get_connection()
+        connection.execute("DELETE FROM act_tracked_words WHERE guild_id = ?", (777004,))
+        connection.commit()
+        connection.close()
+
+
 class ImageLibraryTests(unittest.TestCase):
     def test_save_list_share(self):
         import image_library as il

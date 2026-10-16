@@ -31,6 +31,7 @@ import form_packs
 import cards
 import quotes
 import whispers
+import activity
 import ui_emoji
 import web_panel
 from extended_modules import register_extended
@@ -88,6 +89,7 @@ async def setup_hook():
     server_banner.start(bot)  # баннер сервера с живыми цифрами — обновление по расписанию
     asyncio.create_task(cards.refresh_loop(bot))  # живые картинки с переменными
     quotes.start(bot)  # цитата дня: голосование по расписанию и итоги
+    activity.start(bot)  # счётчик активности для переменных (сообщения, слова, войс, реакции)
     # дудл-эмодзи (меню паков форм и кнопки панелей) — в фоне: первая заливка долгая
     asyncio.create_task(form_packs.load_doodles(bot))
     ui_emoji.start(bot)
@@ -391,6 +393,7 @@ import emoji_export  # noqa: E402
 emoji_export.register(bot)
 quotes.register(bot)
 whispers.register(bot)
+activity.register(bot)
 
 
 # =========================
