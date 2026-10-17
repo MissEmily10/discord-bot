@@ -242,9 +242,21 @@ def negative_prompt(style_row):
 
 async def generate_image(mode, style_row, brief, source_bytes=None):
     """-> PNG bytes. Исключения пробрасываются (их показывает вызывающий код)."""
+    import logo_style_ai
+
     client = _client()
     refs = references_of(style_row) if style_row else []
     lora = style_row and (style_row[7] or style_row[6])
+    if refs and not lora and logo_style_ai.enabled():
+        # Главный путь: каждый референс разобран в подробный промт, разборы сведены
+        # в «библию» стиля, по ней рисуют несколько кандидатов, судья выбирает.
+        try:
+            bible = await asyncio.wait_for(logo_style_ai.style_bible(style_row), 900)
+        except Exception as error:  # noqa: BLE001 — без библии рисуем по-старому
+            _log.warning("style bible failed: %s", error)
+            bible = None
+        if bible:
+            return await generate_by_bible(client, mode, style_row, brief, bible, source_bytes)
     if mode == "generate" and refs and not lora:
         # Строго по референсам: модель редактирования получает настоящую иконку
         # стиля и рисует НОВЫЙ предмет её же рукой (линия, цвета, тени, фон).
@@ -264,6 +276,38 @@ async def generate_image(mode, style_row, brief, source_bytes=None):
             source_bytes, prompt=prompt, negative_prompt=negative_prompt(style_row), model=model,
         )
     return fit_subject(image)
+
+
+async def generate_by_bible(client, mode, style_row, brief, bible, source_bytes=None):
+    """Кандидаты по библии стиля: перерисовка самых типичных референсов + текстовая модель; лучший — по судье."""
+    import logo_style_ai
+
+    subject = await logo_style_ai.english_subject(brief) or "a simple cute object"
+    notes = (style_row[4] or "").strip()
+    if notes == bible.get("invariants", "").strip():
+        notes = ""  # описание стиля и есть библия — не повторяем
+    negative = ", ".join(p for p in (bible.get("negative", ""), style_row[5] or "") if p)
+    values = dict(subject=subject, bible=bible.get("invariants", ""), notes=notes or "-", base=t("logo.prompt.base"))
+    edit_model = cfg("LOGO_EDIT_MODEL", "black-forest-labs/FLUX.1-Kontext-dev")
+    jobs = []
+    if mode == "stylize":
+        prompt = t("logo.prompt.bible_stylize", **values)
+        jobs += [client.image_to_image(source_bytes, prompt=prompt, negative_prompt=negative, model=edit_model)
+                 for _ in range(2)]
+    else:
+        prompt = t("logo.prompt.bible_reference", **values)
+        for path in logo_style_ai.representative(style_row, 2):
+            jobs.append(client.image_to_image(pathlib.Path(path).read_bytes(), prompt=prompt,
+                                              negative_prompt=negative, model=edit_model))
+        text_prompt = bible.get("prompt_template", "").replace("{subject}", subject)
+        text_prompt = t("logo.prompt.bible_generate", prompt=text_prompt, notes=values["notes"], base=values["base"])
+        jobs.append(client.text_to_image(text_prompt, negative_prompt=negative, width=1024, height=1024,
+                                         model=cfg("LOGO_TEXT_MODEL", "black-forest-labs/FLUX.1-dev")))
+    results = await asyncio.gather(*jobs, return_exceptions=True)
+    candidates = [fit_subject(image) for image in results if not isinstance(image, BaseException)]
+    if not candidates:
+        raise next(r for r in results if isinstance(r, BaseException))
+    return candidates[await logo_style_ai.judge(style_row, candidates, subject)]
 
 
 async def remove_background(png_bytes):
@@ -310,16 +354,19 @@ async def describe_style(style_row):
 
 
 async def ensure_style_text(style_row):
-    """Есть референсы, но нет описания стиля — составить его один раз и сохранить."""
+    """Есть референсы, но нет описания стиля — составить его один раз и сохранить.
+    С токеном — из подробного разбора каждого референса, иначе — старым описанием пачками."""
     if style_row is None or (style_row[4] or "").strip() or not references_of(style_row):
         return style_row
+    import logo_style_ai
     try:
-        text = await describe_style(style_row)
+        bible = await logo_style_ai.style_bible(style_row) if logo_style_ai.enabled() else None
+        text = bible.get("invariants") if bible else await describe_style(style_row)
     except Exception as error:  # описание — помощь, а не условие генерации
         _log.warning("style description failed: %s", error)
         return style_row
     if text:
-        update_logo_style(style_row[0], prompt=text)
+        update_logo_style(style_row[0], prompt=text[:STYLE_TEXT_MAX])
         return get_logo_style(style_row[0])
     return style_row
 
@@ -642,7 +689,7 @@ class StyleActions(PanelView):
             set_default_logo_style(interaction.guild.id, self.style_id)
             await interaction.response.edit_message(embed=style_embed(interaction, get_logo_style(self.style_id)), view=self)
 
-    @discord.ui.button(label="Описать по референсам", emoji="🔍", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Разбор референсов", emoji="🔍", style=discord.ButtonStyle.secondary)
     async def describe(self, interaction, button):
         row = await self._row(interaction)
         if not row:
@@ -654,14 +701,32 @@ class StyleActions(PanelView):
         if not references_of(row):
             await say(interaction, "logo.no_references")
             return
+        import logo_style_ai
         await interaction.response.defer(ephemeral=True, thinking=True)
+        last = [0.0]
+
+        async def progress(done, total):
+            if time.time() - last[0] < 3 and done < total:  # не чаще раза в 3 секунды
+                return
+            last[0] = time.time()
+            try:
+                await interaction.edit_original_response(content=t("logo.analysis.progress", done=done, total=total))
+            except discord.HTTPException:
+                pass
+
         try:
-            text = await describe_style(row)
+            bible = await logo_style_ai.style_bible(row, force=True, progress=progress)
         except Exception as error:  # noqa: BLE001
             await interaction.followup.send(t("logo.failed", error=str(error)[:300]), ephemeral=True)
             return
-        update_logo_style(self.style_id, prompt=text[:STYLE_TEXT_MAX])
-        await interaction.followup.send(embed=style_embed(interaction, get_logo_style(self.style_id)), ephemeral=True)
+        if not bible:
+            await interaction.followup.send(t("logo.analysis.failed"), ephemeral=True)
+            return
+        update_logo_style(self.style_id, prompt=bible.get("invariants", "")[:STYLE_TEXT_MAX])
+        report = logo_style_ai.report(get_logo_style(self.style_id)).encode("utf-8")
+        await interaction.followup.send(
+            t("logo.analysis.done", count=len(references_of(row)), summary=(bible.get("summary_ru") or "—")[:1500]),
+            file=discord.File(io.BytesIO(report), filename="razbor_referensov.txt"), ephemeral=True)
 
     @discord.ui.button(label="Датасет для LoRA", emoji="📦", style=discord.ButtonStyle.secondary, row=1)
     async def dataset(self, interaction, button):

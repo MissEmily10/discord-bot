@@ -167,8 +167,16 @@ Role icons generated in your own style via Hugging Face Inference Providers.
 2. `/eminemovna` → **Стили иконок** → **Новый стиль** — name and a short style description.
 3. `/eminemovna style:<style> file:<png or zip>` — upload your reference
    icons (up to 60; a zip with all 30 at once works).
-4. Optional: **Описать по референсам** writes the style description for you
-   from the references (vision model).
+4. Every reference is analysed on its own by a vision model into a detailed
+   prompt: 2D/3D rendering, material and texture, lighting, color character
+   (tonality, saturation, temperature — not exact colors), camera angle, where
+   the icon faces and how it is tilted, composition and background. A text
+   model merges them into the style "bible" (`logo_files/references/<id>/analysis.json`).
+   New references are analysed in the background. **Разбор референсов** redoes
+   it and sends the full report as a .txt. Generation draws several candidates
+   (the most typical references redrawn + the bible prompt) and a vision judge
+   picks the one closest to the set. Models: `LOGO_VISION_MODEL`
+   (default Qwen2.5-VL-72B), `LOGO_REASONING_MODEL` (default Qwen2.5-72B).
 5. For an exact style match: **Датасет для LoRA** gives a zip with the icons and
    captions. Train a FLUX LoRA on it (e.g. fal-ai `flux-lora-fast-training` or
    Hugging Face AutoTrain), publish it as a HF repo and put the repo id into the

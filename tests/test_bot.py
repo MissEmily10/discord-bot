@@ -2646,6 +2646,81 @@ class LogoTests(unittest.TestCase):
             else:
                 os.environ["LOGO_DIR"] = old_dir
 
+    def test_generate_by_reference_analysis(self):
+        import json as json_lib
+        import logo_module
+        import logo_style_ai
+        calls = {"edit": [], "text": []}
+        analysis = {"subject": "a star", "rendering": "3D render, glossy", "perspective": "slight 3/4 from above",
+                    "facing": "towards viewer", "rotation": "tilted 10 degrees clockwise", "outline": "none",
+                    "format_background": "transparent", "color_character": "pastel, warm, soft contrast",
+                    "prompt": "A glossy 3D star..."}
+        bible = {"invariants": "glossy 3D vinyl toy look, pastel warm palette", "variations": "subjects",
+                 "prompt_template": "A glossy 3D icon of {subject}, pastel", "negative": "flat 2D vector",
+                 "summary_ru": "Объёмные глянцевые пастельные иконки."}
+
+        async def fake_chat(models, content, max_tokens):
+            if isinstance(content, str):
+                if content.startswith(logo_style_ai.TRANSLATE_PROMPT):
+                    return "a cat wizard"
+                return "```json\n" + json_lib.dumps(bible) + "\n```"
+            if content[0]["text"] == logo_style_ai.ANALYZE_PROMPT:
+                return json_lib.dumps(analysis)
+            return "Candidate 3"
+
+        def image():
+            canvas = self.Image.new("RGB", (1024, 1024), "white")
+            canvas.paste(self.Image.new("RGB", (300, 300), "blue"), (362, 362))
+            return canvas
+
+        class Client:
+            async def image_to_image(self, source, prompt, negative_prompt, model):
+                calls["edit"].append((prompt, negative_prompt))
+                return image()
+
+            async def text_to_image(self, prompt, **kwargs):
+                calls["text"].append((prompt, kwargs["negative_prompt"]))
+                return image()
+
+        style_id = database.save_logo_style(GUILD, ADMIN, "3D", "", "")
+        old_dir, old_client, old_chat = os.environ.get("LOGO_DIR"), logo_module._client, logo_style_ai._chat
+        os.environ["LOGO_DIR"], os.environ["HF_TOKEN"] = tempfile.mkdtemp(), "test"
+        logo_module._client, logo_style_ai._chat = (lambda: Client()), fake_chat
+        try:
+            for _ in range(3):
+                logo_module.add_reference(database.get_logo_style(style_id), self.png)
+            row = run(logo_module.ensure_style_text(database.get_logo_style(style_id)))
+            self.assertEqual(row[4], bible["invariants"])  # описание стиля — из разбора
+            png = run(logo_module.generate_image("generate", row, "кот-волшебник"))
+            self.assertTrue(png.startswith(b"\x89PNG"))
+            self.assertEqual(len(calls["edit"]), 2)  # два типичных референса
+            self.assertEqual(len(calls["text"]), 1)  # и текстовая модель по библии
+            self.assertIn("a cat wizard", calls["edit"][0][0])
+            self.assertIn("A glossy 3D icon of a cat wizard", calls["text"][0][0])
+            self.assertIn("flat 2D vector", calls["text"][0][1])
+            saved = logo_style_ai.load(style_id)
+            self.assertEqual(len(saved["refs"]), 3)
+            self.assertEqual(saved["bible"]["summary_ru"], bible["summary_ru"])
+            report = logo_style_ai.report(row)
+            self.assertIn("tilted 10 degrees clockwise", report)
+            self.assertIn("Объёмные", report)
+        finally:
+            logo_module._client, logo_style_ai._chat = old_client, old_chat
+            os.environ.pop("HF_TOKEN", None)
+            if old_dir is None:
+                os.environ.pop("LOGO_DIR", None)
+            else:
+                os.environ["LOGO_DIR"] = old_dir
+
+    def test_reference_analysis_helpers(self):
+        import logo_style_ai
+        self.assertEqual(logo_style_ai.parse_json('ok: {"a": 1, "b": [2,],}'), {"a": 1, "b": [2]})
+        self.assertIsNone(logo_style_ai.parse_json("no json"))
+        voted = logo_style_ai.vote([{"rendering": "3D clay"}, {"rendering": "3D clay"}, {"rendering": "flat"}])
+        self.assertIn("{subject}", voted["prompt_template"])
+        self.assertIn("3D clay", voted["invariants"])
+        self.assertIn("flat 2D", voted["negative"])
+
     def test_style_references_dataset_and_zip_limits(self):
         import logo_module
 

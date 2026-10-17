@@ -81,6 +81,9 @@ async def add_to_style(style_id, found):
             ok = False
         added, skipped = (added + 1, skipped) if ok else (added, skipped + 1)
     row = get_logo_style(style_id)
+    if added:
+        import logo_style_ai
+        logo_style_ai.schedule_analysis(style_id)  # разобрать новые референсы, пока их докидывают
     return added, skipped, len(logo.references_of(row)) if row else 0
 
 

@@ -1024,7 +1024,7 @@ CATALOG = {
     "logo.style_card.text": 'ID: `{id}` · по умолчанию: {default}\nРеференсов: **{refs}**\nМодель: `{model}` · LoRA: `{lora}`\n\n**Описание:** {prompt}\n**Избегать:** {negative}',
     "logo.style_actions.edit": 'Изменить',
     "logo.style_actions.make_default": 'По умолчанию',
-    "logo.style_actions.describe": 'Описать по референсам',
+    "logo.style_actions.describe": 'Разбор референсов',
     "logo.style_actions.dataset": 'Датасет для LoRA',
     "logo.style_actions.delete": 'Удалить',
     "logo.style_deleted.title": 'СТИЛЬ УДАЛЁН',
@@ -1036,13 +1036,14 @@ CATALOG = {
     "logo.style_modal.model": 'Своя модель text-to-image',
     "logo.prompt.base": (
         "A single Discord role icon, one object only, perfectly centered, filling about 85% of a square canvas "
-        "with only a small even margin. Bold, simple, instantly readable silhouette that still reads clearly "
-        "at 32x32 pixels: few large shapes, no tiny details, no thin hairlines. Clean crisp edges, flat 2D sticker/emoji "
-        "look, front view, no perspective scene, no ground, no shadow on the floor. Solid plain background of one flat "
-        "color (pure white) that is easy to cut out. No text, no letters, no numbers, no logos, no watermark, no frame, "
-        "no border around the canvas, no extra objects, no duplicates."
+        "with only a small even margin. Bold, instantly readable silhouette that still reads clearly at 32x32 "
+        "pixels: few large shapes, no tiny details, no thin hairlines. No text, no letters, no numbers, no logos, "
+        "no watermark, no frame, no border around the canvas, no extra objects, no duplicates, no scene around it."
     ),
-    "logo.prompt.default_style": "clean flat vector icon with a thick dark outline, limited palette, soft simple highlights",
+    "logo.prompt.default_style": (
+        "clean flat 2D vector sticker icon, front view, thick dark outline, limited palette, soft simple highlights, "
+        "solid plain white background"
+    ),
     "logo.prompt.generate": (
         "Draw a role icon of: {brief}.\n\nSTYLE — follow it exactly, it is the most important instruction: {style}\n\n"
         "Composition and format: {base}"
@@ -1062,9 +1063,33 @@ CATALOG = {
         "Composition and format: {base}"
     ),
     "logo.prompt.negative": (
-        "text, letters, numbers, watermark, signature, logo, photo, photorealistic, 3d render, blurry, noisy, "
-        "low quality, jpeg artifacts, multiple objects, collage, grid, sticker sheet, frame, border, tiny subject, "
-        "small object far away, cropped subject, cut off edges, busy background, gradient background, scene, floor shadow"
+        "text, letters, numbers, watermark, signature, logo, photo, blurry, noisy, low quality, jpeg artifacts, "
+        "multiple objects, collage, grid, sticker sheet, frame, border, tiny subject, small object far away, "
+        "cropped subject, cut off edges, busy background, scene"
+    ),
+    # Генерация по «библии» стиля (logo_style_ai): {bible} — общее для всех референсов,
+    # {subject} — новый предмет по-английски, {notes} — описание стиля от хозяйки
+    "logo.prompt.bible_reference": (
+        "The input image is a REFERENCE icon from a set. Create a completely NEW icon of: {subject}. Remove the "
+        "reference's subject entirely. Keep the STYLE identical to the reference and the whole set: the same "
+        "rendering (2D or 3D), material and surface texture, lighting direction and shading, outline, color "
+        "character and saturation, camera angle and perspective, the way the object faces and is tilted, "
+        "proportions, level of detail and background. It must look like the next icon of the same set.\n\n"
+        "Style of the set: {bible}\n\nExtra notes: {notes}\n\nComposition and format: {base}"
+    ),
+    "logo.prompt.bible_generate": "{prompt}\n\nExtra notes: {notes}\n\nComposition and format: {base}",
+    "logo.prompt.bible_stylize": (
+        "Redraw the input image as an icon of this set. Keep its subject ({subject}), silhouette and pose "
+        "recognizable, but redraw it completely in this exact style: {bible}\n\nExtra notes: {notes}\n\n"
+        "Composition and format: {base}"
+    ),
+    "logo.analysis.progress": "🔍 Разбираю референсы: {done} из {total}…",
+    "logo.analysis.failed": "Не получилось разобрать референсы — нейросети не ответили. Попробуй чуть позже.",
+    "logo.analysis.done": (
+        "🔍 **Разбор готов** — референсов: {count}.\n\n**Что я понял о стиле:**\n{summary}\n\n"
+        "В файле — подробный промт для каждого референса (объём, текстура, свет, характер цвета, ракурс, "
+        "куда смотрит и как повёрнут значок) и общий промт набора. Теперь каждая иконка рисуется по нему: "
+        "несколько вариантов, и я выбираю самый похожий на набор."
     ),
 
     "logo.prompt.describe": (
@@ -1797,7 +1822,7 @@ CATALOG = {
     "logo.styles.create.hint": 'новый стиль иконок: название и описание',
     "logo.style_actions.edit.hint": 'поменять описание, модель или LoRA',
     "logo.style_actions.make_default.hint": 'использовать этот стиль, если не выбран другой',
-    "logo.style_actions.describe.hint": 'бот сам опишет стиль по твоим референсам',
+    "logo.style_actions.describe.hint": 'разобрать каждый референс в подробный промт и свести их в стиль',
     "logo.style_actions.dataset.hint": 'архив для обучения LoRA — для точного попадания в стиль',
     "logo.style_actions.delete.hint": 'удалить стиль',
     "embed.home.create.hint": 'собрать новое сообщение с нуля',
