@@ -18,8 +18,9 @@ import pathlib
 _log = logging.getLogger(__name__)
 
 API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-MODELS = ("gemini-nano-banana-2.1", "gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview",
-          "gemini-2.5-flash-image")
+# Nano Banana 2 (дешёвая и хорошая) -> Pro (дороже, точнее) -> первая -> на случай нового имени
+MODELS = ("gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview", "gemini-2.5-flash-image",
+          "gemini-nano-banana-2.1")
 MAX_REFERENCES = 8
 OLD_MODEL_REFERENCES = 3  # первая Nano Banana (2.5) лучше всего работает с 1–3 картинками
 

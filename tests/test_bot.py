@@ -2786,7 +2786,7 @@ class LogoTests(unittest.TestCase):
 
         async def fake_post(url, body, key):
             sent.append((url, body))
-            if "nano-banana" in url:
+            if "3.1-flash" in url:
                 return 404, {"error": {"message": "models/x is not found"}}
             return 200, {"candidates": [{"content": {"parts": [
                 {"inlineData": {"mimeType": "image/png", "data": b64.b64encode(result.getvalue()).decode()}}]}}]}
