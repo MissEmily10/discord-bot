@@ -1021,6 +1021,7 @@ CATALOG = {
     "logo.result.title": 'ИКОНКА ГОТОВА',
     "logo.result.text": 'Стиль: **{style}** · режим: {mode}\nТЗ: {brief}',
     "logo.result.understood": "Понял как: *{subject}*\nНе то? Опиши сам предмет: «две руки в рукопожатии».",
+    "logo.result.base": "Основа из набора иконок: *{name}*",
     "logo.result.apply": 'Поставить на роль',
     "logo.result.again": 'Ещё вариант',
     "logo.result.nobg": 'Убрать фон',
@@ -1090,6 +1091,15 @@ CATALOG = {
         "rendering (2D or 3D), material and surface texture, lighting direction and shading, outline, color "
         "character and saturation, camera angle and perspective, the way the object faces and is tilted, "
         "proportions, level of detail and background. It must look like the next icon of the same set.\n\n"
+        "Style of the set: {bible}\n\nExtra notes: {notes}\n\nComposition and format: {base}"
+    ),
+    "logo.prompt.base_restyle": (
+        "The input image is a plain generic flat icon. Use it ONLY as a base: take from it the idea of the object, "
+        "its readable silhouette and composition. Redraw it as a NEW icon of: {subject}, completely in the STYLE "
+        "described below. The style is MORE important than the input: change the rendering (2D or 3D), materials "
+        "and surface texture, lighting and shading, outline, the character of the colors, proportions, level of "
+        "detail and background so that it looks exactly like the rest of the set. Do not keep the input's generic "
+        "flat colors or clip-art look; simplify or reshape details if the style needs it.\n\n"
         "Style of the set: {bible}\n\nExtra notes: {notes}\n\nComposition and format: {base}"
     ),
     "logo.prompt.bible_generate": "{prompt}\n\nExtra notes: {notes}\n\nComposition and format: {base}",

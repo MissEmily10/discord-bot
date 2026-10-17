@@ -2747,6 +2747,7 @@ class LogoTests(unittest.TestCase):
         style_id = database.save_logo_style(GUILD, ADMIN, "3D", "", "")
         old_dir, old_client, old_chat = os.environ.get("LOGO_DIR"), logo_module._client, logo_style_ai._chat
         os.environ["LOGO_DIR"], os.environ["HF_TOKEN"] = tempfile.mkdtemp(), "test"
+        os.environ["LOGO_BASE_DATASET"] = "off"  # основа из набора иконок — в отдельном тесте
         logo_module._client, logo_style_ai._chat = (lambda: Client()), fake_chat
         try:
             for _ in range(3):
@@ -2769,6 +2770,7 @@ class LogoTests(unittest.TestCase):
         finally:
             logo_module._client, logo_style_ai._chat = old_client, old_chat
             os.environ.pop("HF_TOKEN", None)
+            os.environ.pop("LOGO_BASE_DATASET", None)
             if old_dir is None:
                 os.environ.pop("LOGO_DIR", None)
             else:
@@ -2854,6 +2856,69 @@ class LogoTests(unittest.TestCase):
         finally:
             logo_gemini._post = old_post
             os.environ.pop("OPENROUTER_API_KEY", None)
+            if old_dir is None:
+                os.environ.pop("LOGO_DIR", None)
+            else:
+                os.environ["LOGO_DIR"] = old_dir
+
+    def test_flat_icon_base_used_under_style(self):
+        import icon_base
+        import logo_module
+        import logo_style_ai
+        rows = icon_base.parse_csv(
+            "set,title,style,link,tags\n"
+            "Handshake,business,Flat,https://x/1.png,\"handshake,deal,agreement,hands\"\n"
+            "Golden gate bridge,landmarks,Flat,https://x/2.png,\"bridge,golden\"\n"
+            "Laurel,rewards,Flat,https://x/3.png,\"laurel,wreath,victory\"\n")
+        self.assertEqual([r["set"] for r in icon_base.search("a golden laurel wreath", rows)], ["Laurel"])
+        self.assertEqual(icon_base.search("a dragon", rows), [])
+        calls = []
+        transparent = io.BytesIO()
+        self.Image.new("RGBA", (64, 64), (0, 0, 0, 0)).save(transparent, "PNG")
+
+        async def fake_fetch(url):
+            return transparent.getvalue()
+
+        async def fake_subject(brief):
+            return "two hands clasped in a firm handshake"
+
+        class Client:
+            async def image_to_image(self, source, prompt, negative_prompt, model):
+                calls.append((source, prompt))
+                canvas = self.__class__.canvas()
+                return canvas
+
+            @staticmethod
+            def canvas():
+                from PIL import Image
+                image = Image.new("RGB", (1024, 1024), "white")
+                image.paste(Image.new("RGB", (300, 300), "red"), (362, 362))
+                return image
+
+        old = (logo_module._client, icon_base._fetch, icon_base._rows, logo_style_ai.english_subject,
+               logo_style_ai.style_bible, os.environ.get("LOGO_DIR"))
+        os.environ["LOGO_DIR"], os.environ["HF_TOKEN"] = tempfile.mkdtemp(), "test"
+        logo_module._client, icon_base._fetch, icon_base._rows = (lambda: Client()), fake_fetch, rows
+        logo_style_ai.english_subject = fake_subject
+
+        async def no_bible(row, **kwargs):
+            return None
+        logo_style_ai.style_bible = no_bible
+        try:
+            style_id = database.save_logo_style(GUILD, ADMIN, "Глина", "soft 3D clay", "")
+            png = run(logo_module.generate_image("generate", database.get_logo_style(style_id), "содружество"))
+            self.assertTrue(png.startswith(b"\x89PNG"))
+            self.assertEqual(len(calls), 1)
+            source, prompt = calls[0]
+            self.assertIn("ONLY as a base", prompt)
+            self.assertIn("soft 3D clay", prompt)
+            base = self.Image.open(io.BytesIO(source))
+            self.assertEqual(base.getpixel((5, 5)), (255, 255, 255))  # прозрачность -> белый фон
+            self.assertIn("Handshake", icon_base.used["two hands clasped in a firm handshake"])
+        finally:
+            (logo_module._client, icon_base._fetch, icon_base._rows, logo_style_ai.english_subject,
+             logo_style_ai.style_bible, old_dir) = old
+            os.environ.pop("HF_TOKEN", None)
             if old_dir is None:
                 os.environ.pop("LOGO_DIR", None)
             else:

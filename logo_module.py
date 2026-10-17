@@ -260,6 +260,12 @@ async def generate_image(mode, style_row, brief, source_bytes=None):
     if brief and logo_style_ai.enabled():
         # абстрактное «содружество» -> конкретный предмет (рукопожатие), по-английски
         brief = await logo_style_ai.english_subject(brief)
+    bases = []
+    if mode == "generate" and not lora and logo_style_ai.enabled():
+        # готовая плоская иконка под запрос (рукопожатие для «содружества») — основа формы,
+        # поверх которой рисуется стиль; стиль при этом главнее
+        import icon_base
+        bases = await icon_base.find(brief, 2)
     if refs and not lora and logo_style_ai.enabled():
         # Главный путь: каждый референс разобран в подробный промт, разборы сведены
         # в «библию» стиля, по ней рисуют несколько кандидатов, судья выбирает.
@@ -269,7 +275,13 @@ async def generate_image(mode, style_row, brief, source_bytes=None):
             _log.warning("style bible failed: %s", error)
             bible = None
         if bible:
-            return await generate_by_bible(client, mode, style_row, brief, bible, source_bytes)
+            return await generate_by_bible(client, mode, style_row, brief, bible, source_bytes, bases)
+    if bases:
+        style_text = (style_row[4] if style_row else "") or t("logo.prompt.default_style")
+        prompt = t("logo.prompt.base_restyle", subject=brief, bible=style_text, notes="-", base=t("logo.prompt.base"))
+        image = await client.image_to_image(bases[0][1], prompt=prompt, negative_prompt=negative_prompt(style_row),
+                                            model=cfg("LOGO_EDIT_MODEL", "black-forest-labs/FLUX.1-Kontext-dev"))
+        return fit_subject(image)
     if mode == "generate" and refs and not lora:
         # Строго по референсам: модель редактирования получает настоящую иконку
         # стиля и рисует НОВЫЙ предмет её же рукой (линия, цвета, тени, фон).
@@ -291,8 +303,12 @@ async def generate_image(mode, style_row, brief, source_bytes=None):
     return fit_subject(image)
 
 
-async def generate_by_bible(client, mode, style_row, brief, bible, source_bytes=None):
-    """Кандидаты по библии стиля: перерисовка самых типичных референсов + текстовая модель; лучший — по судье."""
+async def generate_by_bible(client, mode, style_row, brief, bible, source_bytes=None, bases=()):
+    """
+    Кандидаты по библии стиля, лучший — по судье. Есть основа из набора иконок —
+    она перерисовывается в стиле (+ один кандидат по типичному референсу);
+    нет — перерисовка двух типичных референсов + текстовая модель.
+    """
     import logo_style_ai
 
     subject = brief or "a simple cute object"
@@ -307,6 +323,14 @@ async def generate_by_bible(client, mode, style_row, brief, bible, source_bytes=
         prompt = t("logo.prompt.bible_stylize", **values)
         jobs += [client.image_to_image(source_bytes, prompt=prompt, negative_prompt=negative, model=edit_model)
                  for _ in range(2)]
+    elif bases:
+        prompt = t("logo.prompt.base_restyle", **values)
+        jobs += [client.image_to_image(data, prompt=prompt, negative_prompt=negative, model=edit_model)
+                 for _, data in bases]
+        for path in logo_style_ai.representative(style_row, 1):
+            jobs.append(client.image_to_image(pathlib.Path(path).read_bytes(),
+                                              prompt=t("logo.prompt.bible_reference", **values),
+                                              negative_prompt=negative, model=edit_model))
     else:
         prompt = t("logo.prompt.bible_reference", **values)
         for path in logo_style_ai.representative(style_row, 2):
@@ -605,6 +629,9 @@ async def send_result(interaction, style_row, mode, brief, png, source_bytes=Non
     subject = logo_style_ai.understood(brief)
     if subject:  # видно, что именно бот рисовал — если понял не так, можно уточнить запрос
         embed.description += "\n" + t("logo.result.understood", subject=subject)
+        import icon_base
+        if icon_base.used.get(subject.lower()):
+            embed.description += "\n" + t("logo.result.base", name=icon_base.used[subject.lower()])
     # PNG — отдельным файлом, а не картинкой внутри карточки: картинки в карточках
     # Discord пережимает (на телефоне — в мелкий WebP), а файл скачивается как есть
     await interaction.followup.send(embed=embed, file=discord.File(io.BytesIO(png), f"icon_{ICON_SIZE}.png"),
