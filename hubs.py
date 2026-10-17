@@ -120,6 +120,21 @@ class PicturesHome(PanelView):
     texts = "pictures.home"
     button_order = ("live_cards", "templates_sheet", "server_banner", "image_library", "variables")
 
+    def __init__(self, guild=None, **kwargs):
+        super().__init__(**kwargs)
+        import server_banner
+        self.hidden = ()
+        if guild is not None and not server_banner.available(guild):
+            # без права «Управлять сервером» баннер не поставить — и кнопки нет
+            self.remove_item(self.server_banner)
+            self.hidden = ("server_banner",)
+
+    @staticmethod
+    def embed(interaction):
+        import server_banner
+        hide = () if server_banner.available(interaction.guild) else ("server_banner",)
+        return panel_embed(interaction, "pictures.home", hide=hide)
+
     @discord.ui.button(label="Живые картинки", emoji="🏆", style=discord.ButtonStyle.primary)
     async def live_cards(self, interaction, button):
         import cards
@@ -480,8 +495,8 @@ def register_hubs(bot, make_button_sets):
         if переменная:
             await variables_panel.open_card(interaction, переменная, new_message=True)
             return
-        await interaction.response.send_message(embed=panel_embed(interaction, "pictures.home"),
-                                                view=PicturesHome(), ephemeral=True)
+        await interaction.response.send_message(embed=PicturesHome.embed(interaction),
+                                                view=PicturesHome(interaction.guild), ephemeral=True)
 
     @bot.tree.command(name="forms", description="Проверка заявок по формам")
     @app_commands.guild_only()

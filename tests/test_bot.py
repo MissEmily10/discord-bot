@@ -2410,6 +2410,25 @@ class PackBannerTests(unittest.TestCase):
 
 
 class ServerBannerTests(unittest.TestCase):
+    def test_banner_option_hidden_without_manage_guild(self):
+        import hubs
+        import server_banner
+        guild = types.SimpleNamespace(id=GUILD, me=types.SimpleNamespace(
+            guild_permissions=discord.Permissions(manage_guild=False)))
+        self.assertFalse(server_banner.available(guild))
+
+        async def check():
+            view = hubs.PicturesHome(guild)
+            self.assertNotIn(view.server_banner, view.children)
+            guild.me.guild_permissions = discord.Permissions(manage_guild=True)
+            shown = hubs.PicturesHome(guild)
+            self.assertIn(shown.server_banner, shown.children)
+
+        run(check())
+        import core
+        self.assertNotIn("Баннер сервера", core.button_hints("pictures.home", hide=("server_banner",)))
+        self.assertIn("Баннер сервера", core.button_hints("pictures.home"))
+
     def test_every_style_renders_with_lines(self):
         import banner_styles
         import server_banner as sb

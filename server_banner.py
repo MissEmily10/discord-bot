@@ -215,6 +215,12 @@ def problem(guild):
     return None
 
 
+def available(guild):
+    """Есть ли у бота право «Управлять сервером». Нет — опции баннера на этом сервере не видно."""
+    me = getattr(guild, "me", None)
+    return bool(me and me.guild_permissions.manage_guild)
+
+
 async def apply(guild, banner, force=False):
     """Поставить баннер. -> (поставлен ли, ключ ошибки | None). Тот же кадр не шлём повторно."""
     key = problem(guild)
@@ -246,8 +252,8 @@ async def _loop(bot):
         for guild_id in auto_banners():
             guild = bot.get_guild(guild_id)
             banner = get_banner(guild_id)
-            if guild is None or banner is None:
-                continue
+            if guild is None or banner is None or not available(guild):
+                continue  # право сняли — баннер просто стоит на паузе
             if time.time() - banner["last_applied"] < max(MIN_INTERVAL, banner["interval_min"]) * 60:
                 continue
             try:
@@ -302,6 +308,9 @@ def home_embed(interaction, banner):
 async def open_home(interaction, back_target=None, edit=True):
     if not can_manage(interaction):
         await reply(interaction, "common.need_admin")
+        return
+    if not available(interaction.guild):  # старая панель, открытая до снятия права
+        await reply(interaction, "server_banner.no_rights")
         return
     banner = get_or_create(interaction.guild.id, interaction.user.id)
     view = ServerBannerView(back_target=back_target)

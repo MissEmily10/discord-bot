@@ -492,11 +492,11 @@ HINTS_FOR = {
 _hint_keys = {}
 
 
-def button_hints(prefix):
+def button_hints(prefix, hide=()):
     """
     Пояснения к кнопкам панели: ключи «<prefix>.<кнопка>.hint» в каталоге,
     в порядке каталога. Подпись берётся из «<prefix>.<кнопка>» — та же,
-    что на самой кнопке. -> текст блока или "".
+    что на самой кнопке. hide — кнопки, убранные с панели. -> текст блока или "".
     """
     if prefix not in _hint_keys:
         from texts import CATALOG
@@ -511,6 +511,8 @@ def button_hints(prefix):
         if not hint.strip():
             continue  # владелец стёр пояснение в веб-панели — не показываем
         name = key[len(prefix) + 1:-len(".hint")]
+        if name in hide:
+            continue
         label = t(f"{prefix}.{name}") if has_text(f"{prefix}.{name}") else name
         lines.append(t("hints.line", label=label, hint=hint))
     return (t("hints.header") + "\n" + "\n".join(lines)) if lines else ""
@@ -589,7 +591,8 @@ def install_banner_hook():
         setattr(owner, name, wrapper)
 
 
-def panel_embed(interaction, context, description=None, *, title=None, danger=False, hints=None, **params):
+def panel_embed(interaction, context, description=None, *, title=None, danger=False, hints=None, hide=(),
+                **params):
     """
     Единый конструктор служебных embed'ов бота.
     context — ключ экрана, например "forms.home": берутся
@@ -602,7 +605,7 @@ def panel_embed(interaction, context, description=None, *, title=None, danger=Fa
     if description is None:
         description = t(f"{context}.text", **params) if has_text(f"{context}.text") else ""
     if hints is not False:
-        legend = button_hints(hints or HINTS_FOR.get(context, context))
+        legend = button_hints(hints or HINTS_FOR.get(context, context), hide)
         if legend:
             description = f"{description}\n\n{legend}" if description else legend
     embed = PanelEmbed(
