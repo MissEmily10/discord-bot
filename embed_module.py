@@ -139,6 +139,9 @@ def render_active_preview(state):
     data = state.active_embed
     embed = build_discord_embed(data)
     marker = t("embed.preview_footer", n=state.active_index + 1, total=len(state.embeds), visibility=state.visibility)
+    if (embed.image.url or "").startswith("attachment://"):
+        embed.set_image(url=None)  # GIF пака прикладывается только при отправке
+        marker = f"{marker} · {t('embed.preview_pack_gif')}"
     if not embed_has_content(data):
         marker = f"{marker} · {t('embed.preview_empty')}"
     footer = data.get("footer_text")

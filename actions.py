@@ -68,7 +68,8 @@ def normalize_url(url):
     url = (url or "").strip()
     if not url:
         return None
-    return url if url.startswith(("http://", "https://")) else "https://" + url
+    # attachment:// — файл, приложенный к самому сообщению (анимированный баннер пака)
+    return url if url.startswith(("http://", "https://", "attachment://")) else "https://" + url
 
 
 _URL = re.compile(r"^https?://[^\s/<>\"']+\.[^\s<>\"']+$", re.IGNORECASE)
@@ -82,6 +83,8 @@ def check_url(value):
     url = normalize_url(value)
     if url is None:
         return None, True
+    if url.startswith("attachment://"):
+        return url, True
     return (url, True) if _URL.match(url) else (None, False)
 
 
@@ -484,6 +487,9 @@ def single_message(parts):
     if sum(len(embed) for embed in embeds) > EMBED_TOTAL_LIMIT:
         return None
     message = {"content": parts[0].get("content"), "embeds": embeds, "view": parts[-1].get("view")}
+    files = [f for part in parts for f in part.get("files") or []]
+    if files:
+        message["files"] = files
     return message
 
 
@@ -1027,6 +1033,8 @@ async def _build_goto(interaction, value, creator_id=None, **_):
     message = interaction.message
     single = button_message(parts)
     if message is not None and message.flags.ephemeral:
+        single = dict(single)
+        single["attachments"] = single.pop("files", [])  # правка сообщения: вложения заменяются целиком
         await interaction.response.edit_message(**{"content": None, "embeds": [], "view": None, **single})
         return
     await _send_parts(interaction, [single])

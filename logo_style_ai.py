@@ -180,23 +180,44 @@ def parse_json(text):
     return None
 
 
-TRANSLATE_PROMPT = """Translate this description of an icon subject into short, concrete English for an image
-generator (what object, its key visual parts, pose if given). No style words, no quotes, answer with the text only:
-"""
+SUBJECT_PROMPT = """Someone asked for a Discord role icon. Their request (any language): "{brief}"
+Turn it into ONE concrete, simple, instantly recognizable object that an icon artist can draw.
+If the request is an abstract idea or a group name (friendship, commonwealth, alliance, victory, wisdom, chaos...),
+pick the single most universal visual symbol of it: e.g. commonwealth / alliance -> two hands clasped in a firm
+handshake; friendship -> two hearts linked together; victory -> a golden laurel wreath; wisdom -> an owl.
+If it is already an object or a character, keep it and add 1-2 key visual details. One object only, no text,
+no letters, no style words. Answer in English, 5-20 words, the object description only."""
+
+_subjects = {}  # запрос -> как бот его понял (чтобы «Ещё вариант» рисовал то же самое)
+
+
+def understood(brief):
+    """Как бот понял запрос (для карточки результата) или None."""
+    return _subjects.get((brief or "").strip().lower())
 
 
 async def english_subject(brief):
-    """Описание предмета по-английски: генераторы плохо понимают русский и рисуют что попало."""
+    """
+    Запрос -> один конкретный предмет по-английски. Генераторы плохо понимают
+    русский, а абстрактное слово («содружество») рисуют как непонятно что —
+    поэтому оно сначала превращается в понятный символ (рукопожатие).
+    """
     brief = (brief or "").strip()
-    if not re.search("[а-яё]", brief, re.I) or not enabled():
+    key = brief.lower()
+    if not brief or not enabled():
         return brief
+    if key in _subjects:
+        return _subjects[key]
     try:
-        text = await asyncio.wait_for(_chat(_text_models(), TRANSLATE_PROMPT + brief, 120), 40)
-        text = text.strip().strip('"').strip()
+        text = await asyncio.wait_for(_chat(_text_models(), SUBJECT_PROMPT.format(brief=brief[:300]), 80), 40)
+        text = text.strip().strip('"').strip().rstrip(".")
         if text and not re.search("[а-яё]", text, re.I):
-            return text[:300]
+            _subjects[key] = text[:300]
+            return _subjects[key]
     except Exception as error:
-        _log.info("subject translation failed: %s", error)
+        _log.info("subject interpretation failed: %s", error)
+    if not re.search("[а-яё]", brief, re.I):
+        return brief
     try:
         import form_packs
         return await form_packs.to_english(brief)

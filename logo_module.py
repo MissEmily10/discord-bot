@@ -247,6 +247,9 @@ async def generate_image(mode, style_row, brief, source_bytes=None):
     client = _client()
     refs = references_of(style_row) if style_row else []
     lora = style_row and (style_row[7] or style_row[6])
+    if brief and logo_style_ai.enabled():
+        # абстрактное «содружество» -> конкретный предмет (рукопожатие), по-английски
+        brief = await logo_style_ai.english_subject(brief)
     if refs and not lora and logo_style_ai.enabled():
         # Главный путь: каждый референс разобран в подробный промт, разборы сведены
         # в «библию» стиля, по ней рисуют несколько кандидатов, судья выбирает.
@@ -282,7 +285,7 @@ async def generate_by_bible(client, mode, style_row, brief, bible, source_bytes=
     """Кандидаты по библии стиля: перерисовка самых типичных референсов + текстовая модель; лучший — по судье."""
     import logo_style_ai
 
-    subject = await logo_style_ai.english_subject(brief) or "a simple cute object"
+    subject = brief or "a simple cute object"
     notes = (style_row[4] or "").strip()
     if notes == bible.get("invariants", "").strip():
         notes = ""  # описание стиля и есть библия — не повторяем
@@ -588,6 +591,10 @@ async def send_result(interaction, style_row, mode, brief, png, source_bytes=Non
         interaction, "logo.result",
         style=style_row[3] if style_row else t("logo.no_style"), mode=t(f"logo.mode.{mode}"), brief=brief or "—",
     )
+    import logo_style_ai
+    subject = logo_style_ai.understood(brief)
+    if subject:  # видно, что именно бот рисовал — если понял не так, можно уточнить запрос
+        embed.description += "\n" + t("logo.result.understood", subject=subject)
     # PNG — отдельным файлом, а не картинкой внутри карточки: картинки в карточках
     # Discord пережимает (на телефоне — в мелкий WebP), а файл скачивается как есть
     await interaction.followup.send(embed=embed, file=discord.File(io.BytesIO(png), f"icon_{ICON_SIZE}.png"),

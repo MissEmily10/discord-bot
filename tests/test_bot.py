@@ -2347,6 +2347,36 @@ class PackBannerTests(unittest.TestCase):
         self.assertEqual(image.info.get("loop"), 0)
 
 
+    def test_pack_banner_attached_to_message(self):
+        import actions
+        import form_packs
+        original = form_packs.pack_gif_bytes
+
+        async def fake_gif(pack_id):
+            return b"GIF89a" if pack_id == 5 else None
+
+        form_packs.pack_gif_bytes = fake_gif
+        try:
+            data = {"interactive": {"type": "form_packs", "packs": ["5"]}}
+            parts = [{"embed": discord.Embed(title="Набор")}, {"embed": discord.Embed(title="ещё")}]
+            run(form_packs.attach_banners(parts, data))
+            self.assertEqual(parts[0]["embed"].image.url, "attachment://pack_banner_5.gif")
+            self.assertEqual([f.filename for f in parts[0]["files"]], ["pack_banner_5.gif"])
+            self.assertNotIn("files", parts[1])
+            self.assertEqual(len(actions.single_message(parts)["files"]), 1)
+            gone = [{"embed": discord.Embed().set_image(url=form_packs.banner_marker(9))}]
+            run(form_packs.attach_banners(gone, {}))
+            self.assertIsNone(gone[0]["embed"].image.url)  # пака нет — без битой картинки
+            self.assertEqual(actions.check_url(form_packs.banner_marker(5)), ("attachment://pack_banner_5.gif", True))
+        finally:
+            form_packs.pack_gif_bytes = original
+
+    def test_pack_gif_fits_upload_limit(self):
+        import banner_render as b
+        data = b.pack_gif([(f"должность {n}", "набор открыт!") for n in range(8)])
+        self.assertLess(len(data), 10 * 1024 * 1024)
+
+
 class ServerBannerTests(unittest.TestCase):
     def test_every_style_renders_with_lines(self):
         import banner_styles
@@ -2661,7 +2691,7 @@ class LogoTests(unittest.TestCase):
 
         async def fake_chat(models, content, max_tokens):
             if isinstance(content, str):
-                if content.startswith(logo_style_ai.TRANSLATE_PROMPT):
+                if content.startswith("Someone asked for a Discord role icon"):
                     return "a cat wizard"
                 return "```json\n" + json_lib.dumps(bible) + "\n```"
             if content[0]["text"] == logo_style_ai.ANALYZE_PROMPT:

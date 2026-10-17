@@ -320,23 +320,89 @@ async def show_form_card(interaction, form_id, pack_id=None):
     await interaction.response.send_message(**kwargs)
 
 
+BANNER_PREFIX = "attachment://pack_banner_"
+_gif_cache = {}  # (pack_id, карточки) -> GIF
+
+
+def banner_marker(pack_id):
+    """Картинка embed'а «анимированный баннер пака»: GIF прикладывается к самому
+    сообщению при отправке (ссылки и веб-панель не нужны) и рисуется заново,
+    когда должности пака меняются."""
+    return f"{BANNER_PREFIX}{int(pack_id)}.gif"
+
+
+async def pack_gif_bytes(pack_id):
+    """GIF пака или None (пак пустой / нет основы карточки)."""
+    import banner_render
+    items = pack_items(pack_id)
+    if not items or not os.path.exists(banner_render.base_path("forms.public_card")):
+        return None
+    cards = tuple((form[3], tagline_for(pack_id, form[0])) for form, _ in items)
+    key = (int(pack_id), cards)
+    if key not in _gif_cache:
+        if len(_gif_cache) > 20:
+            _gif_cache.clear()
+        _gif_cache[key] = await asyncio.to_thread(banner_render.pack_gif, list(cards))
+    return _gif_cache[key]
+
+
 async def pack_banner(pack_id):
     """
     Анимированный баннер пака (GIF: должности сменяют друг друга).
-    -> (ссылка | None, bytes | None). Ссылка есть, когда настроен WEB_PANEL_URL —
-    тогда картинку можно поставить прямо в сообщение.
+    -> (ссылка | None, bytes | None). Ссылка есть, когда настроен WEB_PANEL_URL.
     """
-    import banner_render
     import web_panel
-    items = pack_items(pack_id)
-    if not items or not os.path.exists(banner_render.base_path("forms.public_card")):
-        return None, None
-    cards = [(form[3], tagline_for(pack_id, form[0])) for form, _ in items]
-    data = await asyncio.to_thread(banner_render.pack_gif, cards)
-    if not web_panel.panel_url():
+    data = await pack_gif_bytes(pack_id)
+    if data is None or not web_panel.panel_url():
         return None, data
     name, error = await asyncio.to_thread(web_panel.save_asset, data)
     return (f"{web_panel.panel_url()}/assets/{name}" if name else None), data
+
+
+async def attach_banners(parts, data):
+    """
+    Перед отправкой/обновлением: картинки-метки баннеров пака -> GIF-вложения
+    (part["files"]). Сообщению с паками без своей картинки баннер ставится сам —
+    так GIF появляется и в уже отправленных сообщениях после «Обновить».
+    """
+    from actions import part_embeds
+    interactive = (data or {}).get("interactive") or {}
+    packs = interactive.get("packs") if interactive.get("type") == "form_packs" else None
+    if packs and parts:
+        first = part_embeds(parts[0])
+        if first and not first[0].image.url:
+            try:
+                first[0].set_image(url=banner_marker(int(packs[0])))
+            except (TypeError, ValueError):
+                pass
+    for part in parts or []:
+        files = []
+        for embed in part_embeds(part):
+            url = embed.image.url or ""
+            if not url.startswith(BANNER_PREFIX):
+                continue
+            match = re.match(re.escape(BANNER_PREFIX) + r"(\d+)\.gif$", url)
+            gif = await pack_gif_bytes(int(match.group(1))) if match else None
+            if gif is None:
+                embed.set_image(url=None)  # пак удалён или пуст — без битой картинки
+                continue
+            name = url[len("attachment://"):]
+            if name not in {f.filename for f in files}:
+                _by_name[name] = gif
+                files.append(discord.File(io.BytesIO(gif), filename=name))
+        if files:
+            part["files"] = files
+    return parts
+
+
+_by_name = {}  # имя вложения -> GIF (свежие копии файлов для повторной отправки)
+
+
+def fresh_files(part):
+    """Новые discord.File для части: discord.py закрывает файл после отправки,
+    а одну часть при «Обновить отправленные» шлют в несколько сообщений."""
+    return [discord.File(io.BytesIO(_by_name[f.filename]), filename=f.filename)
+            for f in part.get("files") or [] if f.filename in _by_name]
 
 
 # ============================================================
@@ -480,13 +546,8 @@ class PackView(PanelView):
         state.embeds = [{"title": t("packs.message.title"), "description": pack[4] or t("packs.message.text"),
                          "color": core.embed_color().value}]
         state.interactive = {"type": "form_packs", "packs": [self.pack_id]}
-        await interaction.response.defer()  # GIF рисуется пару секунд
-        url, _ = await pack_banner(self.pack_id)
-        if url:
-            state.embeds[0]["image"] = url  # анимированный баннер — сразу в сообщение
+        state.embeds[0]["image"] = banner_marker(self.pack_id)  # анимированный баннер — вложением при отправке
         await embed_module.go_to_editor(interaction, state, (core.screen(interaction), self))
-        if not url:
-            await interaction.followup.send(t("packs.banner.no_url"), ephemeral=True)
 
     @discord.ui.button(label="Анимированный баннер", emoji="🎞️", style=discord.ButtonStyle.secondary)
     async def gif_banner(self, interaction, button):
@@ -641,10 +702,7 @@ async def add_pack_banner(state):
     first = state.embeds[0]
     if first.get("image"):
         return None
-    url, _ = await pack_banner(packs[0])
-    if not url:
-        return "packs.banner.no_url"
-    first["image"] = url
+    first["image"] = banner_marker(packs[0])  # GIF приложится к сообщению при отправке
     return None
 
 

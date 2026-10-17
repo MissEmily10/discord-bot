@@ -143,7 +143,9 @@ async def parts_for(guild, build_id, user=None, extra=None, data=None):
         return None
     needed = used_variables(data)
     variables = await collect(guild, needed, user=user, extra=extra) if needed else None
-    return message_parts(build_id, variables, data)
+    parts = message_parts(build_id, variables, data)
+    import form_packs
+    return await form_packs.attach_banners(parts, data)  # анимированные баннеры паков — вложениями
 
 
 def is_personal(data):
@@ -324,6 +326,7 @@ async def resync_build(guild, build_id, with_children=True):
 
 
 async def _resync_one(guild, build_id):
+    import form_packs
     parts = await parts_for(guild, build_id) or []
     if not parts:
         return 0, 0, 0, 0  # build стал пустым — не удаляем отправленное
@@ -359,9 +362,10 @@ async def _resync_one(guild, build_id):
                         removed += 1
                         continue
                     part = parts[position]
+                    extra = {"attachments": form_packs.fresh_files(part)} if part.get("files") else {}
                     await message.edit(
                         content=part.get("content"), embeds=part_embeds(part), view=part.get("view"),
-                        allowed_mentions=discord.AllowedMentions.none(),
+                        allowed_mentions=discord.AllowedMentions.none(), **extra,
                     )
                     updated += 1
                 except discord.NotFound:
@@ -374,7 +378,10 @@ async def _resync_one(guild, build_id):
             appended = []
             for position in range(len(group), len(parts)):
                 try:
-                    msg = await channel.send(allowed_mentions=discord.AllowedMentions.none(), **parts[position])
+                    part = dict(parts[position])
+                    if part.get("files"):
+                        part["files"] = form_packs.fresh_files(part)
+                    msg = await channel.send(allowed_mentions=discord.AllowedMentions.none(), **part)
                 except discord.HTTPException:
                     missing += 1
                     continue
