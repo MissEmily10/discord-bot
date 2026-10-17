@@ -1000,7 +1000,7 @@ CATALOG = {
     "select.menu_result": 'Добавлено: {added}\nСнято: {removed}{skipped}',
     "select.menu_skipped": '\nНе удалось: {roles}',
     "logo.no_packages": 'Генератор не установлен: на сервере нужны пакеты huggingface_hub и Pillow (pip install -r requirements.txt).',
-    "logo.no_token": 'Генератор не настроен: добавь в .env GEMINI_API_KEY (Nano Banana, лучше всего) или HF_TOKEN и перезапусти бота.',
+    "logo.no_token": 'Генератор не настроен: добавь в .env OPENROUTER_API_KEY или GEMINI_API_KEY (Nano Banana, лучше всего) либо HF_TOKEN и перезапусти бота.',
     "logo.no_image": 'Прикрепи картинку.',
     "logo.bad_image": 'Нужна картинка PNG, JPG или WEBP (или zip с ними).',
     "logo.image_too_large": 'Файл слишком большой.',

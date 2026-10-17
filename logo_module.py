@@ -85,7 +85,7 @@ def hourly_limit():
 
 def backend_problem():
     """Ключ каталога с причиной, почему генерация недоступна, или None."""
-    if cfg("GEMINI_API_KEY") or cfg("GOOGLE_API_KEY"):  # Nano Banana — нужен только Pillow
+    if cfg("OPENROUTER_API_KEY") or cfg("GEMINI_API_KEY") or cfg("GOOGLE_API_KEY"):  # Nano Banana — нужен только Pillow
         try:
             import PIL  # noqa: F401
         except ImportError:

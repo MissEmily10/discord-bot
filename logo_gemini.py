@@ -6,8 +6,12 @@
 ей отдаются: типичные референсы стиля (картинками), запрос как есть, описание
 стиля и библия из разбора референсов (если разбор уже есть).
 
-Ключ: GEMINI_API_KEY в .env (aistudio.google.com → Get API key; генерация
-картинок обычно требует включённой оплаты в Google AI Studio).
+Два способа подключить (любой один):
+- OPENROUTER_API_KEY — через OpenRouter (openrouter.ai): предоплата небольшими
+  суммами, как на Hugging Face, без привязки к Google Cloud;
+- GEMINI_API_KEY — напрямую у Google (aistudio.google.com → Get API key;
+  для картинок нужна включённая оплата).
+Если заданы оба, используется OpenRouter.
 Модель: LOGO_GEMINI_MODEL; если она недоступна — пробуются следующие из списка.
 """
 
@@ -21,6 +25,10 @@ API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateC
 # Nano Banana 2 (дешёвая и хорошая) -> Pro (дороже, точнее) -> первая -> на случай нового имени
 MODELS = ("gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview", "gemini-2.5-flash-image",
           "gemini-nano-banana-2.1")
+OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODELS = ("google/gemini-3.1-flash-image", "google/gemini-3.1-flash-image-preview",
+                     "google/gemini-3-pro-image", "google/gemini-3-pro-image-preview",
+                     "google/gemini-2.5-flash-image")
 MAX_REFERENCES = 8
 OLD_MODEL_REFERENCES = 3  # первая Nano Banana (2.5) лучше всего работает с 1–3 картинками
 
@@ -48,31 +56,48 @@ perspective, proportions, detail level, background and margins.
 Format: square image, one centered object filling about 85% of the canvas, no text, no frame."""
 
 
-def api_key():
+def _cfg(name, default=None):
     import logo_module
-    return logo_module.cfg("GEMINI_API_KEY") or logo_module.cfg("GOOGLE_API_KEY")
+    return logo_module.cfg(name, default)
+
+
+def provider():
+    """openrouter | google | None."""
+    if _cfg("OPENROUTER_API_KEY"):
+        return "openrouter"
+    if _cfg("GEMINI_API_KEY") or _cfg("GOOGLE_API_KEY"):
+        return "google"
+    return None
+
+
+def api_key():
+    if provider() == "openrouter":
+        return _cfg("OPENROUTER_API_KEY")
+    return _cfg("GEMINI_API_KEY") or _cfg("GOOGLE_API_KEY")
 
 
 def enabled():
-    return bool(api_key())
+    return provider() is not None
 
 
 def models():
-    import logo_module
-    first = logo_module.cfg("LOGO_GEMINI_MODEL", MODELS[0])
-    return [first] + [m for m in MODELS if m != first]
+    names = OPENROUTER_MODELS if provider() == "openrouter" else MODELS
+    first = _cfg("LOGO_GEMINI_MODEL", names[0])
+    if provider() == "openrouter" and "/" not in first:
+        first = "google/" + first  # «gemini-3-pro-image-preview» -> «google/…»
+    return [first] + [m for m in names if m != first]
 
 
 def _image_part(data, mime="image/png"):
     return {"inline_data": {"mime_type": mime, "data": base64.b64encode(data).decode()}}
 
 
-async def _post(url, body, key):
+async def _post(url, body, headers):
     """Один запрос к API. -> (статус, json). Отдельной функцией — чтобы подменять в тестах."""
     import aiohttp
     timeout = aiohttp.ClientTimeout(total=240)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(url, json=body, headers={"x-goog-api-key": key}) as response:
+        async with session.post(url, json=body, headers=headers) as response:
             try:
                 data = await response.json(content_type=None)
             except ValueError:
@@ -92,6 +117,42 @@ def _extract_image(data):
                 texts.append(part["text"])
     reason = (data.get("promptFeedback") or {}).get("blockReason")
     return None, reason or " ".join(texts)[:300]
+
+
+def _extract_openrouter(data):
+    """Ответ chat completions OpenRouter: картинки — в message.images (data:-ссылки)."""
+    texts = []
+    for choice in data.get("choices") or []:
+        message = choice.get("message") or {}
+        for image in message.get("images") or []:
+            url = ((image.get("image_url") or {}).get("url")) or ""
+            if url.startswith("data:") and "," in url:
+                return base64.b64decode(url.split(",", 1)[1]), ""
+        if isinstance(message.get("content"), str):
+            texts.append(message["content"])
+    return None, " ".join(texts)[:300]
+
+
+def _unavailable(status, data):
+    """Ошибка «такой модели нет / нет доступа» — тогда пробуем следующую."""
+    text = str(data).lower()
+    return status in (400, 404) and (("model" in text and "not" in text) or "no endpoints" in text)
+
+
+def _request(model, prompt, images):
+    """-> (url, body, headers) для текущего провайдера."""
+    key = api_key()
+    if provider() == "openrouter":
+        content = [{"type": "text", "text": prompt}] + [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(data).decode()}}
+            for data in images]
+        body = {"model": model, "messages": [{"role": "user", "content": content}],
+                "modalities": ["image", "text"], "image_config": {"aspect_ratio": "1:1"}}
+        return OPENROUTER_API, body, {"Authorization": f"Bearer {key}", "X-Title": "Discord bot icons"}
+    parts = [{"text": prompt}] + [_image_part(data) for data in images]
+    body = {"contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "1:1"}}}
+    return API.format(model=model), body, {"x-goog-api-key": key}
 
 
 def references_for(style_row, model):
@@ -129,28 +190,27 @@ def build_prompt(mode, style_row, brief, refs, bible=None):
 async def generate(mode, style_row, brief, source_bytes=None):
     """-> PNG bytes (сырые, без подгонки под иконку). Ошибки — исключением с понятным текстом."""
     import logo_style_ai
-    key = api_key()
     bible = None
     if style_row:
         bible = logo_style_ai.load(style_row[0]).get("bible")  # только готовый разбор, без запросов к HF
     last_error = None
     for model in models():
         refs = references_for(style_row, model)
-        parts = [{"text": build_prompt(mode, style_row, brief, refs, bible)}]
-        if mode == "stylize" and source_bytes:
-            parts.append(_image_part(source_bytes))
-        parts += [_image_part(pathlib.Path(path).read_bytes()) for path in refs]
-        body = {"contents": [{"role": "user", "parts": parts}],
-                "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "1:1"}}}
-        status, data = await _post(API.format(model=model), body, key)
-        if status in (400, 404) and "model" in str(data).lower() and "not" in str(data).lower():
+        images = [source_bytes] if mode == "stylize" and source_bytes else []
+        images += [pathlib.Path(path).read_bytes() for path in refs]
+        url, body, headers = _request(model, build_prompt(mode, style_row, brief, refs, bible), images)
+        status, data = await _post(url, body, headers)
+        if _unavailable(status, data):
             last_error = f"{model}: {((data.get('error') or {}).get('message') or status)}"
-            _log.info("gemini model unavailable, trying next: %s", last_error)
+            _log.info("image model unavailable, trying next: %s", last_error)
             continue  # такой модели нет (или нет доступа) — следующая
+        if status == 402:
+            raise RuntimeError("Nano Banana: на балансе закончились деньги — пополни счёт")
         if status != 200:
             message = (data.get("error") or {}).get("message") or f"HTTP {status}"
             raise RuntimeError(f"Nano Banana: {message}"[:300])
-        image, reason = _extract_image(data)
+        extract = _extract_openrouter if provider() == "openrouter" else _extract_image
+        image, reason = extract(data)
         if image is None:
             raise RuntimeError(f"Nano Banana не вернула картинку: {reason or 'без причины'}"[:300])
         return image

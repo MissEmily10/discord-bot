@@ -161,7 +161,8 @@ build that shows `{counter:points}`).
 ## Logo generator (`/logo`)
 
 Role icons generated in your own style. Best: **Nano Banana** (Gemini Image) —
-put `GEMINI_API_KEY` into `.env` (aistudio.google.com → Get API key; image
+put `OPENROUTER_API_KEY` (openrouter.ai, prepaid credits in small amounts) or
+`GEMINI_API_KEY` into `.env` (aistudio.google.com → Get API key; image
 generation needs billing enabled). It looks at the style's most typical
 references directly and understands Russian briefs, including abstract ones.
 Model: `LOGO_GEMINI_MODEL` (default `gemini-3.1-flash-image-preview` — Nano

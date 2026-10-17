@@ -27,7 +27,7 @@ os.environ["DATABASE_PATH"] = os.path.join(_TMP.name, "test.db")
 os.environ["LOGO_DIR"] = os.path.join(_TMP.name, "logo")
 os.environ["OWNER_ID"] = "1"
 os.environ["DISCORD_TOKEN"] = ""
-for name in ("WEB_PANEL_PORT", "SERVER_PORT", "HF_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+for name in ("WEB_PANEL_PORT", "SERVER_PORT", "HF_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"):
     os.environ.pop(name, None)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -2784,7 +2784,7 @@ class LogoTests(unittest.TestCase):
         canvas.paste(self.Image.new("RGB", (400, 400), "green"), (300, 300))
         canvas.save(result, "PNG")
 
-        async def fake_post(url, body, key):
+        async def fake_post(url, body, headers):
             sent.append((url, body))
             if "3.1-flash" in url:
                 return 404, {"error": {"message": "models/x is not found"}}
@@ -2806,13 +2806,54 @@ class LogoTests(unittest.TestCase):
             self.assertIn("содружество", parts[0]["text"])
             self.assertEqual(len(parts) - 1, 4)  # все референсы картинками
             with self.assertRaises(RuntimeError):
-                async def blocked(url, body, key):
+                async def blocked(url, body, headers):
                     return 200, {"promptFeedback": {"blockReason": "SAFETY"}}
                 logo_gemini._post = blocked
                 run(logo_module.generate_image("generate", database.get_logo_style(style_id), "кот"))
         finally:
             logo_gemini._post = old_post
             os.environ.pop("GEMINI_API_KEY", None)
+            if old_dir is None:
+                os.environ.pop("LOGO_DIR", None)
+            else:
+                os.environ["LOGO_DIR"] = old_dir
+
+    def test_nano_banana_via_openrouter(self):
+        import base64 as b64
+        import logo_gemini
+        import logo_module
+        sent = []
+        result = io.BytesIO()
+        self.Image.new("RGB", (512, 512), "orange").save(result, "PNG")
+        url = "data:image/png;base64," + b64.b64encode(result.getvalue()).decode()
+
+        async def fake_post(endpoint, body, headers):
+            sent.append((endpoint, body, headers))
+            return 200, {"choices": [{"message": {"content": "", "images": [{"image_url": {"url": url}}]}}]}
+
+        style_id = database.save_logo_style(GUILD, ADMIN, "OR", "", "")
+        old_dir, old_post = os.environ.get("LOGO_DIR"), logo_gemini._post
+        os.environ["LOGO_DIR"], os.environ["OPENROUTER_API_KEY"] = tempfile.mkdtemp(), "sk-or"
+        logo_gemini._post = fake_post
+        try:
+            logo_module.add_reference(database.get_logo_style(style_id), self.png)
+            png = run(logo_module.generate_image("generate", database.get_logo_style(style_id), "содружество"))
+            self.assertTrue(png.startswith(b"\x89PNG"))
+            endpoint, body, headers = sent[0]
+            self.assertIn("openrouter.ai", endpoint)
+            self.assertEqual(body["model"], "google/gemini-3.1-flash-image")
+            self.assertEqual(headers["Authorization"], "Bearer sk-or")
+            self.assertEqual([c["type"] for c in body["messages"][0]["content"]], ["text", "image_url"])
+            self.assertIn("содружество", body["messages"][0]["content"][0]["text"])
+
+            async def broke(endpoint, body, headers):
+                return 402, {"error": {"message": "Insufficient credits"}}
+            logo_gemini._post = broke
+            with self.assertRaisesRegex(RuntimeError, "пополни"):
+                run(logo_module.generate_image("generate", database.get_logo_style(style_id), "кот"))
+        finally:
+            logo_gemini._post = old_post
+            os.environ.pop("OPENROUTER_API_KEY", None)
             if old_dir is None:
                 os.environ.pop("LOGO_DIR", None)
             else:
