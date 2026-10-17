@@ -1525,6 +1525,16 @@ def get_triggers(build_id=None, guild_id=None, event=None):
     return rows
 
 
+def get_guild_triggers(guild_id):
+    """Все триггеры сервера (и выключенные) — для общего списка в /embed."""
+    _ensure_extended_tables()
+    connection = get_connection()
+    rows = connection.execute(f"SELECT {_TRIGGER_COLUMNS} FROM build_triggers WHERE guild_id = ? ORDER BY id",
+                              (guild_id,)).fetchall()
+    connection.close()
+    return rows
+
+
 def get_trigger(trigger_id):
     _ensure_extended_tables()
     connection = get_connection()

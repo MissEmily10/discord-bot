@@ -318,6 +318,12 @@ class EmbedHomeView(PanelView):
         from build_tools import ImportMessageModal
         await interaction.response.send_modal(ImportMessageModal())
 
+    @discord.ui.button(label="Триггеры", emoji="⚡", style=discord.ButtonStyle.secondary)
+    async def triggers(self, interaction, button):
+        await interaction.response.edit_message(
+            embed=all_triggers_embed(interaction),
+            view=AllTriggersView(interaction, back_target=(core.screen(interaction), self)))
+
     @discord.ui.button(label="Использовать шаблон", emoji="📁", style=discord.ButtonStyle.secondary)
     async def use_template(self, interaction, button):
         rows = [
@@ -345,6 +351,52 @@ class EmbedHomeView(PanelView):
         if not rows:
             view.add_item(discord.ui.Button(label=t("embed.templates.empty")[:80], disabled=True))
         await interaction.response.edit_message(embed=panel_embed(interaction, "embed.templates"), view=view)
+
+
+def all_triggers_embed(interaction):
+    import automation
+    from database import get_guild_triggers
+    lines = []
+    for row in get_guild_triggers(interaction.guild.id)[:25]:
+        build = get_message_build(row[2])
+        name = (build[3] if build else None) or t("embed.default_name")
+        what = automation._trigger_text(row)
+        lines.append(t("embed.all_triggers.line", build=f"{name} · #{row[2]}", what=what))
+    return panel_embed(interaction, "embed.all_triggers",
+                       list="\n".join(lines)[:3500] or t("embed.all_triggers.empty"))
+
+
+class AllTriggersView(PanelView):
+    """Вход в триггеры из /embed: все триггеры сервера + выбор сообщения, чтобы добавить новые."""
+
+    def __init__(self, interaction, back_target=None):
+        super().__init__(back_target=back_target)
+        import automation
+        rows = [row for row in get_message_builds(interaction.guild.id)
+                if build_visible(interaction, get_message_build(row[0]))]
+        if not rows:
+            self.add_item(discord.ui.Button(label=t("embed.all_triggers.no_builds")[:80], disabled=True))
+            return
+        select = core.PagedSelect(
+            placeholder=t("embed.all_triggers.pick")[:150],
+            options=[discord.SelectOption(label=f"{(name or t('embed.default_name'))[:80]} · #{bid}", value=str(bid))
+                     for bid, owner, name, *_ in rows],
+        )
+
+        async def picked(i):
+            build_id = int(select.values[0])
+            row = get_message_build(build_id)
+            if not row or not build_visible(i, row):
+                await say(i, "embed.build_not_found")
+                return
+            if not automation.can_automate(i, row):
+                await say(i, "automation.denied")
+                return
+            await i.response.edit_message(embed=automation.triggers_embed(i, build_id),
+                                          view=automation.TriggersView(build_id, back_target=(core.screen(i), self)))
+
+        select.on_pick = picked
+        self.add_item(select)
 
 
 class SavedBuildsListView(PanelView):
@@ -1654,7 +1706,7 @@ async def send_build(interaction, build_id, channels):
 
 class MessageBuildFinalView(PanelView):
     texts = "embed.final"
-    button_order = ('send', 'edit', 'preview', 'resync', 'schedule', 'triggers', 'settings', 'history', 'export_json', 'save_template_button', 'delete')
+    button_order = ('send', 'edit', 'triggers', 'schedule', 'resync', 'preview', 'settings', 'history', 'export_json', 'save_template_button', 'delete')
 
     def __init__(self, build_id, back_target):
         super().__init__(back_target=back_target)

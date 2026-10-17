@@ -322,6 +322,59 @@ async def refresh_message(guild, card):
     return True
 
 
+def apply_counter(card, name, change):
+    """
+    Кнопка «Счётчик» с тем же именем, что и значение в картинке, меняет и его:
+    строку рейтинга/таблицы («Kick»), числовое поле по подписи («счёт слева»)
+    или главное число картинки, если имя совпадает с её командой.
+    change — «+1», «-5» или «7». -> True, если картинка изменилась.
+    """
+    import card_templates as ct
+    data, template = card["data"], card["template"]
+    key = (name or "").strip().lower()
+    if not key:
+        return False
+    if template == "rating":
+        if any(row["name"].lower() == key for row in data.get("rows") or []):
+            return set_score(card, name, change) is None
+        return False
+    field = ct.field_by_label(template, key)
+    if field and next((k for f, _, k in ct.spec(template).get("fields", []) if f == field), None) == ct.N:
+        return ct.set_field(template, data, field, change) is None
+    if ct.has_rows(template) and not key.isdigit() and ct.row_index(data, name) is not None:
+        return ct.set_row(template, data, name, change) is None
+    if key == (card.get("command") or "").lower():
+        if template == "progress":
+            return ct.set_progress(data, change) is None
+        fields = ct.spec(template).get("fields", [])
+        if fields and fields[0][2] == ct.N:
+            return ct.set_field(template, data, fields[0][0], change) is None
+    return False
+
+
+def counter_in_text(card, name):
+    """Картинка показывает {counter:имя} — её надо перерисовать."""
+    import card_templates as ct
+    needle = "{counter:" + (name or "").strip().lower() + "}"
+    return any(needle in str(text or "").lower() for _, text in ct.texts_of(card))
+
+
+async def counter_changed(guild, name, op, number):
+    """Счётчик изменён кнопкой -> те же значения в живых картинках. -> сколько картинок обновлено."""
+    value = int(number) if float(number).is_integer() else number
+    change = {"+": f"+{value}", "-": f"-{value}"}.get(op, str(value))
+    updated = 0
+    for card in get_cards(guild.id):
+        changed = apply_counter(card, name, change)
+        if changed:
+            save_card(card)
+        if changed or counter_in_text(card, name):
+            updated += 1
+            if card["message_id"]:
+                await refresh_message(guild, card)
+    return updated
+
+
 VARIABLES_REFRESH = 10 * 60  # картинки с переменными ({voice}, {online}…) перерисовываются сами
 
 

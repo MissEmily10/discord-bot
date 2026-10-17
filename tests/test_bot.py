@@ -1071,6 +1071,38 @@ class LiveAndAutomationTests(unittest.TestCase):
 
         run(check())
 
+    def test_counter_button_changes_live_pictures(self):
+        import cards
+        import card_templates as ct
+        rating = cards.get_card(cards.create_card(GUILD, STAFF, "Кики", "rating"))
+        rating["data"]["rows"] = [{"name": "Kick", "score": 3}]
+        cards.save_card(rating)
+        counter = cards.get_card(cards.create_card(GUILD, STAFF, "Очки", "counter"))
+        counter["command"] = "kick"
+        cards.save_card(counter)
+        g = make_guild()
+
+        async def check():
+            i = FakeInteraction(g, g.members[MEMBER])
+            await actions.dispatch_action(i, "counter.change", "kick +2", creator_id=STAFF)
+            self.assertEqual(cards.get_card(rating["id"])["data"]["rows"][0]["score"], 5)
+            main = ct.spec("counter")["fields"][0][0]
+            self.assertEqual(cards.get_card(counter["id"])["data"][main], 2)
+            await actions.dispatch_action(FakeInteraction(g, g.members[ADMIN]), "counter.change", "Kick =10",
+                                          creator_id=STAFF)
+            self.assertEqual(cards.get_card(rating["id"])["data"]["rows"][0]["score"], 10)
+            self.assertFalse(cards.apply_counter(cards.get_card(rating["id"]), "нет такого", "+1"))
+
+        run(check())
+
+    def test_all_triggers_entry(self):
+        import embed_module as em
+        bid = database.save_message_build(GUILD, STAFF, "Привет", "x", "[]", "[]")
+        database.add_trigger(GUILD, bid, STAFF, "keyword", pattern="привет")
+        i = FakeInteraction(make_guild(), make_guild().members[ADMIN])
+        self.assertIn("Привет", em.all_triggers_embed(i).description)
+        self.assertTrue(any(isinstance(c, discord.ui.Select) for c in em.AllTriggersView(i).children))
+
     def test_panels_fit_discord_limits(self):
         a = self.automation
         bid = database.save_message_build(GUILD, STAFF, "ui", "x", "[]", "[]")

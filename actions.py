@@ -1106,7 +1106,12 @@ async def _counter_change(interaction, value, **_):
         result = change_counter(interaction.guild.id, name, delta=number if op == "+" else -number)
     core.audit(interaction, "counter.changed", "counter", name, f"{op}{number} -> {result}")
     live.counter_changed(interaction.guild, name)
-    await reply(interaction, "actions.counter.done", name=name, value=result)
+    import cards
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)  # картинки перерисовываются пару секунд
+    pictures = await cards.counter_changed(interaction.guild, name, op, number)
+    await reply(interaction, "actions.counter.done_pictures" if pictures else "actions.counter.done",
+                name=name, value=result, count=pictures)
 
 
 _HANDLERS = {

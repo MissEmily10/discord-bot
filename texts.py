@@ -283,6 +283,18 @@ CATALOG = {
     "embed.home.saved": "Мои сохранённые",
     "embed.home.use_template": "Использовать шаблон",
     "embed.home.from_message": "Из сообщения",
+    "embed.home.triggers": "Триггеры",
+    "embed.all_triggers.title": "ТРИГГЕРЫ СЕРВЕРА",
+    "embed.all_triggers.text": (
+        "Триггер — это когда сохранённое сообщение отправляется само: зашёл новый участник, "
+        "создали ветку или пост, кто-то написал ключевое слово.\n\n"
+        "Триггеры живут у сохранённого сообщения: выбери его ниже — откроются его триггеры "
+        "(их же можно найти в «Мои сохранённые» → сообщение → «Триггеры»).\n\n**Сейчас настроено:**\n{list}"
+    ),
+    "embed.all_triggers.empty": "пока ни одного",
+    "embed.all_triggers.line": "• **{build}** — {what}",
+    "embed.all_triggers.pick": "Сообщение, для которого настроить триггеры…",
+    "embed.all_triggers.no_builds": "Сначала сохрани сообщение — «Создать новый», потом «Сохранить».",
     "embed.final.export_json": "Экспорт JSON",
     "embed.final.history": "История",
     "build_tools.import_modal.title": "ИЗ СООБЩЕНИЯ",
@@ -405,6 +417,7 @@ CATALOG = {
     "actions.build_refresh.cooldown": "⏳ Эти сообщения только что обновлялись — попробуй через {seconds} сек.",
     "actions.counter.bad_value": "Счётчик: имя и изменение, например `очки +1`, `очки -5` или `очки =0`.",
     "actions.counter.done": "Счётчик **{name}**: {value}",
+    "actions.counter.done_pictures": "Счётчик **{name}**: {value}\n🖼️ Живых картинок обновлено: {count}",
     "actions.counter.cooldown": "⏳ Не так быстро — нажми ещё раз через {seconds} сек.",
     "embed.value_hint.counter.change": "очки +1  ·  очки -1  ·  очки =0",
     "embed.value_hint.build.goto": "ID Message Build",
@@ -1831,6 +1844,7 @@ CATALOG = {
     "embed.home.saved.hint": 'открыть сохранённые сообщения',
     "embed.home.from_message.hint": 'взять за основу уже отправленное сообщение (по ссылке)',
     "embed.home.use_template.hint": 'начать с готового шаблона',
+    "embed.home.triggers.hint": 'сообщения, которые отправляются сами: новый участник, ветка, ключевое слово',
     "embed.visibility.public.hint": 'все видят его в списках',
     "embed.visibility.private.hint": 'в списках видишь только ты (и админы)',
     "embed.visibility.restricted.hint": 'только выбранные роли или уровни',
