@@ -27,7 +27,7 @@ os.environ["DATABASE_PATH"] = os.path.join(_TMP.name, "test.db")
 os.environ["LOGO_DIR"] = os.path.join(_TMP.name, "logo")
 os.environ["OWNER_ID"] = "1"
 os.environ["DISCORD_TOKEN"] = ""
-for name in ("WEB_PANEL_PORT", "SERVER_PORT", "HF_TOKEN"):
+for name in ("WEB_PANEL_PORT", "SERVER_PORT", "HF_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
     os.environ.pop(name, None)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -2769,6 +2769,50 @@ class LogoTests(unittest.TestCase):
         finally:
             logo_module._client, logo_style_ai._chat = old_client, old_chat
             os.environ.pop("HF_TOKEN", None)
+            if old_dir is None:
+                os.environ.pop("LOGO_DIR", None)
+            else:
+                os.environ["LOGO_DIR"] = old_dir
+
+    def test_nano_banana_gets_references_and_russian_brief(self):
+        import base64 as b64
+        import logo_gemini
+        import logo_module
+        sent = []
+        result = io.BytesIO()
+        canvas = self.Image.new("RGB", (1024, 1024), "white")
+        canvas.paste(self.Image.new("RGB", (400, 400), "green"), (300, 300))
+        canvas.save(result, "PNG")
+
+        async def fake_post(url, body, key):
+            sent.append((url, body))
+            if "nano-banana" in url:
+                return 404, {"error": {"message": "models/x is not found"}}
+            return 200, {"candidates": [{"content": {"parts": [
+                {"inlineData": {"mimeType": "image/png", "data": b64.b64encode(result.getvalue()).decode()}}]}}]}
+
+        style_id = database.save_logo_style(GUILD, ADMIN, "Банан", "", "")
+        old_dir, old_post = os.environ.get("LOGO_DIR"), logo_gemini._post
+        os.environ["LOGO_DIR"], os.environ["GEMINI_API_KEY"] = tempfile.mkdtemp(), "key"
+        logo_gemini._post = fake_post
+        try:
+            for _ in range(4):
+                logo_module.add_reference(database.get_logo_style(style_id), self.png)
+            self.assertIsNone(logo_module.backend_problem())
+            png = run(logo_module.generate_image("generate", database.get_logo_style(style_id), "содружество"))
+            self.assertEqual(self.Image.open(io.BytesIO(png)).size, (logo_module.ICON_SIZE, logo_module.ICON_SIZE))
+            self.assertEqual(len(sent), 2)  # первая модель недоступна — взята следующая
+            parts = sent[1][1]["contents"][0]["parts"]
+            self.assertIn("содружество", parts[0]["text"])
+            self.assertEqual(len(parts) - 1, 4)  # все референсы картинками
+            with self.assertRaises(RuntimeError):
+                async def blocked(url, body, key):
+                    return 200, {"promptFeedback": {"blockReason": "SAFETY"}}
+                logo_gemini._post = blocked
+                run(logo_module.generate_image("generate", database.get_logo_style(style_id), "кот"))
+        finally:
+            logo_gemini._post = old_post
+            os.environ.pop("GEMINI_API_KEY", None)
             if old_dir is None:
                 os.environ.pop("LOGO_DIR", None)
             else:

@@ -160,7 +160,14 @@ build that shows `{counter:points}`).
 
 ## Logo generator (`/logo`)
 
-Role icons generated in your own style via Hugging Face Inference Providers.
+Role icons generated in your own style. Best: **Nano Banana** (Gemini Image) —
+put `GEMINI_API_KEY` into `.env` (aistudio.google.com → Get API key; image
+generation needs billing enabled). It looks at the style's most typical
+references directly and understands Russian briefs, including abstract ones.
+Model: `LOGO_GEMINI_MODEL` (default `gemini-nano-banana-2.1`, falls back to
+`gemini-3-pro-image-preview`, `gemini-3.1-flash-image-preview`,
+`gemini-2.5-flash-image`). Styles with a LoRA still use Hugging Face.
+Without the Gemini key, Hugging Face Inference Providers are used:
 
 1. Create a Hugging Face token (Settings → Access Tokens, "Make calls to
    Inference Providers") and put it into `.env` as `HF_TOKEN`.

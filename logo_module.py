@@ -85,6 +85,12 @@ def hourly_limit():
 
 def backend_problem():
     """Ключ каталога с причиной, почему генерация недоступна, или None."""
+    if cfg("GEMINI_API_KEY") or cfg("GOOGLE_API_KEY"):  # Nano Banana — нужен только Pillow
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            return "logo.no_packages"
+        return None
     try:
         import huggingface_hub  # noqa: F401
         import PIL  # noqa: F401
@@ -242,11 +248,15 @@ def negative_prompt(style_row):
 
 async def generate_image(mode, style_row, brief, source_bytes=None):
     """-> PNG bytes. Исключения пробрасываются (их показывает вызывающий код)."""
+    import logo_gemini
     import logo_style_ai
 
+    lora = style_row and (style_row[7] or style_row[6])
+    if logo_gemini.enabled() and not lora:
+        # Nano Banana сама смотрит на референсы и понимает русский — главный путь, если есть ключ
+        return fit_subject(open_image(await logo_gemini.generate(mode, style_row, brief, source_bytes)))
     client = _client()
     refs = references_of(style_row) if style_row else []
-    lora = style_row and (style_row[7] or style_row[6])
     if brief and logo_style_ai.enabled():
         # абстрактное «содружество» -> конкретный предмет (рукопожатие), по-английски
         brief = await logo_style_ai.english_subject(brief)
@@ -359,7 +369,7 @@ async def describe_style(style_row):
 async def ensure_style_text(style_row):
     """Есть референсы, но нет описания стиля — составить его один раз и сохранить.
     С токеном — из подробного разбора каждого референса, иначе — старым описанием пачками."""
-    if style_row is None or (style_row[4] or "").strip() or not references_of(style_row):
+    if style_row is None or (style_row[4] or "").strip() or not references_of(style_row) or not cfg("HF_TOKEN"):
         return style_row
     import logo_style_ai
     try:
@@ -709,6 +719,9 @@ class StyleActions(PanelView):
             await say(interaction, "logo.no_references")
             return
         import logo_style_ai
+        if not logo_style_ai.enabled():
+            await say(interaction, "logo.analysis.need_hf")
+            return
         await interaction.response.defer(ephemeral=True, thinking=True)
         last = [0.0]
 

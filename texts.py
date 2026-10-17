@@ -1000,7 +1000,7 @@ CATALOG = {
     "select.menu_result": 'Добавлено: {added}\nСнято: {removed}{skipped}',
     "select.menu_skipped": '\nНе удалось: {roles}',
     "logo.no_packages": 'Генератор не установлен: на сервере нужны пакеты huggingface_hub и Pillow (pip install -r requirements.txt).',
-    "logo.no_token": 'Генератор не настроен: добавь HF_TOKEN в .env и перезапусти бота.',
+    "logo.no_token": 'Генератор не настроен: добавь в .env GEMINI_API_KEY (Nano Banana, лучше всего) или HF_TOKEN и перезапусти бота.',
     "logo.no_image": 'Прикрепи картинку.',
     "logo.bad_image": 'Нужна картинка PNG, JPG или WEBP (или zip с ними).',
     "logo.image_too_large": 'Файл слишком большой.',
@@ -1098,6 +1098,7 @@ CATALOG = {
         "recognizable, but redraw it completely in this exact style: {bible}\n\nExtra notes: {notes}\n\n"
         "Composition and format: {base}"
     ),
+    "logo.analysis.need_hf": "Разбор референсов делают модели Hugging Face — нужен HF_TOKEN в .env. Nano Banana рисует и без разбора: она сама смотрит на референсы.",
     "logo.analysis.progress": "🔍 Разбираю референсы: {done} из {total}…",
     "logo.analysis.failed": "Не получилось разобрать референсы — нейросети не ответили. Попробуй чуть позже.",
     "logo.analysis.done": (
