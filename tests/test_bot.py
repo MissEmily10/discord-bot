@@ -1095,6 +1095,13 @@ class LiveAndAutomationTests(unittest.TestCase):
 
         run(check())
 
+    def test_counter_variable_ignores_case(self):
+        import live
+        g = make_guild()
+        database.change_counter(GUILD, "лапки", delta=4)
+        values = run(live.collect(g, {("counter", "Лапки ")}))
+        self.assertEqual(values["counter"]("Лапки "), 4)
+
     def test_counter_report_and_attached_buttons_kept(self):
         import cards
         g = make_guild()

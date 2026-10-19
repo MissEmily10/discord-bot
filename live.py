@@ -102,7 +102,8 @@ async def collect(guild, needed, user=None, extra=None):
 
     if "counter" in names:
         counters = get_counters(guild.id)
-        variables["counter"] = lambda arg: counters.get(arg, 0) if arg else None
+        # имена счётчиков хранятся строчными: {counter:Очки} и {counter: очки} — тот же «очки»
+        variables["counter"] = lambda arg: counters.get(arg.strip().lower(), 0) if arg else None
 
     if names & SUBMISSION_VARIABLES:
         cache = {}
@@ -446,7 +447,7 @@ async def _flush(guild):
 
 
 def counter_changed(guild, name):
-    request_refresh(guild, builds_using(guild.id, lambda n, arg: n == "counter" and arg == name))
+    request_refresh(guild, builds_using(guild.id, lambda n, arg: n == "counter" and (arg or "").strip().lower() == name))
 
 
 def submissions_changed(guild):

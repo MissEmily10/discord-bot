@@ -851,7 +851,7 @@ CATALOG = {
     "embed.value_hint.role.assign": 'ID роли или @упоминание роли',
     "embed.value_hint.role.remove": 'ID роли или @упоминание роли',
     "embed.value_hint.role.toggle": 'ID роли или @упоминание роли',
-    "embed.value_hint.webhook.send": 'ID вебхука (/eminemovna → Вебхуки) или URL',
+    "embed.value_hint.webhook.send": 'ID вебхука (/eminemovna → Вебхуки)',
     "embed.value_hint.build.trigger": 'ID сообщения (виден в /library, например 12)',
     "access.home.audit_button": 'Журнал',
     "access.audit.title": 'ЖУРНАЛ ДЕЙСТВИЙ',
