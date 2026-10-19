@@ -5,6 +5,14 @@
 
 ## Запланировано
 
+### Figma: заготовки кланов и новых экранов — 19.10.2026
+
+В доске (file oltPivYjeOZWYy40JNYWKp, страница «Макеты») раздел «Кланы и
+новые экраны · заготовки»: thumbnail.pictures + 10 значков (badge.*),
+баннеры pictures.home / clans.directory / clans.council, карточки clan.card,
+clans.month, clans.auction, clans.quests, clans.shop. Эмилия перерисовывает
+в 3D; карточки бот будет рисовать сам по этим макетам ({поля} — подстановки).
+
 ### Казна кланов в Purr — 19.10.2026
 
 Сделана фиксация переводов (`clan_treasury.py`, см. docs/CLANS_TODO.md).
