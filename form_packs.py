@@ -20,6 +20,7 @@ import time
 import discord
 
 import core
+import ui_emoji
 from core import PanelView, Modal, t, panel_embed
 from actions import reply
 from database import get_connection, get_form, get_forms, get_form_status
@@ -174,7 +175,7 @@ def form_emoji(form_id):
     if not emoji:
         return None
     try:
-        return discord.PartialEmoji.from_str(emoji)
+        return ui_emoji.doodle(discord.PartialEmoji.from_str(emoji))
     except (TypeError, ValueError):
         return None
 
@@ -446,7 +447,7 @@ class PacksHome(PanelView):
 def pack_embed(interaction, pack):
     lines = []
     for form, description in pack_items(pack[0]):
-        lines.append(t("packs.pack.line", emoji=get_meta(form[0])[1] or "▫️", name=form[3],
+        lines.append(t("packs.pack.line", emoji=ui_emoji.doodle(get_meta(form[0])[1]) or "▫️", name=form[3],
                        name_en=english_name(form), description=description or t("packs.pack.no_description")))
     return panel_embed(interaction, "packs.pack", title=pack[3], intro=pack[4] or t("packs.pack.no_intro"),
                        tagline=pack[5] or t("packs.tagline_default"),
