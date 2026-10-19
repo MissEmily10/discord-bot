@@ -3043,6 +3043,10 @@ class ClanTreasuryTests(unittest.TestCase):
         pending = dict(self.CARD, title="Перевод в казну клана ждёт подтверждения")
         self.assertEqual(ct.parse_card(pending), (None, "clan_treasury.not_approved"))
         self.assertEqual(ct.parse_card(dict(self.CARD, title="❌ Перевод отклонён")), (None, "clan_treasury.rejected"))
+        waiting = dict(self.CARD, title="🏰 Перевод в казну — нужно подтверждение")
+        self.assertEqual(ct.parse_card(waiting), (None, "clan_treasury.not_approved"))
+        for title in ("⛔ Перевод аннулирован", "↩️ Отклонено — голда возвращена"):
+            self.assertEqual(ct.parse_card(dict(self.CARD, title=title)), (None, "clan_treasury.rejected"))
         self.assertEqual(ct.parse_card(dict(self.CARD, fields=[]))[1], "clan_treasury.unknown_format")
 
     def test_fix_once_and_undo_via_mention(self):
