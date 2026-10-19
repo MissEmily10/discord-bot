@@ -3072,6 +3072,15 @@ class LogoTests(unittest.TestCase):
         self.assertEqual(logo_module.backend_problem(), "logo.no_token")
 
 
+class CardCommandButtonTests(unittest.TestCase):
+    def test_no_edit_button_when_card_has_command(self):
+        import cards
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "Кики", "counter"))
+        self.assertIsNotNone(run(cards.card_message(card))["view"])
+        card["command"] = "kick"
+        self.assertIsNone(run(cards.card_message(card))["view"])
+
+
 class GalleryTests(unittest.TestCase):
     def test_type_and_style_galleries(self):
         import cards

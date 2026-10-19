@@ -173,6 +173,7 @@ class CommandModal(Modal, title="СВОЯ КОМАНДА"):
                 core.audit(interaction, "card.command_removed", "card", card["id"], card["command"])
                 card["command"] = ""
                 cards.save_card(card)
+                await cards.refresh_message(interaction.guild, card)  # кнопка «Изменить» вернулась
                 await interaction.edit_original_response(embed=cards.editor_embed(interaction, card),
                                                          view=cards.CardEditorView(card["id"]))
                 return
@@ -199,6 +200,7 @@ class CommandModal(Modal, title="СВОЯ КОМАНДА"):
             await interaction.followup.send(t("cards.command.failed"), ephemeral=True)
             return
         cards.save_card(card)
+        await cards.refresh_message(interaction.guild, card)  # своя команда — кнопка под картинкой не нужна
         core.audit(interaction, "card.command_set", "card", card["id"], name)
         await interaction.edit_original_response(embed=cards.editor_embed(interaction, card),
                                                  view=cards.CardEditorView(card["id"]))

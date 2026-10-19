@@ -250,11 +250,16 @@ def render_rating(title, rows, empty_text="—"):
 
 
 async def card_message(card, guild=None):
-    """-> kwargs сообщения с картинкой и кнопкой «Изменить». Переменные в текстах подставляются."""
+    """
+    -> kwargs сообщения с картинкой и кнопкой «Изменить». Переменные в текстах подставляются.
+    У картинки со своей slash-командой кнопки нет: меняют командой, панель — в /pictures.
+    """
     png = await render_card(card, guild)
     embed = discord.Embed(color=core.embed_color()).set_image(url=f"attachment://{FILENAME}")
-    view = discord.ui.View(timeout=None)
-    view.add_item(CardEditButton(card["id"]))
+    view = None
+    if not card.get("command"):
+        view = discord.ui.View(timeout=None)
+        view.add_item(CardEditButton(card["id"]))
     return {"embed": embed, "view": view, "file": discord.File(io.BytesIO(png), filename=FILENAME)}
 
 
