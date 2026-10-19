@@ -1141,6 +1141,11 @@ class ActionPickSelect(core.PagedSelect):
             # значение не нужно — сразу добавляем
             await commit_pending(interaction, self.state, self.pending, self.target, self.builder_view, "")
             return
+        if action_key == "counter.change":
+            # пошагово: новый или существующий счётчик -> что сделать -> сколько
+            import counter_wizard
+            await counter_wizard.start(interaction, self.state, self.pending, self.target, self.builder_view)
+            return
         if action_key in ("build.trigger", "build.goto", "build.refresh"):
             # ID никто не помнит — даём выбрать из сохранённых сообщений
             view = PanelView(back_target=builder_screen(interaction, self.builder_view), timeout=300)

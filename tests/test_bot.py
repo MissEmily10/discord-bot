@@ -3096,6 +3096,44 @@ class CardCommandButtonTests(unittest.TestCase):
         self.assertIsNone(run(cards.card_message(card))["view"])
 
 
+class CounterWizardTests(unittest.TestCase):
+    def test_existing_values_and_steps(self):
+        import cards
+        import counter_wizard as cw
+        import embed_module
+        guild_id = 7777
+        rating = cards.get_card(cards.create_card(guild_id, STAFF, "Кики", "rating"))
+        rating["data"]["rows"] = [{"name": "Kick Ass", "score": 3}]
+        cards.save_card(rating)
+        table = cards.get_card(cards.create_card(guild_id, STAFF, "Табло", "table"))
+        table["data"]["rows"] = [["Пёс", "4", "пт"], ["Кот", "дизайн", "сб"]]
+        cards.save_card(table)
+        cards.create_card(guild_id, STAFF, "Победы", "counter")
+        database.change_counter(guild_id, "очки", delta=5)
+        names = {name for name, _, _ in cw.existing(guild_id)}
+        self.assertTrue({"kickass", "пёс", "победы", "очки"} <= names)
+        self.assertNotIn("кот", names)  # в строке нет числа
+        self.assertEqual(cw.counter_name("Kick Ass!"), "kickass")
+        committed = []
+        original = embed_module.commit_pending
+
+        async def fake_commit(interaction, state, pending, target, builder_view, raw):
+            committed.append(raw)
+        embed_module.commit_pending = fake_commit
+        try:
+            ops = cw.OpsView("kickass", None, {}, "buttons", None)
+            modal = cw.AmountModal("kickass", "-", None, {}, "buttons", None)
+            modal.amount._value = "3"
+            run(modal.on_submit(None))
+            run(ops.reset.callback(None))
+            self.assertEqual(committed, ["kickass -3", "kickass =0"])
+            import actions
+            self.assertEqual(actions.parse_counter(committed[0]), ("kickass", "-", 3))
+            self.assertTrue(cards.apply_counter(cards.get_card(rating["id"]), "kickass", "-1"))
+        finally:
+            embed_module.commit_pending = original
+
+
 class GalleryTests(unittest.TestCase):
     def test_type_and_style_galleries(self):
         import cards
