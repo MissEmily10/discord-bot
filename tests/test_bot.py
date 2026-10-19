@@ -2314,7 +2314,7 @@ class EmojiExportTests(unittest.TestCase):
         self.assertEqual(added, 28)             # 30 мест минус два занятых
         self.assertEqual(no_room, 20)
         self.assertNotIn("doodle_star", created)
-        self.assertEqual(len(emoji_export.files_of("all")), 86)
+        self.assertEqual(len(emoji_export.files_of("all")), 90)  # 50 дудлов форм + 40 иконок кнопок (с цифрами 1–4)
         # повторный запуск ничего не меняет
         created.clear()
         added, skipped, no_room, errors, replaced = run(emoji_export.upload(guild, "forms"))
@@ -3070,6 +3070,35 @@ class LogoTests(unittest.TestCase):
         import logo_module
 
         self.assertEqual(logo_module.backend_problem(), "logo.no_token")
+
+
+class GalleryTests(unittest.TestCase):
+    def test_type_and_style_galleries(self):
+        import cards
+        import card_templates as ct
+        from PIL import Image
+        for key in ct.SPECS:
+            self.assertEqual(len(ct.sample_uses(key)), 3)
+        self.assertEqual(ct.spec("streak")["name"], "Счётчик дней")
+
+        async def check():
+            types = cards.TypeGalleryView(0)
+            self.assertEqual(len(types.keys), 4)
+            self.assertEqual(types.pages, -(-len(ct.TEMPLATES) // 4))
+            numbers = [c for c in types.children if isinstance(c, discord.ui.Button) and c.emoji
+                       and str(c.emoji) in cards.NUMBERS]
+            self.assertEqual(len(numbers), 4)
+            self.assertEqual(cards.TypeGalleryView(types.pages).page, 0)  # листание по кругу
+            last = cards.TypeGalleryView(types.pages - 1)
+            self.assertGreaterEqual(len(last.keys), 1)
+            image = Image.open(io.BytesIO(types.build()))
+            self.assertGreater(image.width, 1000)
+            styles = cards.StyleGalleryView("streak", page=1, back_page=0)
+            self.assertEqual(len(styles.keys), 4)
+            self.assertTrue(Image.open(io.BytesIO(styles.build())).height > 300)
+            self.assertIn("подходит", cards.TypeGalleryView(0).line("progress"))
+
+        run(check())
 
 
 class ClanTreasuryTests(unittest.TestCase):

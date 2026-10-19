@@ -848,7 +848,9 @@ class PanelView(discord.ui.View):
 
         async def callback(interaction):
             embed, view = self.back_target
-            await interaction.response.edit_message(**expand_embeds({"embed": embed}), view=view)
+            # экран с картинкой-вложением (галерея) — при возврате файл убираем
+            extra = {"attachments": []} if getattr(self, "clear_files_on_back", False) else {}
+            await interaction.response.edit_message(**expand_embeds({"embed": embed}), view=view, **extra)
 
         button.callback = callback
         self.add_item(button)

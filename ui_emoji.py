@@ -42,6 +42,8 @@ MAP = {
     "🕘": "ui_time", "⏱": "ui_time", "🗓": "ui_time", "🔍": "ui_search",
     "🔘": "ui_button", "⏯": "ui_play", "🏆": "ui_trophy", "🎨": "ui_palette",
     "🖌": "ui_palette",
+    # номера в галереях выбора (1️⃣–4️⃣)
+    "1⃣": "ui_num1", "2⃣": "ui_num2", "3⃣": "ui_num3", "4⃣": "ui_num4",
     # остальные кнопки панелей — дудлы из набора форм (тот же стиль)
     "💬": "d3_chat", "🛡": "d3_shield", "🧩": "ui_settings", "♾": "ui_refresh",
     "🧪": "ui_play", "👋": "d3_heart", "🧵": "ui_list", "📍": "d3_flag",

@@ -568,7 +568,9 @@ async def apply_change(interaction, card, problem=None):
     save_card(card)
     await interaction.response.defer()
     published = await refresh_message(interaction.guild, card)
-    await interaction.edit_original_response(embed=editor_embed(interaction, card), view=CardEditorView(card["id"]))
+    # attachments=[] — если правили из галереи стилей, её коллаж убираем
+    await interaction.edit_original_response(embed=editor_embed(interaction, card), view=CardEditorView(card["id"]),
+                                             attachments=[])
     if card["message_id"] and not published:
         await interaction.followup.send(t("cards.error.message_gone"), ephemeral=True)
 
@@ -890,6 +892,222 @@ class RowModal(_CardModal):
                                                              self.cells.value))
 
 
+# ============================================================
+# ГАЛЕРЕИ ВЫБОРА: 4 примера на коллаже под номерами, кнопки 1–4, листание
+# ============================================================
+
+GALLERY_SIZE = 4
+NUMBERS = ("1️⃣", "2️⃣", "3️⃣", "4️⃣")
+_gallery_cache = {}
+
+
+def gallery_png(tiles):
+    """[(подпись, PNG)] до 4 -> коллаж 2×2 с номерами-дудлами в углах. -> PNG."""
+    import banner_render
+    width, gap, top = 580, 24, 46
+    images = []
+    for label, png in tiles:
+        tile = Image.open(io.BytesIO(png)).convert("RGB")
+        tile.thumbnail((width, 2000))
+        images.append((label, tile))
+    rows = [images[i:i + 2] for i in range(0, len(images), 2)]
+    heights = [max(tile.height for _, tile in row) + top for row in rows]
+    sheet = Image.new("RGB", (2 * width + 3 * gap, sum(heights) + gap * (len(rows) + 1)), (43, 45, 49))
+    draw = ImageDraw.Draw(sheet)
+    font = banner_render._font("fallback:Inter-SemiBold.otf", 24)
+    badges = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel_art", "badges")
+    y, n = gap, 0
+    for row, height in zip(rows, heights):
+        for col, (label, tile) in enumerate(row):
+            n += 1
+            x = gap + col * (width + gap)
+            draw.text((x + 64, y + 30), label, font=font, fill=(235, 235, 235), anchor="ls")
+            sheet.paste(tile, (x, y + top))
+            badge_path = os.path.join(badges, f"num{n}.png")
+            if os.path.exists(badge_path):
+                badge = Image.open(badge_path).convert("RGBA").resize((58, 58), Image.LANCZOS)
+                sheet.paste(badge, (x, y - 4), badge)
+        y += height + gap
+    output = io.BytesIO()
+    sheet.save(output, "PNG", optimize=True)
+    return output.getvalue()
+
+
+def _type_preview(key):
+    import card_templates as ct
+    if key == "rating":
+        return render_rating("Рейтинг клана", [{"name": "Аня", "score": 120}, {"name": "Кот", "score": 95},
+                                              {"name": "Пёс", "score": 60}])
+    return ct.sample(key)
+
+
+def type_uses(key):
+    import card_templates as ct
+    if key == "rating":
+        return t("cards.template.rating.uses")
+    return ", ".join(purpose for purpose, _, _ in ct.USES.get(key, []))
+
+
+class GalleryView(PanelView):
+    """
+    Выбор из длинного списка картинками: коллаж из 4 примеров под номерами,
+    кнопки 1–4 — выбрать, ◀ ▶ — листать. Подклассы: items(), tile(key),
+    label(key), line(key), pick(interaction, key), screen().
+    """
+
+    clear_files_on_back = True
+    filename = "gallery.png"
+
+    def __init__(self, page=0, back_target=None):
+        super().__init__(back_target=back_target, timeout=600)
+        keys = self.items()
+        self.pages = max(1, -(-len(keys) // GALLERY_SIZE))
+        self.page = page % self.pages
+        self.keys = keys[self.page * GALLERY_SIZE:(self.page + 1) * GALLERY_SIZE]
+        for n, key in enumerate(self.keys):
+            button = discord.ui.Button(label=self.label(key)[:80], emoji=NUMBERS[n],
+                                       style=discord.ButtonStyle.primary, row=0)
+            button.callback = lambda i, key=key: self.pick(i, key)
+            self.add_item(button)
+        if self.pages > 1:
+            for step, emoji in ((-1, "◀️"), (1, "▶️")):
+                nav = self._nav(discord.ui.Button(emoji=emoji, style=discord.ButtonStyle.secondary, row=1))
+                nav.callback = lambda i, step=step: self.turn(i, step)
+                self.add_item(nav)
+            counter = self._nav(discord.ui.Button(label=t("nav_page", page=self.page + 1, pages=self.pages),
+                                                  style=discord.ButtonStyle.secondary, disabled=True, row=1))
+            self.add_item(counter)
+
+    def items(self):
+        return []
+
+    def tile(self, key):
+        return b""
+
+    def label(self, key):
+        return key
+
+    def line(self, key):
+        return self.label(key)
+
+    def screen(self, interaction):
+        return panel_embed(interaction, "cards.gallery", hints=False)
+
+    async def pick(self, interaction, key):
+        raise NotImplementedError
+
+    def copy(self, page):
+        return type(self)(page, back_target=self.back_target)
+
+    async def turn(self, interaction, step):
+        await self.copy(self.page + step).show(interaction)
+
+    def build(self):
+        cache_key = (type(self).__name__, getattr(self, "template", None), tuple(self.keys))
+        if cache_key not in _gallery_cache:
+            if len(_gallery_cache) > 64:
+                _gallery_cache.clear()
+            _gallery_cache[cache_key] = gallery_png([(self.label(key), self.tile(key)) for key in self.keys])
+        return _gallery_cache[cache_key]
+
+    async def show(self, interaction):
+        """Перерисовать сообщение этой страницей галереи (с коллажем вложением)."""
+        import asyncio
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        png = await asyncio.to_thread(self.build)
+        embed = self.screen(interaction)
+        lines = "\n".join(f"**{n}.** {self.line(key)}" for n, key in enumerate(self.keys, 1))
+        embed.description = f"{embed.description}\n\n{lines}"[:4096]
+        embed.set_image(url=f"attachment://{self.filename}")
+        await interaction.edit_original_response(
+            embed=embed, view=self, attachments=[discord.File(io.BytesIO(png), filename=self.filename)])
+
+
+class TypeGalleryView(GalleryView):
+    """Новая картинка, шаг 1: тип — 4 примера на странице."""
+
+    filename = "types.png"
+
+    def items(self):
+        import card_templates as ct
+        return list(ct.TEMPLATES)
+
+    def tile(self, key):
+        return _type_preview(key)
+
+    def label(self, key):
+        return template_name(key)
+
+    def line(self, key):
+        return t("cards.gallery.type_line", name=template_name(key), about=template_about(key),
+                 uses=type_uses(key))
+
+    def screen(self, interaction):
+        return panel_embed(interaction, "cards.gallery_types", hints=False, page=self.page + 1, pages=self.pages)
+
+    async def pick(self, interaction, key):
+        if key == "rating":  # у рейтинга пока один вид
+            await interaction.response.send_modal(TitleModal(None, template_name(key), create=True, template=key))
+            return
+        await StyleGalleryView(key, on_pick=None, back_page=self.page, back_target=self.back_target).show(interaction)
+
+
+class StyleGalleryView(GalleryView):
+    """Стиль картинки — 4 стиля этого типа на странице. on_pick(interaction, style) — для смены стиля."""
+
+    filename = "styles.png"
+
+    def __init__(self, template, on_pick=None, page=0, back_page=None, back_target=None, theme="cream"):
+        self.template, self.on_pick, self.back_page, self.theme = template, on_pick, back_page, theme
+        super().__init__(page, back_target=None if back_page is not None else back_target)
+        self.outer_back = back_target
+        if back_page is not None:  # к галерее типов (она тоже с картинкой — перерисовываем)
+            back = self._nav(discord.ui.Button(label=t("cards.gallery.to_types")[:80], emoji="◀️",
+                                               style=discord.ButtonStyle.secondary, row=4))
+
+            async def to_types(i):
+                await TypeGalleryView(self.back_page, back_target=self.outer_back).show(i)
+
+            back.callback = to_types
+            self.add_item(back)
+
+    def copy(self, page):
+        view = StyleGalleryView(self.template, self.on_pick, page, self.back_page, self.outer_back, self.theme)
+        return view
+
+    def items(self):
+        import card_templates as ct
+        return list(ct.STYLES)
+
+    def tile(self, key):
+        import card_templates as ct
+        return ct.sample(self.template, self.theme, key)
+
+    def label(self, key):
+        import card_templates as ct
+        return ct.STYLES[key]
+
+    def screen(self, interaction):
+        return panel_embed(interaction, "cards.gallery_styles", hints=False, kind=template_name(self.template),
+                           page=self.page + 1, pages=self.pages)
+
+    def build(self):
+        cache_key = ("styles", self.template, self.theme, tuple(self.keys))
+        if cache_key not in _gallery_cache:
+            if len(_gallery_cache) > 64:
+                _gallery_cache.clear()
+            _gallery_cache[cache_key] = gallery_png([(self.label(key), self.tile(key)) for key in self.keys])
+        return _gallery_cache[cache_key]
+
+    async def pick(self, interaction, key):
+        if self.on_pick is not None:
+            await self.on_pick(interaction, key)
+            return
+        await interaction.response.send_modal(TitleModal(None, template_name(self.template), create=True,
+                                                         template=self.template, style=key))
+
+
 class StylePickView(PanelView):
     """Создание картинки, шаг 2: стиль — макет из Figma или классика (с примером каждого)."""
 
@@ -980,6 +1198,28 @@ class ThemeView(PanelView):
 
         style.callback = picked_style
         self.add_item(style)
+        gallery = discord.ui.Button(label=t("cards.theme.styles_gallery")[:80], emoji="🖼️",
+                                    style=discord.ButtonStyle.secondary)
+
+        async def open_gallery(i):
+            fresh = get_card(self.card_id)
+            if not can_edit(i, fresh):
+                await reply(i, "cards.denied")
+                return
+
+            async def chosen(ci, key):
+                card = get_card(self.card_id)
+                if not can_edit(ci, card):
+                    await reply(ci, "cards.denied")
+                    return
+                card["data"]["style"] = key
+                await apply_change(ci, card)
+
+            await StyleGalleryView(fresh["template"], on_pick=chosen, theme=fresh["data"].get("theme") or "cream",
+                                   back_target=(core.screen(i), self)).show(i)
+
+        gallery.callback = open_gallery
+        self.add_item(gallery)
         bang = discord.ui.Button(label=t("cards.theme.bang_off" if card["data"].get("bang", True)
                                          else "cards.theme.bang_on")[:80], style=discord.ButtonStyle.secondary,
                                  emoji="❗")
@@ -1074,24 +1314,8 @@ class CardsHome(PanelView):
 
     @discord.ui.button(label="Новая картинка", emoji="➕", style=discord.ButtonStyle.success)
     async def create_card(self, interaction, button):
-        import card_templates as ct
-        view = PanelView(back_target=(core.screen(interaction), self), timeout=600)
-        select = discord.ui.Select(placeholder=t("cards.home.pick_template")[:150], options=[
-            discord.SelectOption(label=template_name(key)[:100], description=template_about(key)[:100], value=key)
-            for key in ct.TEMPLATES])
-
-        async def picked(i):
-            key = select.values[0]
-            if key == "rating":  # у рейтинга пока один вид
-                await i.response.send_modal(TitleModal(None, template_name(key), create=True, template=key))
-                return
-            await i.response.edit_message(embed=panel_embed(i, "cards.style_pick", hints=False,
-                                                            kind=template_name(key)),
-                                          view=StylePickView(key, back_target=(core.screen(i), view)))
-
-        select.callback = picked
-        view.add_item(select)
-        await interaction.response.edit_message(view=view)
+        # тип — галереей: 4 примера на коллаже, кнопки 1–4, листание
+        await TypeGalleryView(0, back_target=(core.screen(interaction), self)).show(interaction)
 
 
 DYNAMIC_ITEMS = [CardEditButton]
