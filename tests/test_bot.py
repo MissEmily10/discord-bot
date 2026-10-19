@@ -1095,6 +1095,21 @@ class LiveAndAutomationTests(unittest.TestCase):
 
         run(check())
 
+    def test_counter_button_matches_title_and_table_text(self):
+        import cards
+        titled = cards.get_card(cards.create_card(GUILD, STAFF, "Kick", "counter"))
+        self.assertTrue(cards.apply_counter(titled, "kick", "+1"))
+        self.assertEqual(titled["data"]["value"], 1)
+        table = cards.get_card(cards.create_card(GUILD, STAFF, "Табло", "table"))
+        table["data"]["rows"] = [["Kick", "3", "пт"]]
+        self.assertTrue(cards.apply_counter(table, "KICK", "+2"))
+        self.assertEqual(table["data"]["rows"][0][1], "5")
+        chart = cards.get_card(cards.create_card(GUILD, STAFF, "Активность", "chart"))
+        chart["data"]["rows"] = [["Kick", 4]]
+        self.assertTrue(cards.apply_counter(chart, "kick", "10"))  # «=10» кнопка передаёт как «10»
+        self.assertEqual(chart["data"]["rows"][0][1], 10)
+        self.assertFalse(cards.apply_counter(table, "нет", "+1"))
+
     def test_all_triggers_entry(self):
         import embed_module as em
         bid = database.save_message_build(GUILD, STAFF, "Привет", "x", "[]", "[]")

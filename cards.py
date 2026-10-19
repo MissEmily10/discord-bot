@@ -327,31 +327,52 @@ async def refresh_message(guild, card):
     return True
 
 
+def _same(a, b):
+    """«Kick», «kick», «KICK!» и «ки к» — одно имя (регистр, пробелы, знаки не важны)."""
+    import re as _re
+    norm = lambda text: _re.sub(r"[\W_]+", "", str(text or "").lower())  # noqa: E731
+    return bool(norm(a)) and norm(a) == norm(b)
+
+
 def apply_counter(card, name, change):
     """
     Кнопка «Счётчик» с тем же именем, что и значение в картинке, меняет и его:
     строку рейтинга/таблицы («Kick»), числовое поле по подписи («счёт слева»)
-    или главное число картинки, если имя совпадает с её командой.
+    или главное число картинки, если имя совпадает с её названием или командой.
     change — «+1», «-5» или «7». -> True, если картинка изменилась.
     """
     import card_templates as ct
     data, template = card["data"], card["template"]
-    key = (name or "").strip().lower()
-    if not key:
+    if not (name or "").strip():
         return False
+    rows = data.get("rows") or []
     if template == "rating":
-        if any(row["name"].lower() == key for row in data.get("rows") or []):
-            return set_score(card, name, change) is None
-        return False
-    field = ct.field_by_label(template, key)
-    if field and next((k for f, _, k in ct.spec(template).get("fields", []) if f == field), None) == ct.N:
-        return ct.set_field(template, data, field, change) is None
-    if ct.has_rows(template) and not key.isdigit() and ct.row_index(data, name) is not None:
-        return ct.set_row(template, data, name, change) is None
-    if key == (card.get("command") or "").lower():
+        row = next((row for row in rows if _same(row["name"], name)), None)
+        return row is not None and set_score(card, row["name"], change) is None
+    fields = ct.spec(template).get("fields", [])
+    for key, label, kind in fields:
+        if kind == ct.N and (_same(label.split(" (")[0], name) or _same(key, name)):
+            return ct.set_field(template, data, key, change) is None
+    if ct.has_rows(template):
+        index = next((n for n, row in enumerate(rows) if row and _same(row[0], name)), None)
+        if index is not None:
+            row = rows[index]
+            columns = ct.columns_of(template, data)
+            # число — в первый числовой столбец; в «Таблице» столбцы текстовые — в первую ячейку с числом
+            target = next((n for n, (_, kind) in enumerate(columns) if n and kind == ct.N), None)
+            if target is None:
+                target = next((n for n in range(1, len(row)) if parse_change(str(row[n]), 0) is not None), None)
+            if target is None:
+                return False
+            current = row[target]
+            value = parse_change(change, ct.to_number(current))
+            if value is None:
+                return False
+            row[target] = value if columns[target][1] == ct.N else ct.number_text(value)
+            return True
+    if _same(card.get("command"), name) or _same(card.get("title"), name):
         if template == "progress":
             return ct.set_progress(data, change) is None
-        fields = ct.spec(template).get("fields", [])
         if fields and fields[0][2] == ct.N:
             return ct.set_field(template, data, fields[0][0], change) is None
     return False
