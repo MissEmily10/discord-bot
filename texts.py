@@ -449,6 +449,17 @@ CATALOG = {
     "actions.counter.bad_value": "Счётчик: имя и изменение, например `очки +1`, `очки -5` или `очки =0`.",
     "actions.counter.done": "Счётчик **{name}**: {value}",
     "actions.counter.done_pictures": "Счётчик **{name}**: {value}\n🖼️ Живых картинок обновлено: {count}",
+    "actions.counter.no_pictures": "Счётчик **{name}**: {value}\nℹ️ Ни одна живая картинка не показывает «{name}»: "
+                                   "в них нет строки, числового поля или названия с таким именем. "
+                                   "Выбери значение из списка «Существующий…» при настройке кнопки.",
+    "actions.counter.done_report": "Счётчик **{name}**: {value}\n{pictures}",
+    "actions.counter.picture.updated": "🖼️ «{title}» — обновлена",
+    "actions.counter.picture.not_published": "⚠️ «{title}» — число изменено, но картинка нигде не опубликована: "
+                                             "/pictures → картинка → «Опубликовать»",
+    "actions.counter.picture.message_gone": "⚠️ «{title}» — число изменено, но сообщение с картинкой не найдено "
+                                            "(удалено или нет доступа к каналу) — опубликуй её заново",
+    "actions.counter.picture.error": "⚠️ «{title}» — число изменено, но картинку не получилось перерисовать "
+                                     "(ошибка записана в лог бота)",
     "actions.counter.cooldown": "⏳ Не так быстро — нажми ещё раз через {seconds} сек.",
     "embed.value_hint.counter.change": "очки +1  ·  очки -1  ·  очки =0",
     "embed.value_hint.build.goto": "ID Message Build",

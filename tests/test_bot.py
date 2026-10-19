@@ -1095,6 +1095,50 @@ class LiveAndAutomationTests(unittest.TestCase):
 
         run(check())
 
+    def test_counter_report_and_attached_buttons_kept(self):
+        import cards
+        g = make_guild()
+        channel = FakeChannel(g, 9991)
+        g.channels[9991] = channel
+        edits = []
+
+        class Row:
+            children = [type("B", (), {"custom_id": "rb:a:b:1:0"})()]
+
+        class Picture:
+            components = [Row()]
+
+            async def edit(self, **kwargs):
+                edits.append(kwargs)
+
+        async def fetch_message(mid):
+            if mid == 1:
+                return Picture()
+            raise discord.NotFound(type("R", (), {"status": 404, "reason": ""})(), "gone")
+        channel.fetch_message = fetch_message
+        shown = cards.get_card(cards.create_card(GUILD, STAFF, "Хвосты", "counter"))
+        shown["channel_id"], shown["message_id"] = 9991, 1
+        cards.save_card(shown)
+        gone = cards.get_card(cards.create_card(GUILD, STAFF, "хвосты", "progress"))
+        gone["channel_id"], gone["message_id"] = 9991, 2
+        cards.save_card(gone)
+        cards.create_card(GUILD, STAFF, "Хвосты!", "counter")  # не опубликована
+        report = dict()
+        for title, status in run(cards.counter_changed(g, "хвосты", "+", 1)):
+            report[title] = status
+        self.assertEqual(report, {"Хвосты": "updated", "хвосты": "message_gone", "Хвосты!": "not_published"})
+        self.assertNotIn("view", edits[0])  # прикреплённые под картинку кнопки не стираются
+        self.assertTrue(edits[0]["attachments"][0].filename.startswith("card-"))
+
+        async def check():
+            i = FakeInteraction(g, g.members[ADMIN])
+            await actions.dispatch_action(i, "counter.change", "хвосты +1", creator_id=STAFF)
+            self.assertIn("не опубликована", i.last)
+            i = FakeInteraction(g, g.members[ADMIN])
+            await actions.dispatch_action(i, "counter.change", "никто +1", creator_id=STAFF)
+            self.assertIn("Ни одна живая картинка", i.last)
+        run(check())
+
     def test_counter_button_matches_title_and_table_text(self):
         import cards
         titled = cards.get_card(cards.create_card(GUILD, STAFF, "Kick", "counter"))
@@ -1480,10 +1524,10 @@ class LiveCardTests(unittest.TestCase):
         cards.save_card(card)
         self.assertIsNone(cards.set_score(card, "Эмилия", "7"))
         self.assertTrue(run(cards.refresh_message(g, card)))
-        self.assertEqual(edits[0]["attachments"][0].filename, "card.png")
+        self.assertTrue(edits[0]["attachments"][0].filename.startswith("card-"))
         self.assertEqual(edits[0]["view"].children[0].custom_id, f"rb:cd:{card_id}")
         message = run(cards.card_message(cards.get_card(card_id)))
-        self.assertEqual(message["embed"].image.url, "attachment://card.png")
+        self.assertEqual(message["embed"].image.url, "attachment://" + message["file"].filename)
 
 
 class CardTemplateTests(unittest.TestCase):
@@ -1596,7 +1640,7 @@ class CardTemplateTests(unittest.TestCase):
         card = cards.get_card(card_id)
         self.assertTrue(cards.uses_variables(card))
         message = run(cards.card_message(card, g))
-        self.assertEqual(message["file"].filename, "card.png")
+        self.assertTrue(message["file"].filename.startswith("card-"))
         cards.delete_card(card_id)
 
 

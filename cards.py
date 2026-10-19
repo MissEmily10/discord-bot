@@ -12,6 +12,7 @@
 
 import io
 import json
+import logging
 import os
 import re
 import time
@@ -29,7 +30,6 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 FONT_DIR = os.path.join(ROOT, "fonts")
 MAX_ROWS = 15
 MAX_EDITORS = 10
-FILENAME = "card.png"
 
 # цвета бота (как у дудлов и баннеров)
 INK = (32, 28, 30)
@@ -255,12 +255,14 @@ async def card_message(card, guild=None):
     У картинки со своей slash-командой кнопки нет: меняют командой, панель — в /pictures.
     """
     png = await render_card(card, guild)
-    embed = discord.Embed(color=core.embed_color()).set_image(url=f"attachment://{FILENAME}")
+    # своё имя файла на каждую перерисовку: иначе Discord может показывать старую картинку из кэша
+    filename = f"card-{card['id']}-{int(time.time() * 1000) % 10**9}.png"
+    embed = discord.Embed(color=core.embed_color()).set_image(url=f"attachment://{filename}")
     view = None
     if not card.get("command"):
         view = discord.ui.View(timeout=None)
         view.add_item(CardEditButton(card["id"]))
-    return {"embed": embed, "view": view, "file": discord.File(io.BytesIO(png), filename=FILENAME)}
+    return {"embed": embed, "view": view, "file": discord.File(io.BytesIO(png), filename=filename)}
 
 
 async def render_card(card, guild=None):
@@ -312,6 +314,16 @@ def uses_variables(card):
     return any(VARIABLE.search(str(text or "")) for _, text in ct.texts_of(card))
 
 
+def _foreign_buttons(message):
+    """Под картинку прикрепили свои кнопки (набор кнопок, счётчик) — их не трогаем."""
+    for row in getattr(message, "components", None) or []:
+        for item in getattr(row, "children", None) or []:
+            custom_id = getattr(item, "custom_id", None) or ""
+            if not custom_id.startswith("rb:cd:"):
+                return True
+    return False
+
+
 async def refresh_message(guild, card):
     """Перерисовать опубликованную картинку. -> False, если сообщения больше нет."""
     channel = guild.get_channel_or_thread(card["channel_id"]) if card["channel_id"] else None
@@ -321,6 +333,8 @@ async def refresh_message(guild, card):
     file = message_kwargs.pop("file")
     try:
         message = await channel.fetch_message(card["message_id"])
+        if _foreign_buttons(message):
+            message_kwargs.pop("view")
         await message.edit(attachments=[file], **message_kwargs)
     except discord.HTTPException:
         return False
@@ -386,19 +400,30 @@ def counter_in_text(card, name):
 
 
 async def counter_changed(guild, name, op, number):
-    """Счётчик изменён кнопкой -> те же значения в живых картинках. -> сколько картинок обновлено."""
+    """
+    Счётчик изменён кнопкой -> те же значения в живых картинках.
+    -> [(название картинки, итог)], итог: "updated" — перерисована в канале,
+    "not_published" — значение сохранено, но картинка нигде не опубликована,
+    "message_gone" — сообщение с картинкой удалено или недоступно, "error" — не перерисовалась.
+    """
     value = int(number) if float(number).is_integer() else number
     change = {"+": f"+{value}", "-": f"-{value}"}.get(op, str(value))
-    updated = 0
+    report = []
     for card in get_cards(guild.id):
         changed = apply_counter(card, name, change)
         if changed:
             save_card(card)
         if changed or counter_in_text(card, name):
-            updated += 1
-            if card["message_id"]:
-                await refresh_message(guild, card)
-    return updated
+            if not card["message_id"]:
+                status = "not_published"
+            else:
+                try:
+                    status = "updated" if await refresh_message(guild, card) else "message_gone"
+                except Exception:  # одна сломанная картинка не должна ронять кнопку и остальные картинки
+                    logging.getLogger(__name__).exception("counter refresh failed for card %s", card["id"])
+                    status = "error"
+            report.append((card["title"], status))
+    return report
 
 
 VARIABLES_REFRESH = 10 * 60  # картинки с переменными ({voice}, {online}…) перерисовываются сами

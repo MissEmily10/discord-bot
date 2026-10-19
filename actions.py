@@ -1110,8 +1110,17 @@ async def _counter_change(interaction, value, **_):
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)  # картинки перерисовываются пару секунд
     pictures = await cards.counter_changed(interaction.guild, name, op, number)
-    await reply(interaction, "actions.counter.done_pictures" if pictures else "actions.counter.done",
-                name=name, value=result, count=pictures)
+    staff = core.level_value(get_user_level(interaction)) >= core.level_value("staff")
+    if not pictures:
+        # участнику — просто итог; тем, кто собирает кнопки, — почему картинка не изменилась
+        await reply(interaction, "actions.counter.no_pictures" if staff else "actions.counter.done",
+                    name=name, value=result)
+        return
+    if not staff:
+        await reply(interaction, "actions.counter.done_pictures", name=name, value=result, count=len(pictures))
+        return
+    lines = "\n".join(t(f"actions.counter.picture.{status}", title=title) for title, status in pictures)
+    await reply(interaction, "actions.counter.done_report", name=name, value=result, pictures=lines)
 
 
 _HANDLERS = {
