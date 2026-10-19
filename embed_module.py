@@ -20,7 +20,7 @@ import logging
 import discord
 
 import core
-from core import PanelView, Modal, t, panel_embed, get_user_level, actions_for_level
+from core import PanelView, Modal, t, panel_embed, get_user_level
 from actions import (
     MAX_EMBEDS, MAX_BUTTONS, BUTTON_STYLES,
     say, valid_emoji, build_discord_embed,
@@ -169,13 +169,12 @@ def interactive_summary(state):
 
 
 def buttons_text(state):
+    import action_wizard
     lines = []
     for index, raw in enumerate(state.buttons, start=1):
         label = raw.get("label") or t("common.default_button_label")
-        action = raw.get("action_key") or ("link" if raw.get("style") == "link" else raw.get("action", "?"))
-        if action in ("build.trigger", "build.goto", "build.refresh") and raw.get("value"):
-            build = get_message_build(int(raw["value"])) if str(raw["value"]).isdigit() else None
-            action = f"{action} → {(build[3] if build else '?')} #{raw['value']}"
+        action = action_wizard.describe(raw.get("action_key") or raw.get("action"), str(raw.get("value") or ""),
+                                        style=raw.get("style"))
         lines.append(t("buttons.builder.line", n=index, emoji=raw.get("emoji") or "", label=label, action=action))
     return "\n".join(lines) or t("buttons.builder.empty")
 
@@ -916,12 +915,22 @@ class InteractiveHubView(PanelView):
             view=CustomListBuilderView(self.state, hub=self, back_target=self.hub_target(interaction))
         )
 
-    @discord.ui.button(label="Выбор роли/участника", emoji="🎯", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Меню ролей", emoji="🏷️", style=discord.ButtonStyle.secondary)
     async def native(self, interaction, button):
-        await interaction.response.edit_message(
-            embed=panel_embed(interaction, "embed.native_select"),
-            view=NativeSelectTypeView(self.state, hub=self, back_target=self.hub_target(interaction))
-        )
+        # меню прямо в сообщении: участник выбирает роль — бот её выдаёт (выбрал ещё раз — снимает)
+        import action_wizard
+        if "role.toggle" not in action_wizard.allowed_keys(interaction, self.state):
+            await say(interaction, "actions.no_access")
+            return
+        wizard = action_wizard.Wizard(interaction, self.state, {}, "interactive", None,
+                                      back=self.hub_target(interaction))
+
+        async def done(i, role_ids, single):
+            names = [getattr(i.guild.get_role(r), "name", "") for r in role_ids]
+            self.state.interactive = {"type": "role_menu", "roles": role_ids, "names": names, "single": single}
+            await back_to_hub(i, self)
+
+        await action_wizard.start_role_menu(interaction, wizard, set(), on_done=done)
 
     @discord.ui.button(label="Паки форм", emoji="🗂️", style=discord.ButtonStyle.secondary)
     async def packs(self, interaction, button):
@@ -1016,10 +1025,14 @@ def builder_screen(interaction, builder_view):
 
 
 def action_pick_view(interaction, state, pending, target, builder_view):
-    """Экран выбора действия с «Назад» к списку кнопок/опций."""
-    view = PanelView(back_target=builder_screen(interaction, builder_view), timeout=300)
-    view.add_item(ActionPickSelect(interaction, state, pending, target=target, builder_view=builder_view))
-    return view
+    """Экран «Что делает кнопка» с «Назад» к списку кнопок/опций (action_wizard)."""
+    import action_wizard
+    return action_wizard.pick_view(interaction, state, pending, target, builder_view)
+
+
+def action_pick_embed(interaction, state):
+    import action_wizard
+    return action_wizard.pick_embed(interaction, state)
 
 
 # ---------- список ----------
@@ -1096,7 +1109,7 @@ class ListOptionModal(Modal, title="ОПЦИЯ СПИСКА"):
             "emoji": self.emoji_input.value.strip() or None,
         }
         await interaction.response.edit_message(
-            embed=panel_embed(interaction, "embed.button_action"),
+            embed=action_pick_embed(interaction, self.state),
             view=action_pick_view(interaction, self.state, pending, "list", self.list_view),
         )
 
@@ -1116,72 +1129,6 @@ def creator_of(interaction, state):
     owner_level = core.member_level(interaction.guild, member or owner_id)
     level = min(owner_level, get_user_level(interaction), key=core.level_value)
     return member or interaction.user, level
-
-
-class ActionPickSelect(core.PagedSelect):
-    def __init__(self, interaction, state, pending, target, builder_view):
-        allowed = actions_for_level(creator_of(interaction, state)[1])
-        options = [
-            discord.SelectOption(label=row[0], description=(row[3] or "")[:100], value=row[0])
-            for row in allowed
-        ] or [discord.SelectOption(label=t("embed.no_actions")[:100], value="__none__")]
-        super().__init__(placeholder=t("embed.pick_action")[:150], options=options, row=0)
-        self.state = state
-        self.pending = pending
-        self.target = target
-        self.builder_view = builder_view
-
-    async def pick(self, interaction):
-        action_key = self.values[0]
-        if action_key == "__none__":
-            await say(interaction, "embed.no_actions_allowed")
-            return
-        self.pending["action_key"] = action_key
-        if action_key == "message.edit":
-            # значение не нужно — сразу добавляем
-            await commit_pending(interaction, self.state, self.pending, self.target, self.builder_view, "")
-            return
-        if action_key == "counter.change":
-            # пошагово: новый или существующий счётчик -> что сделать -> сколько
-            import counter_wizard
-            await counter_wizard.start(interaction, self.state, self.pending, self.target, self.builder_view)
-            return
-        if action_key in ("build.trigger", "build.goto", "build.refresh"):
-            # ID никто не помнит — даём выбрать из сохранённых сообщений
-            view = PanelView(back_target=builder_screen(interaction, self.builder_view), timeout=300)
-            view.add_item(BuildPickSelect(interaction, self.state, self.pending, self.target, self.builder_view))
-            await interaction.response.edit_message(embed=panel_embed(interaction, "embed.build_pick"), view=view)
-            return
-        await interaction.response.send_modal(ActionValueModal(self.state, self.pending, self.target, self.builder_view))
-
-
-class BuildPickSelect(core.PagedSelect):
-    """Выбор сохранённого Message Build, который кнопка будет показывать."""
-
-    def __init__(self, interaction, state, pending, target, builder_view):
-        rows = [
-            row for row in get_message_builds(interaction.guild.id)
-            if row[0] != state.build_id and build_visible(interaction, get_message_build(row[0]))
-        ]
-        options = [
-            discord.SelectOption(
-                label=f"{(name or t('embed.default_name'))[:90]} · #{bid}",
-                description=t("embed.build_pick.option", visibility=vis)[:100],
-                value=str(bid),
-            )
-            for bid, owner, name, vis, cat, updated in rows
-        ] or [discord.SelectOption(label=t("embed.saved.empty")[:100], value="__none__")]
-        super().__init__(placeholder=t("embed.build_pick.placeholder")[:150], options=options, row=0)
-        self.state = state
-        self.pending = pending
-        self.target = target
-        self.builder_view = builder_view
-
-    async def pick(self, interaction):
-        if self.values[0] == "__none__":
-            await say(interaction, "embed.build_pick.none")
-            return
-        await commit_pending(interaction, self.state, self.pending, self.target, self.builder_view, self.values[0])
 
 
 class ActionValueModal(Modal, title="ЗНАЧЕНИЕ"):
@@ -1224,35 +1171,6 @@ async def commit_pending(interaction, state, pending, target, builder_view, raw_
 
 
 # ---------- нативный выбор ----------
-
-class NativeSelectTypeView(PanelView):
-    texts = "embed.native_select"
-
-    def __init__(self, state, hub, back_target):
-        super().__init__(back_target=back_target)
-        self.state = state
-        self.hub = hub
-
-    async def pick(self, interaction, kind):
-        self.state.interactive = {"type": "native_select", "kind": kind}
-        await back_to_hub(interaction, self.hub)
-
-    @discord.ui.button(label="Роль", emoji="🎭", style=discord.ButtonStyle.secondary)
-    async def role(self, interaction, button):
-        await self.pick(interaction, "role")
-
-    @discord.ui.button(label="Участник", emoji="👤", style=discord.ButtonStyle.secondary)
-    async def user(self, interaction, button):
-        await self.pick(interaction, "user")
-
-    @discord.ui.button(label="Канал", emoji="📁", style=discord.ButtonStyle.secondary)
-    async def channel(self, interaction, button):
-        await self.pick(interaction, "channel")
-
-    @discord.ui.button(label="Mentionable", emoji="🔀", style=discord.ButtonStyle.secondary)
-    async def mentionable(self, interaction, button):
-        await self.pick(interaction, "mentionable")
-
 
 # ---------- кнопка формы ----------
 
@@ -1374,7 +1292,7 @@ class ButtonColorView(PanelView):
                     await interaction.response.send_modal(ActionValueModal(self.state, self.pending, "buttons", self.builder_view))
                     return
                 await interaction.response.edit_message(
-                    embed=panel_embed(interaction, "embed.button_action"),
+                    embed=action_pick_embed(interaction, self.state),
                     view=action_pick_view(interaction, self.state, self.pending, "buttons", self.builder_view),
                 )
 

@@ -921,6 +921,11 @@ DEFAULT_ACTIONS = [
 SAFE_ACTIONS = {"message.send", "message.confirm", "form.trigger", "select.trigger", "build.trigger", "build.goto"}
 
 
+def action_name(action_key):
+    """Русское название действия кнопки («Выдать роль»), иначе сам ключ."""
+    return t(f"actions.name.{action_key}") if has_text(f"actions.name.{action_key}") else action_key
+
+
 def needs_confirmation(action_key):
     row = get_action(action_key)
     return bool(row and row[2]) and action_key not in SAFE_ACTIONS

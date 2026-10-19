@@ -901,7 +901,7 @@ def action_registry_embed(interaction):
     for key, min_level, dangerous, description, enabled, use_level in rows:
         status = "🟢" if enabled else "🔴"
         danger = "⚠️" if dangerous else ""
-        lines.append(t("access.registry.line", status=status, key=key, create=level_label(min_level), use=level_label(use_level), danger=danger))
+        lines.append(t("access.registry.line", status=status, key=core.action_name(key), create=level_label(min_level), use=level_label(use_level), danger=danger))
     text = "\n".join(lines) or t("access.registry.empty")
     return panel_embed(interaction, "access.registry", actions=text)
 
@@ -913,11 +913,11 @@ class ActionRegistryView(PanelView):
         super().__init__(back_target=back_target)
         rows = get_actions()
         for key, min_level, dangerous, description, enabled, use_level in rows:
-            button = discord.ui.Button(label=key, style=discord.ButtonStyle.secondary)
+            button = discord.ui.Button(label=core.action_name(key)[:80], style=discord.ButtonStyle.secondary)
 
             async def callback(interaction, key=key):
                 await interaction.response.edit_message(
-                    embed=panel_embed(interaction, "access.action", title=key),
+                    embed=panel_embed(interaction, "access.action", title=core.action_name(key)),
                     view=ActionEditView(key, back_target=(core.screen(interaction), self))
                 )
 

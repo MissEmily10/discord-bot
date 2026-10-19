@@ -388,7 +388,7 @@ class ButtonTests(unittest.TestCase):
         g.safe.permissions = discord.Permissions(administrator=True)
         i = FakeInteraction(g, g.members[MEMBER])
         run(actions.dispatch_action(i, "role.assign", "100", creator_id=STAFF, skip_confirmation=True))
-        self.assertEqual(i.last, core.t("roles.dangerous"))
+        self.assertEqual(i.last, core.t("actions.role.creator_dangerous"))
         self.assertEqual(g.members[MEMBER].added, [])
 
     def test_admin_only_action_blocked_for_member(self):
@@ -2260,7 +2260,7 @@ class RegistryScreenTests(unittest.TestCase):
         import access_module as am
         g = make_guild()
         owner = FakeInteraction(g, g.members[OWNER])
-        self.assertIn("build.trigger", am.action_registry_embed(owner).description)
+        self.assertIn("Показать сообщение", am.action_registry_embed(owner).description)
         run(am.SettingsView(None, back_target=([], None)).registry.callback(owner))
         self.assertEqual(core.t("access.registry.line", key="x", status="", create="", use="", danger="").count("x"), 1)
 
@@ -3185,6 +3185,134 @@ class CounterWizardTests(unittest.TestCase):
             embed_module.commit_pending = original
 
 
+class ActionWizardTests(unittest.TestCase):
+    def test_picker_is_russian_and_role_menu_needs_role_rights(self):
+        import action_wizard as aw
+        g = make_guild()
+        st = types.SimpleNamespace(owner_id=STAFF, build_id=None)
+        text = aw.pick_embed(FakeInteraction(g, g.members[STAFF]), st).description
+        self.assertIn("Ответить текстом", text)
+        self.assertIn("Меню ролей", text)
+        self.assertNotIn("message.send", text)
+        member_state = types.SimpleNamespace(owner_id=MEMBER, build_id=None)
+        text = aw.pick_embed(FakeInteraction(g, g.members[MEMBER]), member_state).description
+        self.assertNotIn("Меню ролей", text)  # участник не собирает кнопки, раздающие роли
+        menu = aw.dump({"roles": [100], "single": False})
+        self.assertEqual(actions.validate_action_value(FakeInteraction(g, g.members[MEMBER]), "select.trigger", menu)[1],
+                         "actions.no_access")
+        self.assertIsNone(actions.validate_action_value(FakeInteraction(g, g.members[STAFF]), "select.trigger", menu)[1])
+        bad = aw.dump({"roles": [102], "single": False})
+        self.assertEqual(actions.validate_action_value(FakeInteraction(g, g.members[STAFF]), "select.trigger", bad)[1],
+                         "roles.dangerous")
+
+    def test_reply_targets_and_variables(self):
+        import action_wizard as aw
+        g = make_guild()
+        channel = FakeChannel(g, 9600)
+
+        async def check():
+            i = FakeInteraction(g, g.members[MEMBER])
+            await actions.dispatch_action(i, "message.send", "Привет, {user_id}!", creator_id=STAFF)
+            self.assertEqual(i.last, f"Привет, {MEMBER}!")  # старый формат: скрыто нажавшему, с переменными
+            value, error = actions.validate_action_value(i, "message.send", aw.dump({"to": "channel", "text": "Всем {user_id}"}))
+            self.assertIsNone(error)
+            i = FakeInteraction(g, g.members[MEMBER])
+            i.channel = channel
+            await actions.dispatch_action(i, "message.send", value, creator_id=STAFF)
+            self.assertEqual(channel.sent[-1]["content"], f"Всем {MEMBER}")
+            i2 = FakeInteraction(g, g.members[MEMBER])
+            i2.channel = channel
+            await actions.dispatch_action(i2, "message.send", value, creator_id=STAFF)
+            self.assertIn("Не так часто", i2.last)  # пауза против спама в канал
+            dms = []
+
+            async def send(text):
+                dms.append(text)
+            g.members[MEMBER].send = send
+            i = FakeInteraction(g, g.members[MEMBER])
+            await actions.dispatch_action(i, "message.send", aw.dump({"to": "dm", "text": "лично"}), creator_id=STAFF)
+            self.assertEqual(dms, ["лично"])
+        run(check())
+
+    def test_role_menu_gives_and_takes_roles(self):
+        import action_wizard as aw
+        g = make_guild()
+        member = g.members[MEMBER]
+        member.guild = g
+        g.me.guild_permissions = discord.Permissions(manage_roles=True)
+
+        async def check():
+            i = FakeInteraction(g, member)
+            added, removed = await aw.apply_role_menu(i, [100, 105], [100], False, STAFF, exact=False)
+            self.assertEqual([r.id for r in added], [100])
+            added, removed = await aw.apply_role_menu(i, [100, 105], [100], False, STAFF, exact=False)
+            self.assertEqual([r.id for r in removed], [100])  # выбрал ещё раз — снята
+            await aw.apply_role_menu(i, [100, 105], [100], True, STAFF, exact=False)
+            # роль выше бота в меню не работает — ничего не меняется
+            self.assertEqual(aw.role_menu_result(await aw.apply_role_menu(i, [100, 103], [103], True, STAFF, exact=False)),
+                             core.t("action_wizard.role_menu.nothing"))
+            # личное меню: выбранное = итоговый набор
+            added, removed = await aw.apply_role_menu(i, [100, 105], [], False, STAFF, exact=True)
+            self.assertEqual([r.id for r in removed], [100])
+            self.assertEqual(await aw.apply_role_menu(i, [100], [100], False, MEMBER, exact=True),
+                             "actions.creator_revoked")
+        run(check())
+
+    def test_every_choice_opens_its_first_step(self):
+        import action_wizard as aw
+        import embed_module as em
+        g = make_guild()
+        st = em.EmbedState(GUILD, STAFF)
+        st.build_id = database.save_message_build(GUILD, STAFF, "Я", "x", "[]", "[]")
+        database.save_message_build(GUILD, STAFF, "Другой", "y", "[]", "[]")
+        hub = em.InteractiveHubView(st, (discord.Embed(title="x"), None))
+        builder = em.ButtonBuilderView(st, hub, (discord.Embed(title="x"), None))
+        screens = {}
+
+        async def check():
+            for choice, keys, _ in aw.CHOICES:
+                i = FakeInteraction(g, g.members[ADMIN])
+
+                async def edit_message(**kwargs):
+                    i.response.done = True
+                    screens[choice] = kwargs
+                i.response.edit_message = edit_message
+                wizard = aw.Wizard(i, st, {"label": "x"}, "buttons", builder)
+                await aw.START[choice](i, wizard, aw.allowed_keys(i, st))
+            # «Показать сообщение»: выбрали build -> вопрос «как показать»
+            i = FakeInteraction(g, g.members[ADMIN])
+            shown = []
+
+            async def edit(**kwargs):
+                shown.append(kwargs)
+            i.response.edit_message = edit
+            wizard = aw.Wizard(i, st, {"label": "x"}, "buttons", builder)
+            await aw.show_mode(i, wizard, aw.allowed_keys(i, st), "1")
+            self.assertIn("Как показать", shown[0]["embed"].description)
+            # «Обновить сообщения» предлагает и этот же build
+            refresh = screens["refresh"]["view"]
+            select = next(item for item in refresh.children if isinstance(item, discord.ui.Select))
+            self.assertEqual(select.options[0].value, str(st.build_id))
+        run(check())
+        self.assertEqual(set(screens), {c for c, _, _ in aw.CHOICES})
+        self.assertIn("Кому показать", screens["reply"]["embed"].description)
+
+    def test_role_menu_in_message_and_descriptions(self):
+        import action_wizard as aw
+        view = actions.build_components("b", 5, [], {"type": "role_menu", "roles": [100, 105],
+                                                     "names": ["Художник", "Staff"], "single": True})
+        select = view.children[0].item
+        self.assertEqual(select.custom_id, "rb:bm:b:5")
+        self.assertEqual([o.label for o in select.options], ["Художник", "Staff"])
+        self.assertEqual(select.max_values, 1)
+        self.assertIn("<@&100>", aw.describe("role.toggle", "100"))
+        self.assertIn("в канал", aw.describe("message.send", aw.dump({"to": "channel", "text": "hi"})))
+        self.assertIn("ответ нажавшему", aw.describe("message.send", "hi"))
+        self.assertEqual(aw.webhook_options("7"), {"id": 7, "text": ""})
+        self.assertEqual(aw.webhook_options(aw.dump({"id": 7, "text": "x"})), {"id": 7, "text": "x"})
+        self.assertEqual(core.action_name("build.goto"), "➡️ Шаг мастера")
+
+
 class GalleryTests(unittest.TestCase):
     def test_type_and_style_galleries(self):
         import cards
@@ -3311,7 +3439,7 @@ class ViewSmokeTests(unittest.TestCase):
                 am.CommandAccessView("ping", "d", back), am.RoleLevelAccessView(1, "@r", back), am.SettingsView(bot.bot, back),
                 am.DesignView(), am.ActionEditView("message.send", back),
                 em.EmbedHomeView(GUILD, STAFF), em.VisibilityView(st, back), em.EmbedEditorView(st, back), hub,
-                em.CustomListBuilderView(st, hub, back), em.NativeSelectTypeView(st, hub, back),
+                em.CustomListBuilderView(st, hub, back),
                 em.ButtonBuilderView(st, hub, back), em.MessageBuildFinalView(1, back),
                 actions.DangerousActionView("message.edit", None),
                 ex.FormView(fs), ex.FormUseView(1), ex.FormStartView(GUILD, STAFF), ex.TemplateActions(1),

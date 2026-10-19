@@ -403,6 +403,9 @@ def build_components(src, source_id, buttons, interactive):
         if itype == "list" and interactive.get("options"):
             view.add_item(ListSelect(src, source_id, interactive["options"], row=0))
             first_row = 1
+        elif itype == "role_menu" and interactive.get("roles"):
+            view.add_item(BuildRoleMenuSelect(src, source_id, interactive, row=0))
+            first_row = 1
         elif itype == "native_select" and interactive.get("kind") in NATIVE_SELECT_CLASSES:
             view.add_item(NativeSelect(interactive["kind"], row=0))
             first_row = 1
@@ -585,7 +588,43 @@ class NativeSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"rb:n:(?
         await say(interaction, "select.picked", value=label)
 
 
-DYNAMIC_ITEMS = [ActionButton, ListSelect, NativeSelect]
+class BuildRoleMenuSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"rb:bm:(?P<src>[bst]):(?P<sid>\d+)"):
+    """Меню ролей прямо в сообщении: выбрал роль — выдана, выбрал ещё раз — снята."""
+
+    def __init__(self, src, source_id, interactive=None, *, row=None, select=None):
+        if select is None:
+            interactive = interactive or {}
+            roles = [int(r) for r in interactive.get("roles") or []][:25]
+            names = list(interactive.get("names") or [])
+            options = [discord.SelectOption(label=(names[n] if n < len(names) else f"#{r}")[:100] or f"#{r}", value=str(r))
+                       for n, r in enumerate(roles)] or [discord.SelectOption(label="—", value="0")]
+            select = discord.ui.Select(
+                custom_id=f"rb:bm:{src}:{source_id}", options=options, min_values=1,
+                max_values=1 if interactive.get("single") else len(options),
+                placeholder=t("action_wizard.role_menu.public_placeholder")[:150])
+        super().__init__(select, row=row)
+        self.src, self.source_id = src, source_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["src"], int(match["sid"]), select=item)
+
+    async def callback(self, interaction):
+        import action_wizard
+        data = await _source_for(interaction, self.src, self.source_id)
+        if data is None:
+            return
+        menu = data["interactive"] or {}
+        if menu.get("type") != "role_menu":
+            await say(interaction, "actions.source_gone")
+            return
+        chosen = [int(v) for v in self.item.values if str(v).isdigit()]
+        result = await action_wizard.apply_role_menu(interaction, menu.get("roles") or [], chosen,
+                                                     bool(menu.get("single")), data["owner_id"], exact=False)
+        await interaction.response.send_message(action_wizard.role_menu_result(result), ephemeral=True)
+
+
+DYNAMIC_ITEMS = [ActionButton, ListSelect, NativeSelect, BuildRoleMenuSelect]
 
 
 def build_native_select_view(kind):
@@ -674,11 +713,8 @@ class WebhookSendModal(Modal, title="ОТПРАВИТЬ ЧЕРЕЗ WEBHOOK"):
 
     async def on_submit(self, interaction):
         if self.record_id is not None:
-            row = get_webhook(self.record_id)
-            if not row or row[1] != interaction.guild.id:
-                await say(interaction, "actions.webhook_record_missing")
-                return
-            webhook_url = row[6]
+            await say(interaction, await send_via_webhook(interaction, self.record_id, self.content_input.value))
+            return
         else:
             webhook_url = normalize_url(self.secret_url or self.url_input.value)
             if not webhook_url or not _WEBHOOK_URL.match(webhook_url):
@@ -693,6 +729,22 @@ class WebhookSendModal(Modal, title="ОТПРАВИТЬ ЧЕРЕЗ WEBHOOK"):
             return
         core.audit(interaction, "webhook.sent", "webhook", self.record_id)
         await say(interaction, "actions.webhook_modal.sent")
+
+
+async def send_via_webhook(interaction, record_id, text):
+    """Отправить через сохранённый вебхук сервера. -> ключ итога для нажавшего."""
+    row = get_webhook(record_id)
+    if not row or row[1] != interaction.guild.id:
+        return "actions.webhook_record_missing"
+    try:
+        webhook = discord.Webhook.from_url(row[6], client=interaction.client)
+        await webhook.send(text, username=row[5] or interaction.client.user.name,
+                           avatar_url=row[7] or discord.utils.MISSING,
+                           allowed_mentions=discord.AllowedMentions(everyone=False, roles=False))
+    except (discord.HTTPException, ValueError):
+        return "actions.webhook_modal.failed"
+    core.audit(interaction, "webhook.sent", "webhook", record_id)
+    return "actions.webhook_modal.sent"
 
 
 class DangerousActionView(PanelView):
@@ -733,10 +785,28 @@ def validate_action_value(interaction, action_key, value, style=None, actor=None
         url = normalize_url(value)
         return (url, None) if url and " " not in url else (None, "actions.bad_value.link")
     if action_key in ("message.send", "message.confirm"):
-        return value[:2000], None
+        import action_wizard
+        options = action_wizard.reply_options(value)
+        if options["to"] == "me":
+            return options["text"][:2000], None
+        return action_wizard.dump({"to": options["to"], "text": options["text"][:2000]}), None
     if action_key == "message.edit":
         return "", None
     if action_key == "select.trigger":
+        import action_wizard
+        menu = action_wizard.role_menu_options(value)
+        if menu is not None:
+            # меню ролей раздаёт роли — собирать его может тот, кому можно кнопку «Роль»
+            if not core.is_action_allowed(member_level(guild, actor or interaction.user), "role.toggle"):
+                return None, "actions.no_access"
+            roles = [guild.get_role(r) for r in menu["roles"]]
+            if not roles or None in roles:
+                return None, "actions.role.bad_value"
+            for role in roles:
+                problem = role_problem(guild, role, actor or interaction.user)
+                if problem:
+                    return None, problem
+            return action_wizard.dump(menu), None
         kind = (value or "role").lower()
         return (kind, None) if kind in NATIVE_SELECT_CLASSES else (None, "actions.select_trigger.bad_value")
     if action_key == "form.trigger":
@@ -756,10 +826,14 @@ def validate_action_value(interaction, action_key, value, style=None, actor=None
     if action_key == "webhook.send":
         # только сохранённый вебхук этого сервера, которым ты управляешь (/webhook);
         # ссылку-секрет в кнопку больше не кладём: её видели бы нажавшие и экспорт
+        import action_wizard
         from extended_modules import can_manage_webhook
-        record_id = parse_id(value)
+        options = action_wizard.webhook_options(value)
+        record_id = options["id"]
         row = get_webhook(record_id) if record_id is not None else None
         if row and row[1] == guild.id and can_manage_webhook(interaction, row):
+            if options["text"]:
+                return action_wizard.dump({"id": record_id, "text": options["text"][:2000]}), None
             return str(record_id), None
         return None, "actions.webhook_record_missing"
     if action_key == "counter.change":
@@ -814,12 +888,53 @@ async def dispatch_action(interaction, action_key, value, *, creator_id=None, sk
     await handler(interaction, value, creator_id=creator_id, target_message=target_message)
 
 
+_REPLY_COOLDOWN = 10
+_last_reply = {}  # (канал/сообщение, user_id) -> ts последнего ответа в канал
+
+
+async def _send_reply(interaction, value, default_key):
+    """
+    «Ответить текстом»: нажавшему (скрыто), в канал всем или в личку.
+    Переменные подставляются для нажавшего: {user}, {counter:очки}…
+    """
+    import action_wizard
+    options = action_wizard.reply_options(value)
+    text = await action_wizard.with_variables(interaction, options["text"] or t(default_key))
+    text = text[:2000]
+    if options["to"] == "channel":
+        key = (getattr(interaction.message, "id", None) or getattr(interaction, "channel_id", None), interaction.user.id)
+        now = time.monotonic()
+        if key in _last_reply and now - _last_reply[key] < _REPLY_COOLDOWN:
+            await reply(interaction, "actions.reply.cooldown",
+                        seconds=int(_REPLY_COOLDOWN - (now - _last_reply[key])) + 1)
+            return
+        _last_reply[key] = now
+        try:
+            await interaction.channel.send(content=text,
+                                           allowed_mentions=discord.AllowedMentions(everyone=False, roles=False))
+        except (discord.HTTPException, AttributeError):
+            await reply(interaction, "actions.reply.channel_failed")
+            return
+        await reply(interaction, "actions.reply.posted")
+        return
+    if options["to"] == "dm":
+        try:
+            await interaction.user.send(text)
+        except discord.HTTPException:
+            # личка закрыта — показываем здесь же, чтобы текст не потерялся
+            await interaction.response.send_message(f"{t('actions.reply.dm_closed')}\n\n{text}"[:2000], ephemeral=True)
+            return
+        await reply(interaction, "actions.reply.dm_sent")
+        return
+    await interaction.response.send_message(text, ephemeral=True)
+
+
 async def _message_send(interaction, value, **_):
-    await interaction.response.send_message(value or t("actions.default.message"), ephemeral=True)
+    await _send_reply(interaction, value, "actions.default.message")
 
 
 async def _message_confirm(interaction, value, **_):
-    await interaction.response.send_message(value or t("actions.default.confirm"), ephemeral=True)
+    await _send_reply(interaction, value, "actions.default.confirm")
 
 
 async def _message_edit(interaction, value, target_message=None, **_):
@@ -852,7 +967,12 @@ async def _form_trigger(interaction, value, **_):
     await open_form(interaction, form_id)
 
 
-async def _select_trigger(interaction, value, **_):
+async def _select_trigger(interaction, value, creator_id=None, **_):
+    import action_wizard
+    menu = action_wizard.role_menu_options(value)
+    if menu is not None:
+        await action_wizard.open_role_menu(interaction, menu, creator_id)
+        return
     kind = (value or "role").strip().lower()
     if kind not in NATIVE_SELECT_CLASSES:
         await reply(interaction, "actions.select_trigger.bad_value")
@@ -877,11 +997,13 @@ async def _role_action(interaction, value, action_key, creator_id=None):
     creator = guild.get_member(creator_id) if creator_id else None
     problem = role_problem(guild, role, creator, allow_dangerous=bool(creator_id and core.is_owner_id(creator_id)))
     if problem:
-        await reply(interaction, problem)
+        # при нажатии проверяется создатель кнопки, а не нажавший — так и пишем
+        await reply(interaction, "actions.role.creator_" + problem.split(".")[-1]
+                    if core.has_text("actions.role.creator_" + problem.split(".")[-1]) else problem)
         return
     member = interaction.user if isinstance(interaction.user, discord.Member) else guild.get_member(interaction.user.id)
     if member is None:
-        await reply(interaction, "actions.role.unreachable")
+        await reply(interaction, "actions.role.no_member")
         return
     has_role = role in member.roles
     add = action_key == "role.assign" or (action_key == "role.toggle" and not has_role)
@@ -910,7 +1032,15 @@ async def _role_toggle(interaction, value, creator_id=None, **_):
 
 
 async def _webhook_send(interaction, value, **_):
-    record_id = parse_id(value)
+    import action_wizard
+    options = action_wizard.webhook_options(value)
+    if options["id"] is not None and options["text"]:
+        # текст задан заранее — отправляем сразу (подтверждение уже было)
+        text = await action_wizard.with_variables(interaction, options["text"])
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await reply(interaction, await send_via_webhook(interaction, options["id"], text[:2000]))
+        return
+    record_id = options["id"]
     if record_id is not None:
         await interaction.response.send_modal(WebhookSendModal(record_id=record_id))
     else:
@@ -1065,7 +1195,8 @@ async def _build_refresh(interaction, value, creator_id=None, **_):
     _last_refresh[build_id] = now
     await interaction.response.defer(ephemeral=True, thinking=True)
     updated, removed, added, missing = await live.resync_build(interaction.guild, build_id)
-    await interaction.followup.send(t("actions.build_refresh.done", updated=updated + added), ephemeral=True)
+    key = "actions.build_refresh.done_missing" if missing else "actions.build_refresh.done"
+    await interaction.followup.send(t(key, updated=updated + added, missing=missing), ephemeral=True)
 
 
 _COUNTER_COOLDOWN = 3
