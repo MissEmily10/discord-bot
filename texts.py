@@ -1136,6 +1136,27 @@ CATALOG = {
         "of depicted objects; no intro, answer with the description only.\n\n{notes}"
     ),
 
+    # ================= Казна кланов (clan_treasury.py) =================
+    "clan_treasury.denied": "🔒 Фиксировать переводы в казну могут только владелица бота и админы.",
+    "clan_treasury.reply_needed": "Ответь этим сообщением на карточку «✅ Перевод в казну подтверждён» и напиши «@Purr зафиксируй».",
+    "clan_treasury.wrong_bot": "Это не карточка бота сервера — фиксирую только его подтверждённые переводы.",
+    "clan_treasury.wrong_channel": "Фиксирую только карточки из канала подтверждений кланов.",
+    "clan_treasury.no_content": "Не вижу содержимое карточки. Включи Message Content Intent (Developer Portal → Bot) и `MESSAGE_CONTENT_INTENT=1` в .env, перезапусти бота.",
+    "clan_treasury.not_approved": "Перевод ещё не подтверждён — сначала «Разрешить», потом «зафиксируй».",
+    "clan_treasury.rejected": "Перевод отклонён — в казну ничего не идёт.",
+    "clan_treasury.unknown_format": "Не поняла карточку: нет клана [ТЕГ] или суммы «В казну дойдёт». Ничего не начислено.",
+    "clan_treasury.already": "Этот перевод уже зафиксирован — второй раз не начисляю.",
+    "clan_treasury.fixed": "✅ Зафиксировано: **[{tag}]** +{amount} в казну, респект +{respect}.\nКазна: **{treasury}** · респект: **{total}**",
+    "clan_treasury.nothing_to_undo": "Этот перевод не фиксировался — отменять нечего.",
+    "clan_treasury.already_undone": "Эта фиксация уже отменена.",
+    "clan_treasury.undone": "↩️ Фиксация отменена: **[{tag}]** −{amount}.\nКазна: **{treasury}** · респект: **{total}**",
+    "clan_treasury.empty": "Казна кланов пока пустая — ни одного зафиксированного перевода.",
+    "clan_treasury.line": "**[{tag}]** {name} — казна **{treasury}**, респект **{respect}**",
+    "clan_treasury.summary": "🏰 **Казна кланов**\n{list}\n\nЖурнал клана: «@Purr казна ТЕГ».",
+    "clan_treasury.no_clan": "Клана [{tag}] в казне пока нет.",
+    "clan_treasury.entry": "{when} · {amount} · респект {respect} · {reason} · {who}",
+    "clan_treasury.clan": "🏰 **[{tag}] {name}**\nКазна: **{treasury}** · респект: **{respect}**\n\nПоследние операции:\n{entries}",
+
     "embed.native_select.placeholder": "Выбери...",
     "embed.list.done": "Готово",
     "embed.buttons.done": "Готово",

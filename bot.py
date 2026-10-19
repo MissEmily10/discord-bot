@@ -394,6 +394,8 @@ emoji_export.register(bot)
 quotes.register(bot)
 whispers.register(bot)
 activity.register(bot)
+import clan_treasury  # noqa: E402
+clan_treasury.register(bot)  # казна кланов: «@Purr зафиксируй» на подтверждённый перевод
 
 
 # =========================

@@ -163,6 +163,9 @@ async def on_message(message):
     """
     if message.author.bot or not pinged(message):
         return
+    import clan_treasury
+    if clan_treasury.wants(message):
+        return  # «@Purr зафиксируй / казна» — это казна кланов, не эмодзи
     if not core.is_owner_id(message.author.id):
         core._log.info("emoji export ping from non-owner %s (OWNER_ID=%s)", message.author.id, core.OWNER_ID)
         try:

@@ -3016,6 +3016,78 @@ class LogoTests(unittest.TestCase):
         self.assertEqual(logo_module.backend_problem(), "logo.no_token")
 
 
+class ClanTreasuryTests(unittest.TestCase):
+    CARD = {
+        "title": "✅ Перевод в казну подтверждён",
+        "description": "Подтвердил <@555000000000000001>.",
+        "fields": [
+            {"name": "Переводит", "value": "<@1222028407295049898> — участник"},
+            {"name": "Клан", "value": "anhedonia `[ANH]`"},
+            {"name": "Сумма", "value": "50 голды"},
+            {"name": "В казну дойдёт", "value": "37 (комиссия 25%)"},
+            {"name": "Респект клану", "value": "+0,05"},
+            {"name": "Голду выдал", "value": "<@555000000000000002>"},
+            {"name": "За что", "value": "—"},
+            {"name": "За 7 дней", "value": "этот участник перевёл в клан 1 раз на 50 голды"},
+        ],
+    }
+
+    def test_parse_approved_card(self):
+        import clan_treasury as ct
+        card, problem = ct.parse_card(self.CARD)
+        self.assertIsNone(problem)
+        self.assertEqual((card["tag"], card["name"], card["to_treasury"], card["gross"]), ("ANH", "anhedonia", 37, 50))
+        self.assertAlmostEqual(card["respect"], 0.05)
+        self.assertEqual(card["member_id"], 1222028407295049898)
+        self.assertEqual(card["giver_id"], 555000000000000002)
+        pending = dict(self.CARD, title="Перевод в казну клана ждёт подтверждения")
+        self.assertEqual(ct.parse_card(pending), (None, "clan_treasury.not_approved"))
+        self.assertEqual(ct.parse_card(dict(self.CARD, title="❌ Перевод отклонён")), (None, "clan_treasury.rejected"))
+        self.assertEqual(ct.parse_card(dict(self.CARD, fields=[]))[1], "clan_treasury.unknown_format")
+
+    def test_fix_once_and_undo_via_mention(self):
+        import clan_treasury as ct
+        guild = make_guild()
+        guild.self_role = None
+        guild.id = 4242
+        replies = []
+
+        source = types.SimpleNamespace(id=9001, author=types.SimpleNamespace(id=31337, bot=True),
+                                       channel=types.SimpleNamespace(id=5), embeds=[discord.Embed.from_dict(self.CARD)])
+
+        def ping(author_id, text, reference=True):
+            async def reply(content, **kwargs):
+                replies.append(content)
+            return types.SimpleNamespace(
+                author=guild.members[author_id], guild=guild, content=f"<@{guild.me.id}> {text}",
+                mentions=[guild.me], role_mentions=[], reply=reply,
+                reference=types.SimpleNamespace(message_id=source.id, resolved=source) if reference else None)
+
+        guild.members[OWNER].bot = False
+        guild.members[MEMBER].bot = False
+        os.environ["CLAN_SOURCE_BOT_ID"] = "31337"
+        try:
+            run(ct.on_message(ping(MEMBER, "зафиксируй")))
+            self.assertIn("🔒", replies[-1])
+            run(ct.on_message(ping(OWNER, "зафиксируй")))
+            self.assertIn("[ANH]", replies[-1])
+            self.assertEqual(ct.get_clan(4242, "anh")[2:], (37, 0.05))
+            run(ct.on_message(ping(OWNER, "зафиксируй")))
+            self.assertIn("уже зафиксирован", replies[-1])
+            self.assertEqual(ct.get_clan(4242, "ANH")[2], 37)
+            run(ct.on_message(ping(OWNER, "казна", reference=False)))
+            self.assertIn("anhedonia", replies[-1])
+            run(ct.on_message(ping(OWNER, "отмени")))
+            self.assertEqual(ct.get_clan(4242, "ANH")[2:], (0, 0))
+            run(ct.on_message(ping(OWNER, "отмени")))
+            self.assertIn("уже отменена", replies[-1])
+            source.author.id = 1  # не тот бот
+            run(ct.on_message(ping(OWNER, "зафиксируй")))
+            self.assertIn("не карточка бота сервера", replies[-1])
+        finally:
+            os.environ.pop("CLAN_SOURCE_BOT_ID", None)
+
+
 class ViewSmokeTests(unittest.TestCase):
     """Все панели и модалки собираются, подписи укладываются в лимиты Discord."""
 
