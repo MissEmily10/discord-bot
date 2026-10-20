@@ -3418,6 +3418,47 @@ class ClanTreasuryTests(unittest.TestCase):
             os.environ.pop("CLAN_SOURCE_BOT_ID", None)
 
 
+class ClanInfoTests(unittest.TestCase):
+    def test_question_by_mention_answers_topic(self):
+        import clan_info
+        import clan_treasury
+        import emoji_export
+        guild = make_guild()
+        guild.self_role = None
+        sent = []
+
+        def ping(text, author=MEMBER):
+            async def reply(content=None, **kwargs):
+                sent.append((content, kwargs))
+            guild.members[author].bot = False
+            return types.SimpleNamespace(
+                author=guild.members[author], guild=guild, content=f"<@{guild.me.id}> {text}",
+                mentions=[guild.me], role_mentions=[], reply=reply, reference=None,
+                channel=types.SimpleNamespace(id=1))
+
+        run(clan_info.on_message(ping("как работает продление клана и что будет при долге?")))
+        embed = sent[-1][1]["embed"]
+        self.assertIn("ПРОДЛЕНИЕ", embed.title)
+        self.assertIn("5000", embed.description)
+        self.assertEqual(sent[-1][1]["view"].children[0].item.custom_id, "rb:clinfo")
+        run(clan_info.on_message(ping("расскажи про кланы")))
+        self.assertIn("КАК ЭТО УСТРОЕНО", sent[-1][1]["embed"].title)
+        run(clan_info.on_message(ping("как пополнить казну клана?")))
+        self.assertIn("КАЗНА", sent[-1][1]["embed"].title)
+        # вопрос про казну — не команда казны и не перенос эмодзи
+        self.assertFalse(clan_treasury.wants(ping("как пополнить казну клана?")))
+        self.assertTrue(clan_treasury.wants(ping("казна ANH")))
+        self.assertFalse(clan_info.wants(ping("казна ANH")))
+        before = len(sent)
+        run(emoji_export.on_message(ping("что даёт огонёк у кланов?")))
+        self.assertEqual(len(sent), before)  # участнику не пишет «только владелец»
+        run(clan_info.on_message(ping("привет")))
+        self.assertEqual(len(sent), before)  # без слова «клан» молчит
+        for key in ["overview"] + clan_info.TOPIC_KEYS:
+            self.assertLessEqual(len(clan_info.topic_embed(key).description), 4096)
+            self.assertNotIn("clan_info.", clan_info.topic_embed(key).title)
+
+
 class ViewSmokeTests(unittest.TestCase):
     """Все панели и модалки собираются, подписи укладываются в лимиты Discord."""
 

@@ -81,7 +81,7 @@ async def setup_hook():
     # кнопки/списки в уже отправленных сообщениях работают после рестарта
     bot.add_dynamic_items(*actions.DYNAMIC_ITEMS, *extended_modules.DYNAMIC_ITEMS, *logo_module.DYNAMIC_ITEMS,
                           *form_packs.DYNAMIC_ITEMS, *cards.DYNAMIC_ITEMS, *quotes.DYNAMIC_ITEMS,
-                          *whispers.DYNAMIC_ITEMS)
+                          *whispers.DYNAMIC_ITEMS, *clan_info.DYNAMIC_ITEMS)
     await web_panel.start(bot)
     automation.setup(bot)  # расписание, триггеры, живое обновление
     await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)
@@ -396,6 +396,8 @@ whispers.register(bot)
 activity.register(bot)
 import clan_treasury  # noqa: E402
 clan_treasury.register(bot)  # казна кланов: «@Purr зафиксируй» на подтверждённый перевод
+import clan_info  # noqa: E402
+clan_info.register(bot)  # «@Purr как работают кланы?» — рассказ о системе кланов
 
 
 # =========================

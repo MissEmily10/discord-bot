@@ -207,9 +207,16 @@ def _words(message):
 
 
 def wants(message):
-    """Это обращение к казне? (чтобы другие обработчики упоминаний не мешали)"""
+    """
+    Это обращение к казне? (чтобы другие обработчики упоминаний не мешали)
+    «казна» / «казна ТЕГ» — команда; длинный вопрос «как пополнить казну
+    клана?» — это вопрос про кланы (clan_info), а не команда.
+    """
     words = _words(message)
-    return any(w in words for w in TRIGGERS_FIX + TRIGGERS_UNDO + TRIGGERS_SHOW)
+    if any(w in words for w in TRIGGERS_FIX + TRIGGERS_UNDO):
+        return True
+    parts = words.split()
+    return bool(parts) and parts[0] in TRIGGERS_SHOW and len(parts) <= 2
 
 
 def can_fix(guild, member):
