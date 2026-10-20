@@ -3459,6 +3459,59 @@ class ClanInfoTests(unittest.TestCase):
             self.assertNotIn("clan_info.", clan_info.topic_embed(key).title)
 
 
+class ClanAiTests(unittest.TestCase):
+    def test_neural_answer_with_rules_limits_and_fallback(self):
+        import clan_info
+        guild = make_guild()
+        guild.self_role = None
+        sent, calls = [], []
+
+        def ping(text, author=MEMBER, reference=None):
+            async def reply(content=None, **kwargs):
+                sent.append((content, kwargs))
+            guild.members[author].bot = False
+            return types.SimpleNamespace(
+                author=guild.members[author], guild=guild, content=f"<@{guild.me.id}> {text}",
+                mentions=[guild.me], role_mentions=[], reply=reply, reference=reference,
+                channel=types.SimpleNamespace(id=1))
+
+        async def fake_post(url, body, headers):
+            calls.append((url, body))
+            return 200, {"candidates": [{"content": {"parts": [{"text": "Продление — **5000** раз в 30 дней."}]}}]}
+
+        original = clan_info._post
+        clan_info._post = fake_post
+        os.environ["GEMINI_API_KEY"] = "test"
+        clan_info._last_question.clear()
+        clan_info._daily.clear()
+        try:
+            run(clan_info.on_message(ping("сколько стоит продление клана?")))
+            embed = sent[-1][1]["embed"]
+            self.assertIn("5000", embed.description)
+            system = calls[-1][1]["systemInstruction"]["parts"][0]["text"]
+            self.assertIn("ПРОДЛЕНИЕ", system)  # правила кланов — база ответа
+            self.assertIn("сколько стоит продление", calls[-1][1]["contents"][-1]["parts"][0]["text"])
+            # уточнение ответом на ответ Purr: без слова «клан», с прошлым ответом в контексте
+            answer = types.SimpleNamespace(author=guild.me, embeds=[embed])
+            clan_info._last_question.clear()
+            run(clan_info.on_message(ping("а если на 5-й день?", reference=types.SimpleNamespace(resolved=answer))))
+            self.assertEqual(calls[-1][1]["contents"][0]["role"], "model")
+            # пауза между вопросами
+            run(clan_info.on_message(ping("а огонёк у кланов?")))
+            self.assertIn("Подожди", sent[-1][0])
+            self.assertEqual(len(calls), 2)
+            # нейросеть молчит — карточка темы
+            async def broken(url, body, headers):
+                return 500, {}
+            clan_info._post = broken
+            clan_info._last_question.clear()
+            run(clan_info.on_message(ping("что даёт огонёк клану?")))
+            self.assertIn("ОГОНЁК", sent[-1][1]["embed"].title)
+        finally:
+            clan_info._post = original
+            os.environ.pop("GEMINI_API_KEY", None)
+
+
 class ViewSmokeTests(unittest.TestCase):
     """Все панели и модалки собираются, подписи укладываются в лимиты Discord."""
 
