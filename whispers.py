@@ -181,6 +181,12 @@ def message_kwargs(guild, whisper, with_actions=True):
     return kwargs
 
 
+def hides_recipient(whisper):
+    """Ответ на анонимную шепталку: получатель (автор той шепталки) — аноним, его нельзя называть."""
+    original = get_whisper(whisper["reply_to"]) if whisper.get("reply_to") else None
+    return bool(original and original["anonymous"])
+
+
 async def deliver(guild, whisper, fallback_channel=None):
     """-> куда дошло: "dm", "chat" или None (никуда)."""
     recipient = guild.get_member(whisper["recipient_id"])
@@ -197,9 +203,15 @@ async def deliver(guild, whisper, fallback_channel=None):
         return None
     view = discord.ui.View(timeout=None)
     view.add_item(WhisperRead(whisper["id"]))
+    if hides_recipient(whisper):
+        # ответ анониму: упомянуть его в чате = раскрыть, кто писал. Без имени и пинга,
+        # «Прочитать» откроет только он
+        text, mentions = t("whispers.in_chat_anon"), discord.AllowedMentions.none()
+    else:
+        text = t("whispers.in_chat", user=recipient.mention)
+        mentions = discord.AllowedMentions(users=[recipient], roles=False, everyone=False)
     try:
-        await channel.send(t("whispers.in_chat", user=recipient.mention), view=view,
-                           allowed_mentions=discord.AllowedMentions(users=[recipient], roles=False, everyone=False))
+        await channel.send(content=text, view=view, allowed_mentions=mentions)
     except discord.HTTPException:
         return None
     _q("UPDATE whispers SET delivery = 'chat', channel_id = ? WHERE id = ?", (channel.id, whisper["id"]), write=True)
@@ -246,6 +258,9 @@ async def send_whisper(interaction, recipient, text, attachment, anonymous, deli
     key = "whispers.sent_dm" if where == "dm" else "whispers.sent_chat"
     if where == "chat" and delivery == "dm":
         key = "whispers.sent_fallback"
+    if hides_recipient(get_whisper(whisper_id)):
+        # ответ на анонимную шепталку: нельзя называть, кому ушло, — это и есть аноним
+        key = "whispers.sent_to_anon_dm" if where == "dm" else "whispers.sent_to_anon_chat"
     await interaction.followup.send(t(key, user=recipient.display_name) + ("\n" + t("whispers.sent_anon")
                                                                           if anonymous else ""), ephemeral=True)
 

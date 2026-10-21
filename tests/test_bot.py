@@ -1735,6 +1735,52 @@ class WhisperTests(unittest.TestCase):
         w._q("DELETE FROM whisper_settings WHERE guild_id = ?", (gid,), write=True)
 
 
+class WhisperAnonymityTests(unittest.TestCase):
+    def test_reply_to_anonymous_never_names_the_author(self):
+        import whispers as w
+        g = make_guild()
+        author, target = g.members[STAFF], g.members[MEMBER]
+        author.display_name, target.display_name = "Эмилия", "Подруга"
+        author.bot = target.bot = False
+        inbox = {author.id: [], target.id: []}
+        for member in (author, target):
+            async def send(member=member, **kwargs):
+                if getattr(member, "dm_closed", False):
+                    raise discord.Forbidden(types.SimpleNamespace(status=403, reason=""), "closed")
+                inbox[member.id].append(kwargs)
+            member.send = send
+        channel = FakeChannel(g, 9700)
+
+        def interaction(member):
+            i = FakeInteraction(g, member)
+            i.channel_id, i.channel = channel.id, channel
+            i.client.get_guild = lambda gid: g
+            return i
+
+        async def check():
+            first = interaction(author)
+            await w.send_whisper(first, target, "привет красивая", None, True, "dm")
+            self.assertIn("Подруга", first.followups[-1])  # отправитель знает, кому писал
+            whisper_id = w._q("SELECT MAX(id) FROM whispers", one=True)[0]
+            self.assertIn("аноним", inbox[target.id][-1]["embed"].fields[0].value)
+            modal = w.ReplyModal(w.get_whisper(whisper_id))
+            modal.text._value = "кто ты?"
+            modal.anon._values = ["no"]
+            answer = interaction(target)
+            await modal.on_submit(answer)
+            self.assertNotIn("Эмилия", answer.followups[-1])  # ответившему автор не раскрыт
+            self.assertIn("анониму", answer.followups[-1])
+            self.assertEqual(len(inbox[author.id]), 1)  # ответ дошёл автору в личку
+            # у автора закрыта личка — ответ в чат без имени и без пинга
+            author.dm_closed = True
+            answer = interaction(target)
+            await modal.on_submit(answer)
+            notice = channel.sent[-1]
+            self.assertNotIn(str(author.id), notice.get("content") or "")
+            self.assertNotIn("Эмилия", answer.followups[-1])
+        run(check())
+
+
 class ActivityAndCatalogTests(unittest.TestCase):
     def test_words_by_root_and_phrases(self):
         import activity
