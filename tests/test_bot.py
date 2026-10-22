@@ -3506,56 +3506,103 @@ class ClanInfoTests(unittest.TestCase):
 
 
 class ClanAiTests(unittest.TestCase):
-    def test_neural_answer_with_rules_limits_and_fallback(self):
+    def setUp(self):
         import clan_info
-        guild = make_guild()
-        guild.self_role = None
-        sent, calls = [], []
-
-        def ping(text, author=MEMBER, reference=None):
-            async def reply(content=None, **kwargs):
-                sent.append((content, kwargs))
-            guild.members[author].bot = False
-            return types.SimpleNamespace(
-                author=guild.members[author], guild=guild, content=f"<@{guild.me.id}> {text}",
-                mentions=[guild.me], role_mentions=[], reply=reply, reference=reference,
-                channel=types.SimpleNamespace(id=1))
+        self.ci = clan_info
+        self.guild = make_guild()
+        self.guild.self_role = None
+        self.sent, self.calls = [], []
+        self.original = clan_info._post
+        self.answer_text = "Продление — **5000** раз в 30 дней."
 
         async def fake_post(url, body, headers):
-            calls.append((url, body))
-            return 200, {"candidates": [{"content": {"parts": [{"text": "Продление — **5000** раз в 30 дней."}]}}]}
-
-        original = clan_info._post
+            self.calls.append((url, body))
+            return 200, {"candidates": [{"content": {"parts": [{"text": self.answer_text}]}}]}
         clan_info._post = fake_post
         os.environ["GEMINI_API_KEY"] = "test"
         clan_info._last_question.clear()
         clan_info._daily.clear()
-        try:
-            run(clan_info.on_message(ping("сколько стоит продление клана?")))
-            embed = sent[-1][1]["embed"]
-            self.assertIn("5000", embed.description)
-            system = calls[-1][1]["systemInstruction"]["parts"][0]["text"]
-            self.assertIn("ПРОДЛЕНИЕ", system)  # правила кланов — база ответа
-            self.assertIn("сколько стоит продление", calls[-1][1]["contents"][-1]["parts"][0]["text"])
-            # уточнение ответом на ответ Purr: без слова «клан», с прошлым ответом в контексте
-            answer = types.SimpleNamespace(author=guild.me, embeds=[embed])
-            clan_info._last_question.clear()
-            run(clan_info.on_message(ping("а если на 5-й день?", reference=types.SimpleNamespace(resolved=answer))))
-            self.assertEqual(calls[-1][1]["contents"][0]["role"], "model")
-            # пауза между вопросами
-            run(clan_info.on_message(ping("а огонёк у кланов?")))
-            self.assertIn("Подожди", sent[-1][0])
-            self.assertEqual(len(calls), 2)
-            # нейросеть молчит — карточка темы
-            async def broken(url, body, headers):
-                return 500, {}
-            clan_info._post = broken
-            clan_info._last_question.clear()
-            run(clan_info.on_message(ping("что даёт огонёк клану?")))
-            self.assertIn("ОГОНЁК", sent[-1][1]["embed"].title)
-        finally:
-            clan_info._post = original
-            os.environ.pop("GEMINI_API_KEY", None)
+
+    def tearDown(self):
+        self.ci._post = self.original
+        os.environ.pop("GEMINI_API_KEY", None)
+
+    def ping(self, text, author=MEMBER, reference=None):
+        guild, sent = self.guild, self.sent
+
+        async def reply(content=None, **kwargs):
+            sent.append((content, kwargs))
+            return types.SimpleNamespace(id=50000 + len(sent))
+
+        async def send(content=None, **kwargs):
+            sent.append((content, kwargs))
+            return types.SimpleNamespace(id=50000 + len(sent))
+        guild.members[author].bot = False
+        return types.SimpleNamespace(
+            author=guild.members[author], guild=guild, content=f"<@{guild.me.id}> {text}",
+            mentions=[guild.me], role_mentions=[], reply=reply, reference=reference,
+            channel=types.SimpleNamespace(id=1, send=send))
+
+    def test_member_gets_text_answer_from_rules(self):
+        ci = self.ci
+        run(ci.on_message(self.ping("сколько стоит продление клана?")))
+        self.assertIn("5000", self.sent[-1][0])  # обычный текст, не карточка — удобно копировать
+        self.assertIn("view", self.sent[-1][1])  # меню тем под ответом
+        system = self.calls[-1][1]["systemInstruction"]["parts"][0]["text"]
+        self.assertIn("ПРОДЛЕНИЕ", system)
+        self.assertNotIn("ДОКУМЕНТЫ", system)  # участнику — только публичные правила
+        # уточнение ответом на ответ Purr: без слова «клан», с прошлым ответом в контексте
+        answer = types.SimpleNamespace(id=50000 + len(self.sent), author=self.guild.me, embeds=[])
+        ci._last_question.clear()
+        run(ci.on_message(self.ping("а если на 5-й день?", reference=types.SimpleNamespace(resolved=answer))))
+        self.assertEqual(self.calls[-1][1]["contents"][0]["role"], "model")
+        # пауза между вопросами
+        run(ci.on_message(self.ping("а огонёк у кланов?")))
+        self.assertIn("Подожди", self.sent[-1][0])
+        self.assertEqual(len(self.calls), 2)
+        # участник без слова «клан» — молчим
+        before = len(self.sent)
+        ci._last_question.clear()
+        run(ci.on_message(self.ping("как дела?")))
+        self.assertEqual(len(self.sent), before)
+
+        # нейросеть молчит — карточка темы
+        async def broken(url, body, headers):
+            return 500, {}
+        ci._post = broken
+        ci._last_question.clear()
+        run(ci.on_message(self.ping("что даёт огонёк клану?")))
+        self.assertIn("ОГОНЁК", self.sent[-1][1]["embed"].title)
+
+    def test_secretary_knows_plans_and_answers_long(self):
+        ci = self.ci
+        self.answer_text = ("Принцип: " + "кланы помогают серверу развиваться. " * 40 + "\n") * 3
+        run(ci.on_message(self.ping("расскажи поподробнее по какому принципу мы создавали новую систему кланов",
+                                    author=OWNER)))
+        system = self.calls[-1][1]["systemInstruction"]["parts"][0]["text"]
+        self.assertIn("секретарь", system)
+        self.assertIn("CLANS_TODO.md", system)  # решения и планы из документов
+        self.assertIn("Зачем кланы", system)  # принципы из quests/README.md
+        self.assertNotIn("quests/easy.md", system)  # списки квестов — только если спросили о квестах
+        self.assertEqual(self.calls[-1][1]["generationConfig"]["maxOutputTokens"], 4000)
+        texts = [content for content, _ in self.sent]
+        self.assertGreater(len(texts), 1)  # длинный ответ — несколько сообщений
+        self.assertTrue(all(len(text) <= 2000 for text in texts))
+        self.assertNotIn("view", self.sent[-1][1])
+        # секретарю — любой вопрос, даже без слова «клан»; но не «эмодзи»
+        ci._last_question.clear()
+        run(ci.on_message(self.ping("что решили с аукционом?", author=OWNER)))
+        self.assertEqual(len(self.calls), 2)
+        self.assertFalse(ci.wants(self.ping("перенеси эмодзи", author=OWNER)))
+        ci._last_question.clear()
+        run(ci.on_message(self.ping("какие есть сложные квесты?", author=OWNER)))
+        self.assertIn("quests/hard.md", self.calls[-1][1]["systemInstruction"]["parts"][0]["text"])
+
+    def test_split_text(self):
+        chunks = self.ci.split_text("а" * 5000)
+        self.assertTrue(all(len(c) <= 1900 for c in chunks))
+        self.assertEqual("".join(chunks), "а" * 5000)
+        self.assertEqual(self.ci.split_text("коротко"), ["коротко"])
 
 
 class ViewSmokeTests(unittest.TestCase):
