@@ -3550,7 +3550,9 @@ class ClanAiTests(unittest.TestCase):
         self.assertIn("view", self.sent[-1][1])  # меню тем под ответом
         system = self.calls[-1][1]["systemInstruction"]["parts"][0]["text"]
         self.assertIn("ПРОДЛЕНИЕ", system)
-        self.assertNotIn("ДОКУМЕНТЫ", system)  # участнику — только публичные правила
+        self.assertIn("Аукцион", system)  # планы и принципы — участникам тоже
+        for private in ("25%", ".env", "зафиксируй", "CLAN_SOURCE", "Тебе — не забыть"):
+            self.assertNotIn(private, system)  # но без внутренней кухни
         # уточнение ответом на ответ Purr: без слова «клан», с прошлым ответом в контексте
         answer = types.SimpleNamespace(id=50000 + len(self.sent), author=self.guild.me, embeds=[])
         ci._last_question.clear()
@@ -3560,11 +3562,10 @@ class ClanAiTests(unittest.TestCase):
         run(ci.on_message(self.ping("а огонёк у кланов?")))
         self.assertIn("Подожди", self.sent[-1][0])
         self.assertEqual(len(self.calls), 2)
-        # участник без слова «клан» — молчим
-        before = len(self.sent)
+        # с нейросетью — любой вопрос, даже без слова «клан» (не про кланы — она скажет сама)
         ci._last_question.clear()
-        run(ci.on_message(self.ping("как дела?")))
-        self.assertEqual(len(self.sent), before)
+        run(ci.on_message(self.ping("что будет с аукционом?")))
+        self.assertEqual(len(self.calls), 3)
 
         # нейросеть молчит — карточка темы
         async def broken(url, body, headers):
