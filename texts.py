@@ -103,7 +103,7 @@ CATALOG = {
     "emoji_picker.error.copy_failed": "Не получилось скопировать эмодзи с того сервера — попробуй другое или картинкой.",
     "emoji_picker.error.bad_file": "Нужна картинка PNG, JPG или GIF до 4 МБ.",
     "emoji_picker.error.upload_failed": "Discord не принял картинку как эмодзи — попробуй другую.",
-    # эмодзи на кнопках панелей: doodle — дудлы Эмилии (panel_art/emoji/ui), 3d — объёмные
+    # эмодзи на кнопках панелей: doodle — дудлы создателя бота (panel_art/emoji/ui), 3d — объёмные
     # иконки (panel_art/emoji/ui3d + doodle3d), standard — обычные
     "ui_emoji_style": "doodle",
 
@@ -1790,7 +1790,7 @@ CATALOG = {
     "cards.access.text": "Выбери людей и роли, которые смогут нажимать «Изменить» под картинкой. Автор и админы могут всегда. Пустой выбор — убрать всех.",
     "cards.score_modal.title": "ОЧКИ",
     "cards.score_modal.name": "Кто (имя в рейтинге)",
-    "cards.score_modal.name.placeholder": "Эмилия",
+    "cards.score_modal.name.placeholder": "Аня",
     "cards.score_modal.value": "Очки: 42 — поставить, +10 / -5 — изменить",
     "cards.score_modal.value.placeholder": "+10",
     "cards.title_modal.title": "НАЗВАНИЕ",

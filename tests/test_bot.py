@@ -1337,9 +1337,9 @@ class PreviewPictureTests(unittest.TestCase):
         self.assertEqual(codes, ["1f44b", "2705", "2764", "1f468-200d-1f469-200d-1f467", "1f1f7-1f1fa",
                                  "31-20e3", "1f44d-1f3fd"])
         pieces = pr.parse_inline("**жир** <@123456789012345678> <:pepe:123456789012345678> 2*3",
-                                 {("user", 123456789012345678): "Эмилия"}, pr.DEFAULT_LABELS)
+                                 {("user", 123456789012345678): "Юля"}, pr.DEFAULT_LABELS)
         self.assertIn("bold", pieces[0]["style"])
-        self.assertEqual([p["text"] for p in pieces if p["kind"] == "pill"], ["@Эмилия"])
+        self.assertEqual([p["text"] for p in pieces if p["kind"] == "pill"], ["@Юля"])
         self.assertEqual([p["id"] for p in pieces if p["kind"] == "cemoji"], ["123456789012345678"])
         self.assertTrue("".join(p["text"] for p in pieces if p["kind"] == "text").endswith("2*3"))
 
@@ -1489,14 +1489,14 @@ class LiveCardTests(unittest.TestCase):
     def test_scores_and_render(self):
         import cards
         card = {"title": "Ивент", "data": {"rows": []}}
-        self.assertIsNone(cards.set_score(card, "Эмилия", "10"))
-        self.assertIsNone(cards.set_score(card, "эмилия", "+5"))
+        self.assertIsNone(cards.set_score(card, "Юля", "10"))
+        self.assertIsNone(cards.set_score(card, "юля", "+5"))
         self.assertIsNone(cards.set_score(card, "Кот", "15"))
         self.assertIsNone(cards.set_score(card, "Пёс", "-3"))
         self.assertEqual(cards.set_score(card, "X", "много"), "cards.error.bad_value")
         self.assertEqual(cards.set_score(card, " ", "1"), "cards.error.no_name")
         rows = cards.sorted_rows(card)
-        self.assertEqual([(r["name"], r["score"]) for r in rows], [("Кот", 15), ("Эмилия", 15), ("Пёс", -3)])
+        self.assertEqual([(r["name"], r["score"]) for r in rows], [("Кот", 15), ("Юля", 15), ("Пёс", -3)])
         png = cards.render_rating(card["title"], rows)
         self.assertEqual(PILImage.open(io.BytesIO(png)).width, 1200)
         self.assertEqual(PILImage.open(io.BytesIO(cards.render_rating("Пусто", []))).width, 1200)
@@ -1529,7 +1529,7 @@ class LiveCardTests(unittest.TestCase):
         channel.fetch_message = fetch_message
         card["channel_id"], card["message_id"] = channel.id, 1
         cards.save_card(card)
-        self.assertIsNone(cards.set_score(card, "Эмилия", "7"))
+        self.assertIsNone(cards.set_score(card, "Юля", "7"))
         self.assertTrue(run(cards.refresh_message(g, card)))
         self.assertTrue(edits[0]["attachments"][0].filename.startswith("card-"))
         self.assertEqual(edits[0]["view"].children[0].custom_id, f"rb:cd:{card_id}")
@@ -1740,7 +1740,7 @@ class WhisperAnonymityTests(unittest.TestCase):
         import whispers as w
         g = make_guild()
         author, target = g.members[STAFF], g.members[MEMBER]
-        author.display_name, target.display_name = "Эмилия", "Подруга"
+        author.display_name, target.display_name = "Юля", "Подруга"
         author.bot = target.bot = False
         inbox = {author.id: [], target.id: []}
         for member in (author, target):
@@ -1768,7 +1768,7 @@ class WhisperAnonymityTests(unittest.TestCase):
             modal.anon._values = ["no"]
             answer = interaction(target)
             await modal.on_submit(answer)
-            self.assertNotIn("Эмилия", answer.followups[-1])  # ответившему автор не раскрыт
+            self.assertNotIn("Юля", answer.followups[-1])  # ответившему автор не раскрыт
             self.assertIn("анониму", answer.followups[-1])
             self.assertEqual(len(inbox[author.id]), 1)  # ответ дошёл автору в личку
             # у автора закрыта личка — ответ в чат без имени и без пинга
@@ -1777,7 +1777,7 @@ class WhisperAnonymityTests(unittest.TestCase):
             await modal.on_submit(answer)
             notice = channel.sent[-1]
             self.assertNotIn(str(author.id), notice.get("content") or "")
-            self.assertNotIn("Эмилия", answer.followups[-1])
+            self.assertNotIn("Юля", answer.followups[-1])
         run(check())
 
 
@@ -1887,7 +1887,7 @@ class UiEmojiTests(unittest.TestCase):
             return [c for row in view.to_components() for c in row["components"] if c["type"] == 2]
 
         try:
-            # по умолчанию — дудлы Эмилии
+            # по умолчанию — дудлы создателя бота
             items = buttons()
             back = next(c for c in items if c.get("label") == "Назад")
             self.assertEqual(back["emoji"]["name"], "ui_prev")  # «Назад» — дудл-стрелка перелистывания
@@ -1928,7 +1928,7 @@ class UiEmojiTests(unittest.TestCase):
         import form_packs as fp
         ui_emoji._loaded["d3_star"] = discord.PartialEmoji(name="d3_star", id=200000000000000001)
         fp._doodles["doodle_star"] = "<:doodle_star:123456789012345678>"
-        core.set_setting("ui_emoji_style", "3d")  # по умолчанию — дудлы Эмилии, 3D включают в веб-панели
+        core.set_setting("ui_emoji_style", "3d")  # по умолчанию — дудлы создателя бота, 3D включают в веб-панели
         try:
             self.assertEqual(ui_emoji.doodle("<:doodle_star:123456789012345678>"), "<:d3_star:200000000000000001>")
             self.assertEqual(ui_emoji.swap("🎉"), discord.PartialEmoji.from_str("🎉").name)
@@ -2065,7 +2065,7 @@ class MessageEditActionTests(unittest.TestCase):
 
 class ConfirmationTests(unittest.TestCase):
     def test_harmless_actions_never_ask(self):
-        database.set_action_dangerous("build.trigger", True)  # как было включено у Эмилии
+        database.set_action_dangerous("build.trigger", True)  # как было включено у создателя бота
         try:
             self.assertFalse(core.needs_confirmation("build.trigger"))
             core.ensure_default_actions()
@@ -3583,6 +3583,7 @@ class ClanAiTests(unittest.TestCase):
         system = self.calls[-1][1]["systemInstruction"]["parts"][0]["text"]
         self.assertIn("секретарь", system)
         self.assertIn("CLANS_TODO.md", system)  # решения и планы из документов
+        self.assertNotRegex(system, "[Ээ]мили")  # владелица — только «создатель бота», без имени
         self.assertIn("Зачем кланы", system)  # принципы из quests/README.md
         self.assertNotIn("quests/easy.md", system)  # списки квестов — только если спросили о квестах
         self.assertEqual(self.calls[-1][1]["generationConfig"]["maxOutputTokens"], 4000)
