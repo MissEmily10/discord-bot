@@ -27,7 +27,9 @@ ROOT = rn.ROOT
 OUT_DIR = ROOT / "panel_art" / "purr"
 D3 = "doodle3d/d3_"
 
-CLAN_DOODLES = ["crown", "shield", "flag", "gem", "fire", "trophy", "medal", "key", "star"]
+CLAN_DOODLES = ["clan_chest", "clan_coin", "clan_swords", "clan_crest", "clan_pennant", "clan_castle", "clan_coins",
+                "clan_scroll", "clan_helmet", "clan_sack", "clan_torch", "clan_podium", "clan_respect", "clan_tag",
+                "clan_ledger", "clan_calendar"]
 BOT_DOODLES = ["sparkles", "heart", "star", "chat", "bell", "palette", "music", "cat", "cloud", "bolt"]
 
 
@@ -44,10 +46,10 @@ POSTS = [
     clan("news", tag="#кланы", date="скоро", word="claaaans", mood="cool", wave=PINK_WAVE,
          title="Кланы переезжают в Purr",
          text="Создание, казна, биллборд, квесты и магазин — всё в одном боте и с кнопками."),
-    clan("split", tag="#кланы", word="claaans", mood="smile_lime", ic_огонь=D3 + "crown.png",
+    clan("split", tag="#кланы", word="claaans", mood="smile_lime", ic_огонь=D3 + "clan_castle.png",
          title="Свой клан — впятером",
          text="Глава, 2 зама и 2 представителя. По 1000 голды с каждого — и клан готов."),
-    clan("rules", title="Как создать клан", word="claaaans", ic_щит=D3 + "flag.png",
+    clan("rules", title="Как создать клан", word="claaaans", ic_щит=D3 + "clan_pennant.png",
          items="Собери 5 основателей\nКаждый подтверждает 1000 голды\nНа сбор — 1 час\nВсе подтвердили — клан создан"),
     clan("feature", name="Голда замораживается сразу", badge="safe",
          text="Каждый основатель подтверждает — его 1000 уходит в «заморозку». Кто-то отказался — всем вернут.",
@@ -64,35 +66,35 @@ POSTS = [
          title="Награды падают в казну без ручных подтверждений",
          text="Каждая награда — запись в журнале: дважды одна не зачтётся."),
     clan("digest", period="казна клана", word="moneeey",
-         cards="Пополнение|75% награды за активность|" + D3 + "gem.png\n"
-               "Респект|+1 за каждые 1000 в казне|" + D3 + "medal.png\n"
-               "Журнал|каждое движение денег записано|" + D3 + "book.png"),
+         cards="Пополнение|75% награды за активность|" + D3 + "clan_coins.png\n"
+               "Респект|+1 за каждые 1000 в казне|" + D3 + "clan_respect.png\n"
+               "Журнал|каждое движение денег записано|" + D3 + "clan_ledger.png"),
     clan("soon", caption="до продления клана", days="03", hours="11", minutes="20", word="reneeew",
-         ic_часы=D3 + "hourglass.png", ic_ракета=D3 + "crown.png"),
-    clan("alert", word="nooote!", mood="shock", ic_мегафон=D3 + "bell.png",
+         ic_часы=D3 + "hourglass.png", ic_ракета=D3 + "clan_calendar.png"),
+    clan("alert", word="nooote!", mood="shock", ic_мегафон=D3 + "clan_calendar.png",
          title="Продление: −5000 из казны раз в 30 дней",
          text="Purr напомнит главе и замам за 3 дня и за 1 день — с суммой, которой не хватает."),
-    clan("maintenance", word="oh nooo", mood="sad", ic_ключ=D3 + "hourglass.png", ic_шестерёнка=D3 + "shield.png",
+    clan("maintenance", word="oh nooo", mood="sad", ic_ключ=D3 + "clan_sack.png", ic_шестерёнка=D3 + "clan_coin.png",
          title="Не хватило на продление — долг 7 дней", window="7 дней на погашение",
          text="Долг гасится сам, как только казна наберёт сумму. Не успели — роспуск."),
     clan("news", tag="#огонёк", date="топ-3", word="fiiiire", mood="cool", bg="wine", seed=12,
          title="Огонёк: ×1.1–1.5 к казне при продлении",
          text="Сколько недель подряд клан в топ-3 биллборда — столько и огонька."),
     clan("milestone", number="×1.5", unit="fiiiire", text="максимальный огонёк — за серию недель в топ-3"),
-    clan("split", tag="#огонёк", word="fiiire", mood="cool", ic_огонь=D3 + "fire.png",
+    clan("split", tag="#огонёк", word="fiiire", mood="cool", ic_огонь=D3 + "clan_torch.png",
          title="Серия держится, пока ты в топ-3",
          text="Выпал из топа на неделю — огонёк сгорает. Серия видна в карточке клана."),
     clan("news", tag="#биллборд", date="неделя", word="biiillboard", mood="stars", bg="dark", seed=4, wave=LIME_WAVE,
          title="Недельный биллборд кланов",
          text="Войс, сообщения и респект — каждую неделю новый зачёт и снимок мест навсегда."),
-    clan("rules", title="Как считаются баллы", word="pooooints", ic_щит=D3 + "trophy.png",
+    clan("rules", title="Как считаются баллы", word="pooooints", ic_щит=D3 + "clan_podium.png",
          items="Час в войсе от 3 участников — 5\n900 сообщений — 5\nРеспект — 5\nОстатки переносятся внутри недели"),
     clan("winners", title="Топ кланов недели", first="Волки", second="Котики", third="Совы", word="claaaans",
-         ic_кубок=D3 + "crown.png", ic_звезда=D3 + "fire.png"),
+         ic_кубок=D3 + "clan_crest.png", ic_звезда=D3 + "clan_pennant.png"),
     clan("winners", title="Больше всех часов в войсе", first="Совы", second="Лисы", third="Волки", word="voiiice",
          ic_кубок=D3 + "headset.png", ic_звезда=D3 + "mic.png"),
     clan("winners", title="Самая большая казна", first="Котики", second="Волки", third="Ежи", word="treaaasury",
-         ic_кубок=D3 + "gem.png", ic_звезда=D3 + "key.png"),
+         ic_кубок=D3 + "clan_chest.png", ic_звезда=D3 + "clan_coins.png"),
     clan("poll", question="Во сколько закрывать неделю биллборда?",
          options="Пн 00:00:52\nВс 21:00:31\nПт 18:00:17", hint="кланы голосуют кнопками", word="voooote", mood="think"),
     clan("breaking", top_word="billboard", bottom_line="топ-3 · огонёк · кланы", mood="shock",
@@ -104,10 +106,10 @@ POSTS = [
     clan("update", version="5000", title="Стипендия за квесты", word="queeests", date="за срок",
          items="1 квест — 1000 в казну\n2 квеста — 2500\n3 квеста — 5000"),
     clan("soon", caption="до конца срока квестов", days="12", hours="06", minutes="45", word="queeests",
-         ic_часы=D3 + "flag.png", ic_ракета=D3 + "star.png"),
+         ic_часы=D3 + "clan_scroll.png", ic_ракета=D3 + "star.png"),
     clan("event", day="01", month="НОЯ", weekday="суббота", title="Турнир кланов",
          text="Purr сам опубликует анонс и напомнит за час. Очки идут в биллборд.",
-         time="18:00 МСК", place="#кланы", word="tournameeent", ic_шарик=D3 + "trophy.png"),
+         time="18:00 МСК", place="#кланы", word="tournameeent", ic_шарик=D3 + "clan_swords.png"),
     clan("event", day="15", month="НОЯ", weekday="суббота", title="Войс-марафон кланов",
          text="Сидим в войсе от трёх человек — часы идут в зачёт недели.",
          time="весь день", place="#войс-кланов", word="voiiice", ic_шарик=D3 + "headset.png"),
@@ -118,14 +120,14 @@ POSTS = [
          text="Два зама нажали «Купить» одновременно — второй увидит «не хватает», казна в минус не уйдёт.",
          how="/clan → Магазин", word="shoooop"),
     clan("digest", period="магазин клана", word="shoooop",
-         cards="Название|новое имя клана из казны|" + D3 + "pencil.png\n"
-               "Герб|иконка клана в карточке|" + D3 + "shield.png\n"
+         cards="Название|новое имя клана из казны|" + D3 + "clan_tag.png\n"
+               "Герб|иконка клана в карточке|" + D3 + "clan_crest.png\n"
                "Цвет роли|клан узнают по цвету|" + D3 + "palette.png"),
     clan("giveaway", prize="5000 в казну клана", text="Получит клан с лучшей активностью недели.",
-         until="до воскресенья", winners="1 клан", word="giveaaaaway", ic_подарок=D3 + "gem.png", mood="cool"),
+         until="до воскресенья", winners="1 клан", word="giveaaaaway", ic_подарок=D3 + "clan_chest.png", mood="cool"),
     clan("giveaway", prize="Смена герба бесплатно", text="Для клана, который первым выполнит 3 квеста.",
-         until="до 30.11", winners="1 клан", word="priiiize", ic_подарок=D3 + "shield.png", mood="stars"),
-    clan("rules", title="Кто что может в клане", word="rooooles", ic_щит=D3 + "crown.png",
+         until="до 30.11", winners="1 клан", word="priiiize", ic_подарок=D3 + "clan_crest.png", mood="stars"),
+    clan("rules", title="Кто что может в клане", word="rooooles", ic_щит=D3 + "clan_helmet.png",
          items="Приглашают глава, замы, представители\nГлава исключает любого\nЗам — только рядовых\nПокупки — глава и замы"),
     clan("split", tag="#иерархия", word="leaaader", mood="monocle", ic_огонь=D3 + "crown.png",
          title="Клан не останется без главы",
@@ -138,9 +140,9 @@ POSTS = [
     clan("news", tag="#карточки", date="10 стилей", word="caaaards", mood="stars", bg="ice", seed=40, wave=ICE_WAVE,
          title="Карточка клана живёт сама",
          text="Состав, казна и огонёк обновляются, а кнопка «Вступить» отправит заявку главе."),
-    clan("photo", title="Карточка клана", caption="10 стилей карточек", word="caaards", ic_камера=D3 + "crown.png",
+    clan("photo", title="Карточка клана", caption="10 стилей карточек", word="caaards", ic_камера=D3 + "clan_crest.png",
          text="Название, тег, глава, казна, огонёк — в фирменном стиле.",
-         photo=str(ROOT / "panel_art" / "emoji" / "doodle3d" / "d3_crown.png")),
+         photo=str(ROOT / "panel_art" / "emoji" / "doodle3d" / "d3_clan_castle.png")),
     clan("quote", quote="Я помню каждую монету в казне — и кто её положил.", author="Purr",
          role="журнал казны клана"),
     clan("quote", quote="Пока клан в топ-3, я подкидываю дров в огонёк.", author="Purr", role="биллборд кланов"),
@@ -152,10 +154,10 @@ POSTS = [
          word="liiive", mood="cool"),
     clan("live", badge="ИТОГИ", title="Подводим итоги недели кланов", time="воскресенье, 21:00",
          where="#биллборд", word="resuuults", mood="stars"),
-    clan("alert", word="careful!", mood="angry", ic_мегафон=D3 + "lock.png",
+    clan("alert", word="careful!", mood="angry", ic_мегафон=D3 + "clan_sack.png",
          title="Личную голду в казну не перевести",
          text="Казна пополняется только наградами за активность — так честно для всех кланов."),
-    clan("maintenance", word="looook", mood="monocle", ic_ключ=D3 + "book.png", ic_шестерёнка=D3 + "key.png",
+    clan("maintenance", word="looook", mood="monocle", ic_ключ=D3 + "clan_ledger.png", ic_шестерёнка=D3 + "clan_coins.png",
          title="Журнал казны — в админ-панели", window="только для админов",
          text="Найти клан, посмотреть все движения денег и поправить вручную — с записью в журнал."),
     clan("poll", question="Что купить в магазине клана первым?",
@@ -280,7 +282,7 @@ POSTS = [
     bot("winners", title="Лучшие иконки /logo месяца", first="Лиса", second="Кот", third="Ёжик", word="logooos",
         ic_кубок=D3 + "palette.png", ic_звезда=D3 + "brush.png"),
     bot("digest", period="Purr за неделю", word="weeeekly",
-        cards="Кланы|скоро: казна и биллборд|" + D3 + "crown.png\n"
+        cards="Кланы|скоро: казна и биллборд|" + D3 + "clan_chest.png\n"
               "Картинки|стекло, 3D и глитч|" + D3 + "palette.png\n"
               "3D|новые иконки на кнопках|" + D3 + "sparkles.png"),
 ]
