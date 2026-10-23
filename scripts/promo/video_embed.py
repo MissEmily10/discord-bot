@@ -438,9 +438,9 @@ def build():
                                             "desc": "Перед каждым сохранением бот запоминает, как build выглядел (последние 25)."}],
                                    rows=[[{"type": "select", "id": "h:ver", "placeholder": "Выбери версию"}],
                                          [btn("h:restore", "Откатить к этой версии", u("back"), 4)]]), sound="pop")
-    kit.pick(v, "h:ver", [{"label": "сегодня 18:40 · до правки creator", "emoji": u("time")},
+    kit.pick(v, "h:ver", [{"label": "сегодня 18:40 · до правки emily", "emoji": u("time")},
                           {"label": "вчера 21:05 · до правки Кот", "emoji": u("time")},
-                          {"label": "12.10 · до правки creator", "emoji": u("time")}], 1)
+                          {"label": "12.10 · до правки emily", "emoji": u("time")}], 1)
     v.click("h:restore")
     v.edit(pid, lambda m: m["embeds"].append(kit.toast("Откат выполнен — его тоже можно отменить")), sound="success")
     v.wait(1.0)

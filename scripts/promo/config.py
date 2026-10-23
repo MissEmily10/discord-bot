@@ -14,7 +14,7 @@ import engine
 ROOT = engine.ROOT
 CACHE = pathlib.Path(__file__).resolve().parent / "cache"
 
-USER_NAME = "creator"          # TODO: ник — пришлёт создатель бота
+USER_NAME = "emily"            # TODO: ник — пришлёт создатель бота
 USER_AVATAR = ""               # TODO: путь к аватарке, например "scripts/promo/assets/me.png"
 USER_COLOR = "#E4AEC4"
 
