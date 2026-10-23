@@ -17,9 +17,9 @@ clan_info.py
   открытые вопросы, без дневного лимита («@Purr напиши новость про итоги месяца»).
 
 Нейросеть не настроена или не ответила — карточка темы по словам вопроса и
-меню «Подробнее по темам». Нейросеть (.env, первая с ключом): GEMINI_API_KEY
-(у Google есть бесплатный лимит) -> OPENROUTER_API_KEY -> HF_TOKEN. Модель —
-CLAN_AI_MODEL.
+меню «Подробнее по темам». Нейросеть (.env — все, для которых есть ключ, по
+порядку; не ответила одна — следующая): OPENROUTER_API_KEY -> GEMINI_API_KEY ->
+HF_TOKEN. CLAN_AI_PROVIDER — какую пробовать первой, CLAN_AI_MODEL — модель.
 """
 
 import logging
@@ -261,14 +261,26 @@ def _cfg(name):
     return value.strip() if value and value.strip() else None
 
 
-def provider():
-    if _cfg("GEMINI_API_KEY") or _cfg("GOOGLE_API_KEY"):
-        return "google"
+def providers():
+    """
+    Нейросети, для которых есть ключ, по порядку: OpenRouter -> Google -> Hugging Face
+    (CLAN_AI_PROVIDER=openrouter|google|hf — поставить свою первой). Не ответила одна
+    (кончились деньги, сбой) — пробуем следующую.
+    """
+    found = []
     if _cfg("OPENROUTER_API_KEY"):
-        return "openrouter"
+        found.append("openrouter")
+    if _cfg("GEMINI_API_KEY") or _cfg("GOOGLE_API_KEY"):
+        found.append("google")
     if _cfg("HF_TOKEN"):
-        return "hf"
-    return None
+        found.append("hf")
+    first = (_cfg("CLAN_AI_PROVIDER") or "").lower()
+    return sorted(found, key=lambda kind: kind != first)
+
+
+def provider():
+    """Главная нейросеть или None (ключей нет)."""
+    return next(iter(providers()), None)
 
 
 def _models(names):
@@ -296,16 +308,23 @@ def _messages(question, previous):
 
 
 async def ask_ai(question, previous=None, secretary=False):
-    """-> текст ответа или None (нет ключа, все модели упали). secretary — полные документы и длинный ответ."""
-    kind = provider()
-    if kind is None:
-        return None
-    # у моделей Hugging Face окно меньше — документы урезаем
-    docs = docs_text(question, limit=60000 if kind == "hf" else None, public=not secretary) or "—"
-    system = (SECRETARY if secretary else SYSTEM).format(docs=docs, rules=rules_text())
-    max_tokens = 4000 if secretary else 2500
-    if kind == "hf":
-        return await _ask_hf(system, question, previous, max_tokens)
+    """-> текст ответа или None (нет ключей, все нейросети упали). secretary — полные документы и длинный ответ."""
+    for kind in providers():
+        # у моделей Hugging Face окно меньше — документы урезаем
+        docs = docs_text(question, limit=60000 if kind == "hf" else None, public=not secretary) or "—"
+        system = (SECRETARY if secretary else SYSTEM).format(docs=docs, rules=rules_text())
+        max_tokens = 4000 if secretary else 2500
+        if kind == "hf":
+            text = await _ask_hf(system, question, previous, max_tokens)
+        else:
+            text = await _ask_api(kind, system, question, previous, max_tokens)
+        if text:
+            return text
+        _log.warning("clan ai: %s did not answer, trying the next one", kind)
+    return None
+
+
+async def _ask_api(kind, system, question, previous, max_tokens):
     for model in _models(GEMINI_MODELS if kind == "google" else OPENROUTER_MODELS):
         try:
             if kind == "google":

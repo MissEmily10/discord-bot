@@ -3600,6 +3600,39 @@ class ClanAiTests(unittest.TestCase):
         run(ci.on_message(self.ping("какие есть сложные квесты?", author=OWNER)))
         self.assertIn("quests/hard.md", self.calls[-1][1]["systemInstruction"]["parts"][0]["text"])
 
+    def test_openrouter_first_and_fallback_to_hf(self):
+        ci = self.ci
+        os.environ.pop("GEMINI_API_KEY", None)
+        os.environ["OPENROUTER_API_KEY"] = "or"
+        os.environ["HF_TOKEN"] = "hf"
+        hf_calls = []
+
+        async def openrouter(url, body, headers):
+            self.calls.append((url, body))
+            if self.answer_text is None:
+                return 402, {"error": {"message": "insufficient credits"}}
+            return 200, {"choices": [{"message": {"content": self.answer_text}}]}
+
+        async def fake_hf(system, question, previous, max_tokens=800):
+            hf_calls.append(question)
+            return "ответ HF"
+        original_hf = ci._ask_hf
+        ci._post, ci._ask_hf = openrouter, fake_hf
+        try:
+            self.assertEqual(ci.providers(), ["openrouter", "hf"])
+            self.assertEqual(run(ci.ask_ai("сколько стоит продление?")), self.answer_text)
+            self.assertEqual(self.calls[-1][0], ci.OPENROUTER_API)
+            self.assertEqual(self.calls[-1][1]["messages"][0]["role"], "system")
+            self.assertEqual(hf_calls, [])
+            self.answer_text = None  # на OpenRouter кончились деньги — отвечает HF
+            self.assertEqual(run(ci.ask_ai("сколько стоит продление?")), "ответ HF")
+            os.environ["CLAN_AI_PROVIDER"] = "hf"
+            self.assertEqual(ci.providers(), ["hf", "openrouter"])
+        finally:
+            ci._ask_hf = original_hf
+            for key in ("OPENROUTER_API_KEY", "HF_TOKEN", "CLAN_AI_PROVIDER"):
+                os.environ.pop(key, None)
+
     def test_split_text(self):
         chunks = self.ci.split_text("а" * 5000)
         self.assertTrue(all(len(c) <= 1900 for c in chunks))
