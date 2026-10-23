@@ -423,6 +423,8 @@ class Builder:
         if center:
             x = x - rp.text_width(text, size, slots=slots) / 2
         box = rb.text_box(text, x, base, size, slots=slots)
+        if letter and letter not in text:
+            letter = max(set(text), key=lambda ch: (lambda r: r[1] - r[0])(rb.run(text, ch)))
         if letter:
             a, b = rb.run(text, letter)
             cols = rp.stretch_colors(text, a, b, phase=phase, palette=palette)
@@ -517,6 +519,35 @@ class Builder:
         return (x, y, x + w, y + h)
 
 
+def scatter_doodles(b, names, count, seed, sizes=(56, 96), margin=14):
+    """
+    Дудлы в свободных местах: случайные места, размеры и наклоны, только там,
+    где они не задевают текст, картинки и плашки (по раскладке b.lay) и друг
+    друга. Слои — сразу над фоном (под стеклом). -> сколько поставили.
+    """
+    rng = random.Random(seed)
+    placed = []
+    tries = 0
+    while len(placed) < count and tries < 1500:
+        tries += 1
+        size = rng.randint(*sizes)
+        cx, cy = rng.uniform(24 + size / 2, W - 24 - size / 2), rng.uniform(24 + size / 2, H - 24 - size / 2)
+        p = size * 0.12
+        box = (cx - size / 2 + p - margin, cy - size / 2 + p - margin, cx + size / 2 - p + margin, cy + size / 2 - p + margin)
+        if any(box[0] < o[2] and o[0] < box[2] and box[1] < o[3] and o[1] < box[3] for _, o, _ in b.lay.boxes):
+            continue
+        if any(box[0] < o[2] and o[0] < box[2] and box[1] < o[3] and o[1] < box[3] for o in placed):
+            continue
+        placed.append(box)
+        name = names[len(placed) % len(names)]
+        path = name if "/" in name else f"doodle_{name}.png"
+        node = n_image("дудл", rp.icon(path), cx - size / 2, cy - size / 2, size, size, rng.uniform(-18, 18))
+        b.scene.nodes.insert(1, node)
+    for box in placed:
+        b.lay.add("дудл", (box[0] + margin, box[1] + margin, box[2] - margin, box[3] - margin))
+    return len(placed)
+
+
 def face(name, phase=0.15, amp=0.6):
     return rp.solid(name, phase, amp=amp)
 
@@ -535,6 +566,15 @@ def spark_img(r, col=MILK):
 def sparkle(b, cx, cy, r, col=MILK):
     im = spark_img(r, col)
     b.decor("искра", im, cx - im.width / 2, cy - im.height / 2)
+
+
+
+def slot_index(word):
+    """Буква, вместо которой встаёт смайлик: первая «o», иначе «a» или «e»."""
+    for ch in "oae":
+        if ch in word:
+            return word.index(ch)
+    raise ValueError(f"в надписи «{word}» нет буквы o/a/e для смайлика")
 
 
 def bg(kind="wine", seed=3):
@@ -565,12 +605,12 @@ def template(key, label, **defaults):
 @template("news", "Новость — классика", tag="#новости", date="19.10", title="Открыли новый канал для артов",
           text="Кидайте свои рисунки в #арты — лучшие попадут в баннер сервера каждую пятницу.")
 def t_news(b, d):
-    b.background(bg("wine", 2))
+    b.background(bg(d.get("bg", "wine"), d.get("seed", 2)))
     b.glass((40, 40, 1160, 560))
     c = b.chip("тег", d["tag"], 84, 78, fill=LIME)
     b.chip("дата", d["date"], c[2] + 16, 78, fill=MILK)
-    b.word("надпись", "neeeeews", 80, 300, 190, 790, letter="e", palette=PINK_WAVE)
-    b.sprite("смайлик", face("stars"), 975, 230, 270)
+    b.word("надпись", d.get("word", "neeeeews"), 80, 300, 190, 790, letter="e", palette=d.get("wave", PINK_WAVE))
+    b.sprite("смайлик", face(d.get("mood", "stars")), 975, 230, 270)
     b.para("заголовок", d["title"], (84, 340, 1100, 420), 52, color=MILK, weight="Bold", max_lines=1)
     b.para("текст", d["text"], (84, 436, 1100, 530), 30, max_lines=2)
 
@@ -579,13 +619,13 @@ def t_news(b, d):
           items="Стили живых картинок: стекло, 3D и глитч\nКнопка «Изменить» прямо под картинкой\nБаннер сервера обновляется сам",
           date="19.10.2026")
 def t_update(b, d):
-    b.background(bg("ice", 7))
+    b.background(bg(d.get("bg", "ice"), d.get("seed", 7)))
     b.glass((40, 40, 1160, 560))
-    b.word("надпись", "updaaaate", 80, 196, 160, 760, letter="a", palette=ICE_WAVE)
+    b.word("надпись", d.get("word", "updaaaate"), 80, 196, 160, 760, letter="a", palette=d.get("wave", ICE_WAVE))
     box = (850, 86, 1110, 216)
     p = b.plate("версия", box, LIME, radius=34)
     b.label("номер версии", d["version"], 130, 65, 78, anchor="mm", parent=p, width=260, align="center")
-    b.sprite("искры", ic("doodle3d/d3_sparkles.png"), 1070, 470, 110, angle=-10)
+    b.sprite("искры", ic(d.get("ic_искры", "doodle3d/d3_sparkles.png")), 1070, 470, 110, angle=-10)
     b.para("заголовок", d["title"], (84, 236, 800, 296), 46, color=MILK, weight="Bold", max_lines=1)
     icons = ["ui3d/u3_add.png", "ui3d/u3_edit.png", "ui3d/u3_refresh.png", "ui3d/u3_star.png"]
     items = d["items"].split("\n")[:4]
@@ -600,7 +640,7 @@ def t_update(b, d):
           text="Костюмы, мафия и страшилки в войсе. Лучший костюм получит роль на месяц.", time="20:00 МСК",
           place="#войс-ивенты")
 def t_event(b, d):
-    b.background(bg("wine", 4))
+    b.background(bg(d.get("bg", "wine"), d.get("seed", 4)))
     cal = (70, 70, 410, 500)
     cw = cal[2] - cal[0]
     c = b.plate("календарь", cal, MILK, radius=36, depth=14, effects=[soft_shadow()])
@@ -614,8 +654,8 @@ def t_event(b, d):
     b.label("день недели", d["weekday"], cw / 2, cal[3] - cal[1] - 52, 34, "SemiBold", MAROON, anchor="mm",
             parent=c, width=cw, align="center")
     b.glass((460, 40, 1160, 560))
-    b.word("надпись", "eveeeent", 500, 210, 160, 1010, letter="e", palette=PINK_WAVE)
-    b.sprite("шарик", ic("doodle3d/d3_balloon.png"), 1080, 150, 120, angle=8)
+    b.word("надпись", d.get("word", "eveeeent"), 500, 210, 160, 1010, letter="e", palette=d.get("wave", PINK_WAVE))
+    b.sprite("шарик", ic(d.get("ic_шарик", "doodle3d/d3_balloon.png")), 1080, 150, 120, angle=8)
     b.para("заголовок", d["title"], (504, 250, 1120, 310), 48, color=MILK, weight="Bold", max_lines=1)
     b.para("текст", d["text"], (504, 326, 1120, 430), 29, max_lines=3)
     t = b.chip("время", d["time"], 504, 456, fill=LIME, icon="ui3d/u3_time.png")
@@ -625,17 +665,17 @@ def t_event(b, d):
 @template("giveaway", "Розыгрыш", prize="Nitro на месяц", text="Нажми на подарок под постом — победителя выберет бот.",
           until="до 25.10", winners="3 победителя")
 def t_giveaway(b, d):
-    b.background(bg("lime", 4))
+    b.background(bg(d.get("bg", "lime"), d.get("seed", 4)))
     b.glass((40, 40, 1160, 560), alpha=24)
-    b.word("надпись", "giveaaaaway", 600, 200, 170, 1000, letter="a", palette=LIME_WAVE, center=True)
-    b.sprite("подарок", ic("doodle3d/d3_gift.png"), 230, 390, 260, angle=-8)
+    b.word("надпись", d.get("word", "giveaaaaway"), 600, 200, 170, 1000, letter="a", palette=d.get("wave", LIME_WAVE), center=True)
+    b.sprite("подарок", ic(d.get("ic_подарок", "doodle3d/d3_gift.png")), 230, 390, 260, angle=-8)
     sparkle(b, 105, 270, 16, LIME)
     sparkle(b, 360, 280, 12, MILK)
     b.para("приз", d["prize"], (390, 260, 1000, 336), 64, color=LIME, weight="Bold", max_lines=1)
     b.para("текст", d["text"], (392, 350, 960, 430), 30, color=MILK, max_lines=2)
     c = b.chip("срок", d["until"], 392, 456, fill=MILK, icon="ui3d/u3_time.png")
     b.chip("победители", d["winners"], c[2] + 18, 456, fill=LIME, icon="ui3d/u3_trophy.png")
-    b.sprite("смайлик", face("love"), 1060, 420, 170)
+    b.sprite("смайлик", face(d.get("mood", "love")), 1060, 420, 170)
 
 
 def stripes_img(w, h, a=LIME, c=INK, step=46):
@@ -649,15 +689,15 @@ def stripes_img(w, h, a=LIME, c=INK, step=46):
 @template("alert", "Важное объявление", title="Сервер переезжает на новые роли",
           text="С понедельника старые роли перестанут выдаваться. Загляни в #роли и выбери новые.")
 def t_alert(b, d):
-    b.background(bg("dark", 6))
+    b.background(bg(d.get("bg", "dark"), d.get("seed", 6)))
     b.decor("полосы сверху", stripes_img(W, 54), 0, 0)
     b.decor("полосы снизу", stripes_img(W, 54), 0, H - 54)
     b.lay.add("полосы сверху", (0, 0, W, 54))
     b.lay.add("полосы снизу", (0, H - 54, W, H))
     b.glass((40, 90, 1160, 510), dots=False)
-    b.sprite("мегафон", ic("doodle3d/d3_megaphone.png"), 175, 300, 220, angle=-12)
-    i = "attention!".index("o")
-    b.word("надпись", "attention!", 320, 250, 150, 1120, smiley_at=(i,), smiley=face("shock", amp=0.8))
+    b.sprite("мегафон", ic(d.get("ic_мегафон", "doodle3d/d3_megaphone.png")), 175, 300, 220, angle=-12)
+    i = slot_index(d.get("word", "attention!"))
+    b.word("надпись", d.get("word", "attention!"), 320, 250, 150, 1120, smiley_at=(i,), smiley=face(d.get("mood", "shock"), amp=0.8))
     b.para("заголовок", d["title"], (324, 280, 1120, 344), 46, color=LIME, weight="Bold", max_lines=1)
     b.para("текст", d["text"], (324, 360, 1120, 470), 30, max_lines=3)
 
@@ -681,7 +721,7 @@ def starburst_img(r, fill, n=14, angle=0):
           text="Создай команду для любой живой картинки — /казна +60, и картинка в канале перерисуется сама.",
           how="/pictures → Живые картинки → Своя команда", badge="new!")
 def t_feature(b, d):
-    b.background(bg("milk", 3))
+    b.background(bg(d.get("bg", "milk"), d.get("seed", 3)))
     sb = (1000, 150)
     star, scx, scy = starburst_img(120, LIME, angle=8)
     b.decor("звезда", star, sb[0] - scx, sb[1] - scy)
@@ -690,7 +730,7 @@ def t_feature(b, d):
     tw = f.getlength(d["badge"])
     asc, desc = f.getmetrics()
     b.add(n_text("надпись на значке", d["badge"], sb[0] - tw / 2, sb[1] - (asc + desc) / 2, 74, color=INK, angle=14))
-    b.word("надпись", "feeeature", 80, 210, 170, 840, letter="e", palette=INK_WAVE, color=INK)
+    b.word("надпись", d.get("word", "feeeature"), 80, 210, 170, 840, letter="e", palette=d.get("wave", INK_WAVE), color=INK)
     b.para("название", d["name"], (84, 250, 860, 316), 54, color=MAROON, weight="Bold", max_lines=1)
     b.para("текст", d["text"], (84, 334, 1110, 420), 30, color=GREY, max_lines=2)
     box = (80, 452, 1120, 530)
@@ -707,10 +747,10 @@ def t_feature(b, d):
 @template("poll", "Голосование", question="Какой ивент в субботу?",
           options="Мафия:46\nКино-вечер:31\nКараоке:23", hint="голосуй кнопками под постом")
 def t_poll(b, d):
-    b.background(bg("wine", 8))
-    b.word("надпись", "voooote", 80, 190, 170, 560, letter="o", palette=PINK_WAVE)
+    b.background(bg(d.get("bg", "wine"), d.get("seed", 8)))
+    b.word("надпись", d.get("word", "voooote"), 80, 190, 170, 560, letter="o", palette=d.get("wave", PINK_WAVE))
     b.para("вопрос", d["question"], (84, 236, 520, 380), 50, color=MILK, weight="Bold", max_lines=3)
-    b.sprite("смайлик", face("think"), 180, 470, 150)
+    b.sprite("смайлик", face(d.get("mood", "think")), 180, 470, 150)
     b.para("подсказка", d["hint"], (270, 440, 520, 520), 24, color=SOFT, max_lines=2, valign="middle")
     card = (580, 60, 1150, 540)
     g = b.glass(card, alpha=40, name="карточка", check=True)
@@ -733,10 +773,10 @@ def t_poll(b, d):
 
 @template("winners", "Победители", title="Итоги конкурса артов", first="Лиса", second="Кот", third="Ёжик")
 def t_winners(b, d):
-    b.background(bg("wine", 11))
+    b.background(bg(d.get("bg", "wine"), d.get("seed", 11)))
     b.glass((40, 40, 1160, 560))
-    b.word("надпись", "winneeeers", 600, 160, 140, 900, letter="e", palette=PINK_WAVE, center=True)
-    b.para("заголовок", d["title"], (240, 186, 960, 232), 34, color=SOFT, max_lines=1, align="center")
+    b.word("надпись", d.get("word", "winneeeers"), 600, 150, 128, 900, letter="e", palette=d.get("wave", PINK_WAVE), center=True)
+    b.para("заголовок", d["title"], (240, 180, 960, 222), 34, color=SOFT, max_lines=1, align="center")
     blocks = [(2, d["second"], PINK, 300, 380, "laugh"), (1, d["first"], LIME, 600, 330, "cool"),
               (3, d["third"], ICE, 900, 400, "wink")]
     for place, name, col, cx, top, mood in blocks:
@@ -750,32 +790,32 @@ def t_winners(b, d):
             raise ValueError(f"winners: имя «{name}» вылезает из пьедестала")
         b.label("имя", name, 130, 86, size, anchor="mm", parent=p, width=260, align="center")
         b.sprite(f"смайлик {place}", face(mood), cx, top - 54, 120)
-    b.sprite("кубок", ic("doodle3d/d3_trophy.png"), 1080, 300, 110, angle=10)
-    b.sprite("звезда", ic("doodle3d/d3_star.png"), 120, 330, 90, angle=-12)
+    b.sprite("кубок", ic(d.get("ic_кубок", "doodle3d/d3_trophy.png")), 1080, 300, 110, angle=10)
+    b.sprite("звезда", ic(d.get("ic_звезда", "doodle3d/d3_star.png")), 120, 330, 90, angle=-12)
 
 
 @template("maintenance", "Технические работы", title="Бот уходит на техработы",
           text="Обновляем базу и картинки. Команды временно не отвечают — всё вернётся само.",
           window="сегодня 03:00–05:00")
 def t_maintenance(b, d):
-    b.background(rp.glitch(bg("ice", 9), 0.5, random.Random(5)), "фон (глитч)")
+    b.background(rp.glitch(bg(d.get("bg", "ice"), d.get("seed", 9)), 0.5, random.Random(5)), "фон (глитч)")
     b.glass((40, 40, 1160, 560), alpha=30)
-    i = "ooooops".index("o")
-    b.word("надпись", "ooooops", 80, 220, 190, 720, letter="o", palette=ICE_WAVE, phase=0.4,
-           smiley_at=(i,), smiley=face("cracked", amp=0.8))
-    b.sprite("ключ", ic("doodle3d/d3_wrench.png"), 900, 170, 170, angle=-16)
-    b.sprite("шестерёнка", ic("doodle3d/d3_gear.png"), 1060, 230, 130, angle=12)
-    b.para("заголовок", d["title"], (84, 270, 1110, 336), 52, color=MILK, weight="Bold", max_lines=1)
+    i = slot_index(d.get("word", "ooooops"))
+    b.word("надпись", d.get("word", "ooooops"), 80, 220, 190, 720, letter="o", palette=d.get("wave", ICE_WAVE), phase=0.4,
+           smiley_at=(i,), smiley=face(d.get("mood", "cracked"), amp=0.8))
+    b.sprite("ключ", ic(d.get("ic_ключ", "doodle3d/d3_wrench.png")), 900, 170, 170, angle=-16)
+    b.sprite("шестерёнка", ic(d.get("ic_шестерёнка", "doodle3d/d3_gear.png")), 1060, 230, 130, angle=12)
+    b.para("заголовок", d["title"], (84, 270, 990, 336), 52, color=MILK, weight="Bold", max_lines=1)
     b.para("текст", d["text"], (84, 350, 1110, 440), 30, color=MILK, max_lines=2)
     b.chip("время", d["window"], 84, 464, fill=MILK, icon="ui3d/u3_time.png")
 
 
 @template("welcome", "Добро пожаловать", count="+128", text="новых участников за неделю — привет, рады вам!")
 def t_welcome(b, d):
-    b.background(glow(bg("wine", 13), (250, 120, 950, 600), PINK, 70, 90))
-    i = "welcooome".index("o")
-    b.word("надпись", "welcooome", 600, 210, 190, 1080, letter="o", palette=PINK_WAVE, center=True,
-           smiley_at=(i,), smiley=face("smile_lime"))
+    b.background(glow(bg(d.get("bg", "wine"), d.get("seed", 13)), (250, 120, 950, 600), PINK, 70, 90))
+    i = slot_index(d.get("word", "welcooome"))
+    b.word("надпись", d.get("word", "welcooome"), 600, 210, 190, 1080, letter="o", palette=d.get("wave", PINK_WAVE), center=True,
+           smiley_at=(i,), smiley=face(d.get("mood", "smile_lime")))
     moods = ["wink", "love", "laugh", "cool", "stars", "kiss", "smile_pink"]
     n = len(moods)
     for k, m in enumerate(moods):
@@ -792,13 +832,13 @@ def t_welcome(b, d):
 @template("rules", "Правила", title="Обновили правила сервера",
           items="Уважай всех в чате и войсе\nБез рекламы и спама в личку\nАрты — только с подписью автора\nСпорные вопросы — в #поддержка")
 def t_rules(b, d):
-    b.background(bg("dark", 12))
+    b.background(bg(d.get("bg", "dark"), d.get("seed", 12)))
     b.add(n_box("полоса", 0, 0, 210, H, fill=WINE, alpha=210 / 255))
     # надпись снизу вверх вдоль левого края
-    text = "ruuuules"
+    text = d.get("word", "ruuuules")
     size = rp.fit_size(text, H - 60, 150)
-    a, e = rb.run(text, "u")
-    cols = rp.stretch_colors(text, a, e, phase=0.3, palette=LIME_WAVE)
+    a, e = rb.run(text, max(set(text), key=lambda ch: (lambda r: r[1] - r[0])(rb.run(text, ch))))
+    cols = rp.stretch_colors(text, a, e, phase=0.3, palette=d.get("wave", LIME_WAVE))
     asc, desc = font(size).getmetrics()
     bx = rb.text_box(text, 0, 0, size)          # верх/низ букв от базовой линии
     node = n_text("надпись", text, 0, 0, size, runs=[(i, i + 1, c) for i, c in enumerate(cols) if c != MILK],
@@ -810,7 +850,7 @@ def t_rules(b, d):
     node["y"] = H - 30 - tw / 2 - node["h"] / 2
     b.add(node)
     b.lay.add("надпись", (40, H - 30 - tw, 40 + bx[3] - bx[1], H - 30))
-    b.sprite("щит", ic("doodle3d/d3_shield.png"), 1080, 100, 120, angle=10)
+    b.sprite("щит", ic(d.get("ic_щит", "doodle3d/d3_shield.png")), 1080, 100, 120, angle=10)
     b.para("заголовок", d["title"], (260, 54, 1000, 130), 52, color=MILK, weight="Bold", max_lines=1,
            valign="middle")
     items = d["items"].split("\n")[:5]
@@ -830,8 +870,8 @@ def t_rules(b, d):
 @template("live", "Стрим / эфир", title="Рисуем баннер сервера вместе", time="сегодня в 19:00",
           where="#стрим", badge="В ЭФИРЕ")
 def t_live(b, d):
-    b.background(glow(bg("dark", 14), (-100, 200, 600, 700), MAROON, 120, 100))
-    b.word("надпись", "liiive", 70, 300, 200, 560, letter="i", palette=PINK_WAVE)
+    b.background(glow(bg(d.get("bg", "dark"), d.get("seed", 14)), (-100, 200, 600, 700), MAROON, 120, 100))
+    b.word("надпись", d.get("word", "liiive"), 70, 300, 200, 560, letter="i", palette=d.get("wave", PINK_WAVE))
     b.chip("в эфире", d["badge"], 76, 50, fill=MAROON, fg=MILK, size=28, dot=LIME)
     b.para("заголовок", d["title"], (76, 330, 560, 440), 46, color=MILK, weight="Bold", max_lines=2)
     t = b.chip("время", d["time"], 76, 470, fill=MILK, icon="ui3d/u3_time.png", size=24)
@@ -839,7 +879,7 @@ def t_live(b, d):
     scr = (610, 70, 1150, 470)
     g = b.glass(scr, alpha=44, name="экран", effects=[soft_shadow()])
     b.lay.add("экран", (scr[0], scr[1], scr[2], 530))
-    b.sprite("смайлик", face("cool"), 270, 180, 230, parent=g, check=False)
+    b.sprite("смайлик", face(d.get("mood", "cool")), 270, 180, 230, parent=g, check=False)
     b.sprite("кнопка play", ic("ui3d/u3_play.png"), 470, 340, 80, parent=g, check=False)
     b.add(n_box("шкала", 660, 496, 440, 16, fill=(255, 255, 255), alpha=60 / 255, radius=8))
     b.plate("прогресс", (660, 496, 930, 512), LIME, radius=8, depth=3, width=2, check=False)
@@ -847,12 +887,12 @@ def t_live(b, d):
 
 @template("soon", "Скоро / отсчёт", caption="до старта нового сезона", days="02", hours="14", minutes="37")
 def t_soon(b, d):
-    b.background(bg("wine", 16))
+    b.background(bg(d.get("bg", "wine"), d.get("seed", 16)))
     b.glass((40, 40, 1160, 560))
-    b.word("надпись", "sooooon", 600, 210, 190, 900, letter="o", palette=PINK_WAVE, center=True)
-    b.sprite("часы", ic("doodle3d/d3_hourglass.png"), 1040, 150, 140, angle=12)
-    b.sprite("ракета", ic("doodle3d/d3_rocket.png"), 160, 150, 130, angle=-14)
-    b.para("подпись", d["caption"], (200, 236, 1000, 290), 38, color=SOFT, max_lines=1, align="center")
+    b.word("надпись", d.get("word", "sooooon"), 600, 200, 176, 900, letter="o", palette=d.get("wave", PINK_WAVE), center=True)
+    b.sprite("часы", ic(d.get("ic_часы", "doodle3d/d3_hourglass.png")), 1040, 150, 140, angle=12)
+    b.sprite("ракета", ic(d.get("ic_ракета", "doodle3d/d3_rocket.png")), 160, 150, 130, angle=-14)
+    b.para("подпись", d["caption"], (200, 246, 1000, 298), 38, color=SOFT, max_lines=1, align="center")
     parts = [(d["days"], "дней", LIME), (d["hours"], "часов", PINK), (d["minutes"], "минут", ICE)]
     bw, gap = 250, 50
     x0 = 600 - (3 * bw + 2 * gap) / 2
@@ -870,7 +910,7 @@ def t_soon(b, d):
           text="Участники, войс и бусты — теперь цифры на баннере живые.", top_word="breaking",
           bottom_line="срочно · новости сервера")
 def t_breaking(b, d):
-    b.background(bg("wine", 17))
+    b.background(bg(d.get("bg", "wine"), d.get("seed", 17)))
     top = b.add(n_box("лента сверху", 0, 0, W, 86, fill=INK, clip=True))
     b.lay.add("лента сверху", (0, 0, W, 86))
     rep = (d["top_word"] + "  •  ") * 8
@@ -880,7 +920,7 @@ def t_breaking(b, d):
     b.lay.add("лента снизу", (0, H - 70, W, H))
     b.label("бегущая строка", (d["bottom_line"] + " · ") * 6, 20, 35, 30, color=INK, anchor="lm", parent=bot)
     b.glass((40, 120, 1160, 500))
-    b.sprite("смайлик", face("shock", amp=0.8), 1020, 250, 220)
+    b.sprite("смайлик", face(d.get("mood", "shock"), amp=0.8), 1020, 250, 220)
     b.para("заголовок", d["title"], (84, 160, 880, 350), 64, color=MILK, weight="Bold", max_lines=3)
     b.para("текст", d["text"], (84, 372, 900, 470), 30, max_lines=2)
 
@@ -888,16 +928,16 @@ def t_breaking(b, d):
 @template("split", "Сплит: текст + смайлик", title="Горячая новость недели",
           text="Клановые карточки уже в Figma — скоро их будет рисовать бот.", tag="#кланы")
 def t_split(b, d):
-    b.background(bg("wine", 18))
+    b.background(bg(d.get("bg", "wine"), d.get("seed", 18)))
     b.add(n_box("белая половина", -40, -40, 720, H + 80, fill=MILK, radius=60,
                 effects=[shadow_fx(0, 0, 48, (10, 6, 8), 0.35)]))
     b.chip("тег", d["tag"], 70, 60, fill=LIME, size=26)
-    b.word("надпись", "hoooot", 66, 290, 200, 640, letter="o", palette=INK_WAVE, color=INK)
-    b.para("заголовок", d["title"], (70, 320, 630, 390), 46, color=MAROON, weight="Bold", max_lines=1)
-    b.para("текст", d["text"], (70, 404, 630, 540), 30, color=GREY, max_lines=3)
+    b.word("надпись", d.get("word", "hoooot"), 66, 290, 200, 640, letter="o", palette=d.get("wave", INK_WAVE), color=INK)
+    b.para("заголовок", d["title"], (70, 336, 630, 404), 46, color=MAROON, weight="Bold", max_lines=1)
+    b.para("текст", d["text"], (70, 418, 630, 548), 30, color=GREY, max_lines=3)
     b.lay.add("край белой половины", (680, 0, 700, H))
-    b.sprite("смайлик", face("cool", amp=0.9), 945, 300, 360)
-    b.sprite("огонь", ic("doodle3d/d3_fire.png"), 1110, 96, 120, angle=12)
+    b.sprite("смайлик", face(d.get("mood", "cool"), amp=0.9), 945, 300, 360)
+    b.sprite("огонь", ic(d.get("ic_огонь", "doodle3d/d3_fire.png")), 1110, 96, 120, angle=12)
     sparkle(b, 760, 120, 18, LIME)
     sparkle(b, 1120, 520, 14, PINK)
     sparkle(b, 780, 500, 10, MILK)
@@ -918,11 +958,11 @@ def photo_placeholder(w, h, photo=None):
 @template("photo", "Фото-отчёт", title="Как прошёл хэллоуин", caption="31.10 · войс-ивенты",
           text="Сорок человек в костюмах, три раунда мафии и победа команды тыкв.", photo=None)
 def t_photo(b, d):
-    b.background(bg("wine", 19))
-    b.word("надпись", "recaaaap", 70, 200, 170, 640, letter="a", palette=PINK_WAVE)
+    b.background(bg(d.get("bg", "wine"), d.get("seed", 19)))
+    b.word("надпись", d.get("word", "recaaaap"), 70, 200, 170, 640, letter="a", palette=d.get("wave", PINK_WAVE))
     b.para("заголовок", d["title"], (74, 240, 640, 310), 50, color=MILK, weight="Bold", max_lines=1)
     b.para("текст", d["text"], (74, 326, 620, 440), 30, max_lines=3)
-    b.sprite("камера", ic("doodle3d/d3_camera.png"), 140, 500, 110, angle=-10)
+    b.sprite("камера", ic(d.get("ic_камера", "doodle3d/d3_camera.png")), 140, 500, 110, angle=-10)
     pw, ph = 420, 480
     px, py = 710, (H - ph) / 2
     pol = b.add(n_box("полароид", px, py, pw, ph, fill=MILK, radius=14, stroke=INK, stroke_w=5, angle=-6,
@@ -944,7 +984,7 @@ def t_photo(b, d):
 @template("quote", "Цитата", quote="Лучший сервер, где даже бот улыбается в ответ.", author="Лиса",
           role="участница с 2024")
 def t_quote(b, d):
-    b.background(bg("ice", 20))
+    b.background(bg(d.get("bg", "ice"), d.get("seed", 20)))
     b.glass((40, 40, 1160, 560), alpha=30)
     b.label("кавычки", "“", 70, 34, 300, color=LIME, anchor="la",
             effects=[shadow_fx(8, 12, 0, dark(LIME, 0.6), 1.0)])
@@ -954,12 +994,12 @@ def t_quote(b, d):
     b.sprite("аватар", face("smile_pink"), 330, 450, 140)
     b.para("автор", d["author"], (410, 400, 900, 450), 44, color=MILK, weight="Bold", max_lines=1)
     b.para("роль", d["role"], (412, 458, 900, 500), 28, color=WINE, weight="SemiBold", max_lines=1)
-    b.sprite("сердце", ic("doodle3d/d3_heart.png"), 1060, 460, 110, angle=12)
+    b.sprite("сердце", ic(d.get("ic_сердце", "doodle3d/d3_heart.png")), 1060, 460, 110, angle=12)
 
 
 @template("milestone", "Рекорд / цифра", number="1 000", unit="membeeeers", text="нас уже тысяча — спасибо, что вы с нами!")
 def t_milestone(b, d):
-    b.background(bg("lime", 21))
+    b.background(bg(d.get("bg", "lime"), d.get("seed", 21)))
     b.glass((40, 40, 1160, 560), alpha=22)
     num = d["number"]
     size = 270
@@ -969,12 +1009,12 @@ def t_milestone(b, d):
     b.label("число", num, 600, 330, size, color=LIME, anchor="ms", effects=fx, stroke=(INK, 6))
     bx = font(size).getbbox(num, anchor="ms")
     b.lay.add("число", (600 + bx[0], 330 + bx[1], 600 + bx[2], 330 + bx[3]))
-    b.word("надпись", d["unit"], 600, 450, 110, 900, letter="e", palette=LIME_WAVE, center=True)
+    b.word("надпись", d["unit"], 600, 450, 110, 900, letter="e", palette=d.get("wave", LIME_WAVE), center=True)
     b.para("текст", d["text"], (200, 476, 1000, 530), 32, color=MILK, max_lines=1, align="center")
-    b.sprite("смайлик", face("stars"), 1050, 160, 150)
-    b.sprite("звезда", ic("doodle3d/d3_star.png"), 150, 170, 120, angle=-12)
-    b.sprite("медаль", ic("doodle3d/d3_medal.png"), 140, 420, 100, angle=10)
-    b.sprite("конфети", ic("doodle3d/d3_sparkles.png"), 1060, 420, 100)
+    b.sprite("смайлик", face(d.get("mood", "stars")), 1050, 160, 150)
+    b.sprite("звезда", ic(d.get("ic_звезда", "doodle3d/d3_star.png")), 150, 170, 120, angle=-12)
+    b.sprite("медаль", ic(d.get("ic_медаль", "doodle3d/d3_medal.png")), 140, 420, 100, angle=10)
+    b.sprite("конфети", ic(d.get("ic_конфети", "doodle3d/d3_sparkles.png")), 1060, 420, 100)
 
 
 def avatar_img(r, inner, seed):
@@ -986,9 +1026,9 @@ def avatar_img(r, inner, seed):
 @template("collab", "Коллаборация", left="Наш сервер", right="Котики RP",
           text="Объединяем ивенты: общие турниры каждую субботу и обмен ролями.")
 def t_collab(b, d):
-    b.background(bg("wine", 22))
+    b.background(bg(d.get("bg", "wine"), d.get("seed", 22)))
     b.glass((40, 40, 1160, 560))
-    b.word("надпись", "collaaaab", 600, 170, 150, 900, letter="a", palette=PINK_WAVE, center=True)
+    b.word("надпись", d.get("word", "collaaaab"), 600, 170, 150, 900, letter="a", palette=d.get("wave", PINK_WAVE), center=True)
     for cx, name, inner, col in ((330, d["left"], face("smile_lime"), PINK), (870, d["right"], ic("doodle3d/d3_cat.png"), ICE)):
         r, cy = 100, 290
         b.add(n_ellipse("кольцо аватара", cx - r, cy - r, 2 * r, 2 * r, fill=col, stroke=INK, stroke_w=5,
@@ -1008,8 +1048,8 @@ def t_collab(b, d):
                 "Картинки|Три новых стиля живых картинок|ui3d/u3_image.png\n"
                 "Ивенты|Хэллоуин 31.10 в 20:00 в войсе|doodle3d/d3_balloon.png")
 def t_digest(b, d):
-    b.background(bg("dark", 23))
-    b.word("надпись", "weeeekly", 70, 170, 160, 780, letter="e", palette=LIME_WAVE)
+    b.background(bg(d.get("bg", "dark"), d.get("seed", 23)))
+    b.word("надпись", d.get("word", "weeeekly"), 70, 170, 160, 780, letter="e", palette=d.get("wave", LIME_WAVE))
     b.chip("период", d["period"], 1130, 92, fill=LIME, icon="ui3d/u3_time.png", align="right")
     cards = [c.split("|") for c in d["cards"].split("\n")][:3]
     n = len(cards)
