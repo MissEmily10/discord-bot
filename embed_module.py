@@ -578,7 +578,8 @@ class EmbedFieldSelect(discord.ui.Select):
 
 class EmbedEditorView(PanelView):
     texts = "embed.editor"
-    button_order = ('basic', 'meta', 'media', 'add_field', 'confirm', 'preview', 'author_footer', 'timestamp', 'visibility', 'delete_embed')
+    button_order = ('basic', 'meta', 'media', 'add_field', 'confirm', 'preview', 'author_footer', 'timestamp', 'json_edit',
+                    'visibility', 'delete_embed')
 
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
@@ -632,6 +633,11 @@ class EmbedEditorView(PanelView):
     async def timestamp(self, interaction, button):
         self.state.active_embed["timestamp"] = not self.state.active_embed.get("timestamp")
         await self.refresh(interaction)
+
+    @discord.ui.button(label="JSON", emoji="🧾", style=discord.ButtonStyle.secondary, row=4)
+    async def json_edit(self, interaction, button):
+        view = JsonView(interaction, self.state, back_target=(core.screen(interaction), self))
+        await interaction.response.edit_message(content=None, embeds=[view.screen(interaction)], view=view)
 
     @discord.ui.button(label="Удалить embed", emoji="🗑️", style=discord.ButtonStyle.danger, row=2)
     async def delete_embed(self, interaction, button):
@@ -889,6 +895,86 @@ class BuildMetaModal(Modal, title="НАЗВАНИЕ И ТЕКСТ"):
 # ============================================================
 # 4. ИНТЕРАКТИВ: хаб — кнопки, список/выбор и кнопка формы сочетаются
 # ============================================================
+
+# ---------- JSON: вставить сообщение целиком (Discohook, webhook builder, экспорт) ----------
+
+def _json_error(error):
+    key, params = error if isinstance(error, tuple) else (error, {})
+    return t(key, **params)
+
+
+async def apply_json(interaction, state, text):
+    """Текст JSON -> в редактор. -> (пояснение, None) или (None, текст ошибки)."""
+    from build_tools import payload_from_json_text, apply_payload
+    payload, error = payload_from_json_text(text)
+    if error:
+        return None, _json_error(error)
+    return await apply_payload(interaction, state, payload), None
+
+
+def editor_message(state, note):
+    return dict(content=note[:2000], embeds=editor_embeds(state),
+                view=EmbedEditorView(state, back_target=state.editor_back))
+
+
+class JsonView(PanelView):
+    """
+    Сообщение целиком из JSON: вставить в окно (до 4000 символов) или на
+    временной странице без ограничений (5 минут). Там же — текущее сообщение
+    в JSON, чтобы править его как текст.
+    """
+
+    def __init__(self, interaction, state, back_target):
+        super().__init__(back_target=back_target, timeout=600)
+        self.state = state
+        import paste_page
+        from build_tools import state_json
+        current = state_json(state)
+
+        async def from_page(text):
+            note, error = await apply_json(interaction, state, text)
+            if error:
+                return False, error
+            try:
+                await interaction.edit_original_response(**editor_message(state, note))
+            except discord.HTTPException:
+                await interaction.followup.send(ephemeral=True, **editor_message(state, note))
+            return True, t("embed.json.page_done")
+
+        self.link = paste_page.create(t("embed.json.page_title"), t("embed.json.page_hint"), from_page,
+                                      initial=current, user_id=interaction.user.id)
+        if self.link:
+            self.add_item(discord.ui.Button(label=t("embed.json.open_page")[:80], emoji="🌐", url=self.link, row=1))
+
+    def screen(self, interaction):
+        key = "embed.json.text" if self.link else "embed.json.text_no_page"
+        return panel_embed(interaction, "embed.json", t(key), hints=False)
+
+    @discord.ui.button(label="Вставить здесь", emoji="📋", style=discord.ButtonStyle.primary, row=0)
+    async def paste_here(self, interaction, button):
+        await interaction.response.send_modal(JsonModal(self.state))
+
+
+class JsonModal(Modal, title="JSON"):
+    def __init__(self, state):
+        from build_tools import state_json
+        super().__init__(title=t("embed.json.modal_title")[:45])
+        self.state = state
+        current = state_json(state)
+        self.text = discord.ui.TextInput(style=discord.TextStyle.paragraph, max_length=4000,
+                                         default=current if len(current) <= 4000 else None,
+                                         placeholder=t("embed.json.modal_placeholder")[:100])
+        self.add_item(discord.ui.Label(text=t("embed.json.modal_label")[:45],
+                                       description=t("embed.json.modal_help")[:100], component=self.text))
+
+    async def on_submit(self, interaction):
+        await interaction.response.defer()
+        note, error = await apply_json(interaction, self.state, self.text.value)
+        if error:
+            await interaction.followup.send(error, ephemeral=True)
+            return
+        await interaction.edit_original_response(**editor_message(self.state, note))
+
 
 class InteractiveHubView(PanelView):
     texts = "embed.interactive"

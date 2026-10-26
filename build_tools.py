@@ -347,6 +347,134 @@ def parse_export(raw_bytes):
     return data, None
 
 
+# ---------- JSON из конструкторов (Discohook, webhook builder, Discord API) ----------
+
+_DISCORD_STYLES = {1: "blue", 2: "grey", 3: "green", 4: "red", 5: "link"}
+
+
+def _discord_emoji(raw):
+    """{"name": "😀"} / {"id": 1, "name": "cat", "animated": true} / "😀" -> текст эмодзи."""
+    if isinstance(raw, str):
+        return raw or None
+    if not isinstance(raw, dict) or not raw.get("name"):
+        return None
+    if raw.get("id"):
+        return f"<{'a' if raw.get('animated') else ''}:{raw['name']}:{raw['id']}>"
+    return raw["name"]
+
+
+def _url_of(value):
+    return value.get("url") if isinstance(value, dict) else value
+
+
+def _discord_embed(raw):
+    """Embed в формате Discord API (author/footer/image — объекты) -> наш плоский формат."""
+    if not isinstance(raw, dict):
+        return None
+    if not any(isinstance(raw.get(key), dict) for key in ("author", "footer", "image", "thumbnail")) \
+            and not isinstance(raw.get("timestamp"), str):
+        return dict(raw)  # уже наш формат
+    data = {key: raw.get(key) for key in ("title", "description", "url", "color", "fields") if key in raw}
+    author, footer = raw.get("author") or {}, raw.get("footer") or {}
+    if isinstance(author, dict) and author.get("name"):
+        data.update(author_name=author.get("name"), author_url=author.get("url"), author_icon=author.get("icon_url"))
+    if isinstance(footer, dict) and footer.get("text"):
+        data.update(footer_text=footer.get("text"), footer_icon=footer.get("icon_url"))
+    if _url_of(raw.get("image")):
+        data["image"] = _url_of(raw.get("image"))
+    if _url_of(raw.get("thumbnail")):
+        data["thumbnail"] = _url_of(raw.get("thumbnail"))
+    if raw.get("timestamp"):
+        data["timestamp"] = True
+    if isinstance(data.get("color"), str):  # «#ff00aa» из некоторых конструкторов
+        try:
+            data["color"] = int(data["color"].lstrip("#"), 16)
+        except ValueError:
+            data.pop("color")
+    return data
+
+
+def _discord_buttons(components):
+    """components из Discord API -> наши кнопки: ссылки работают сразу, остальным действие — назначить."""
+    buttons = []
+    for row in components or []:
+        children = row.get("components") if isinstance(row, dict) and row.get("type") == 1 else [row]
+        for item in children or []:
+            if not isinstance(item, dict) or item.get("type") != 2:
+                continue
+            style = _DISCORD_STYLES.get(item.get("style"), "grey")
+            buttons.append({"label": str(item.get("label") or "—")[:80], "emoji": _discord_emoji(item.get("emoji")),
+                            "style": style, "action_key": None, "value": item.get("url") if style == "link" else None})
+    return buttons
+
+
+def payload_from_json_text(text):
+    """
+    Любой JSON сообщения -> (payload, None) или (None, ключ ошибки). Понимает:
+    экспорт бота, Discohook / webhook builder ({"messages": [{"data": …}]}),
+    сообщение Discord API ({"content", "embeds", "components"}) и один embed.
+    """
+    raw = (text or "").strip().encode("utf-8")
+    if not raw:
+        return None, "build_tools.json.empty"
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+    except json.JSONDecodeError as error:
+        return None, ("build_tools.json.bad_json_at", {"line": error.lineno, "column": error.colno})
+    if isinstance(data, dict) and isinstance(data.get("messages"), list) and data["messages"]:
+        first = data["messages"][0]  # Discohook: берём первое сообщение
+        data = first.get("data", first) if isinstance(first, dict) else {}
+    if isinstance(data, list):  # просто список embed'ов
+        data = {"embeds": data}
+    if not isinstance(data, dict):
+        return None, "build_tools.json.bad_format"
+    if data.get("format") not in (None, EXPORT_FORMAT):
+        return None, "build_tools.json.bad_format"
+    if not any(key in data for key in ("content", "embeds", "buttons", "components")):
+        if any(key in data for key in ("title", "description", "fields", "image", "author")):
+            data = {"embeds": [data]}  # один embed
+        else:
+            return None, "build_tools.json.bad_format"
+    payload = dict(data)
+    payload["embeds"] = [e for e in (_discord_embed(e) for e in data.get("embeds") or []) if e]
+    if "components" in data and not data.get("buttons"):
+        payload["buttons"] = _discord_buttons(data.get("components"))
+    payload["content"] = str(data.get("content") or "")
+    return payload, None
+
+
+async def apply_payload(interaction, state, payload):
+    """
+    Заменить содержимое открытого редактора (текст, embed'ы, кнопки) на payload.
+    Название, категория, видимость build'а остаются. -> пояснение для экрана.
+    """
+    import media
+    clean, dropped = sanitize_payload(interaction, payload)
+    media_warnings = await media.prepare(interaction.client, clean)
+    name, category, layout = state.name, state.category, state.layout
+    state.load_payload(clean)
+    state.name, state.category = name, category
+    if not payload.get("layout"):
+        state.layout = layout
+    state.active_index = 0
+    note = t("build_tools.json.applied", embeds=len(clean["embeds"]), buttons=len(clean["buttons"]))
+    unconfigured = unconfigured_count(clean)
+    if dropped:
+        note += "\n" + t("build_tools.import.dropped", count=dropped)
+    if unconfigured:
+        note += "\n" + t("build_tools.import.unconfigured", count=unconfigured)
+    for key, params in media_warnings:
+        note += "\n⚠️ " + t(key, **params)
+    return note
+
+
+def state_json(state):
+    """Открытый редактор -> JSON (Discohook-совместимый по смыслу, наш формат embed'ов)."""
+    payload = {"content": state.content or "", "embeds": state.embeds,
+               "buttons": strip_secrets(state.buttons), "interactive": state.interactive}
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
 async def open_imported(interaction, payload, name=None, source_key="build_tools.import.done"):
     """Открыть редактор с импортированным содержимым (ещё не сохранено)."""
     from embed_module import EmbedState, EmbedEditorView, editor_embeds

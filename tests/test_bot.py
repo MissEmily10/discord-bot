@@ -3493,6 +3493,106 @@ class ClanTreasuryTests(unittest.TestCase):
             os.environ.pop("CLAN_SOURCE_BOT_ID", None)
 
 
+class JsonImportTests(unittest.TestCase):
+    DISCOHOOK = json.dumps({"messages": [{"data": {
+        "content": "Привет, кланы!",
+        "embeds": [{"title": "Новости", "description": "текст " * 1200, "color": 15024059,
+                    "author": {"name": "Purr", "icon_url": "https://cdn.example.com/a.png"},
+                    "footer": {"text": "клановые новости"}, "image": {"url": "https://cdn.example.com/b.png"},
+                    "thumbnail": {"url": "https://cdn.example.com/c.png"}, "timestamp": "2026-10-26T12:00:00.000Z"}],
+        "components": [{"type": 1, "components": [
+            {"type": 2, "style": 5, "label": "Сайт", "url": "https://example.com", "emoji": {"name": "🌐"}},
+            {"type": 2, "style": 1, "label": "Жми", "custom_id": "x"}]}]}}]})
+
+    def test_formats_are_understood(self):
+        import build_tools as bt
+        payload, error = bt.payload_from_json_text(self.DISCOHOOK)
+        self.assertIsNone(error)
+        embed = payload["embeds"][0]
+        self.assertEqual((embed["author_name"], embed["footer_text"], embed["image"], embed["thumbnail"]),
+                         ("Purr", "клановые новости", "https://cdn.example.com/b.png", "https://cdn.example.com/c.png"))
+        self.assertTrue(embed["timestamp"])
+        self.assertEqual([(b["label"], b["style"], b["emoji"]) for b in payload["buttons"]],
+                         [("Сайт", "link", "🌐"), ("Жми", "blue", None)])
+        self.assertEqual(bt.payload_from_json_text('{"title": "один embed"}')[0]["embeds"][0]["title"], "один embed")
+        self.assertEqual(bt.payload_from_json_text('{"content": "a",\n  "embeds": [}')[1][0],
+                         "build_tools.json.bad_json_at")
+        self.assertEqual(bt.payload_from_json_text("")[1], "build_tools.json.empty")
+
+    def test_modal_and_page_replace_editor_content(self):
+        import embed_module as em
+        import paste_page
+        g = make_guild()
+        state = em.EmbedState(GUILD, STAFF)
+        state.name = "Мой пост"
+        edits = []
+
+        def interaction():
+            i = FakeInteraction(g, g.members[STAFF])
+
+            async def edit_original_response(**kwargs):
+                edits.append(kwargs)
+            i.edit_original_response = edit_original_response
+            return i
+
+        modal = em.JsonModal(state)
+        modal.text._value = self.DISCOHOOK
+        run(modal.on_submit(interaction()))
+        self.assertEqual(state.content, "Привет, кланы!")
+        self.assertEqual(state.name, "Мой пост")  # название build'а не тронуто
+        self.assertEqual(state.embeds[0]["title"], "Новости")
+        self.assertIn("embed", edits[-1]["content"])
+        # страница: длинный текст без лимита окна Discord
+        os.environ["WEB_PANEL_PORT"], os.environ["WEB_PANEL_URL"] = "8080", "http://panel.test"
+        try:
+            view = em.JsonView(interaction(), state, back_target=None)
+            self.assertTrue(view.link.startswith("http://panel.test/paste/"))
+            token = view.link.rsplit("/", 1)[1]
+            entry = paste_page._pastes[token]
+            self.assertIn('"Новости"', entry["initial"])  # текущее сообщение — уже в поле
+            ok, message = run(entry["handler"]('{"embeds": [{"title": "' + "Длинно " * 900 + '"}]}'))
+            self.assertTrue(ok)
+            self.assertTrue(state.embeds[0]["title"].startswith("Длинно"))
+            ok, message = run(entry["handler"]("{битый"))
+            self.assertFalse(ok)
+            self.assertIn("строке", message)
+        finally:
+            os.environ.pop("WEB_PANEL_PORT", None)
+            os.environ.pop("WEB_PANEL_URL", None)
+
+    def test_paste_page_http(self):
+        import paste_page
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+        received = []
+
+        async def handler(text):
+            received.append(text)
+            return True, "готово"
+
+        async def check():
+            app = web.Application()
+            paste_page.add_routes(app)
+            os.environ["WEB_PANEL_PORT"], os.environ["WEB_PANEL_URL"] = "8080", "http://panel.test"
+            try:
+                link = paste_page.create("Заголовок <b>", "Подсказка", handler, initial="старое & текст")
+            finally:
+                os.environ.pop("WEB_PANEL_PORT", None)
+                os.environ.pop("WEB_PANEL_URL", None)
+            path = "/paste/" + link.rsplit("/", 1)[1]
+            async with TestClient(TestServer(app)) as client:
+                page = await (await client.get(path)).text()
+                self.assertIn("старое &amp; текст", page)
+                self.assertNotIn("<b>", page.split("<title>")[1].split("</title>")[0])
+                answer = await (await client.post(path, json={"text": "x" * 100000})).json()
+                self.assertTrue(answer["ok"])
+                self.assertEqual(len(received[0]), 100000)
+                again = await (await client.post(path, json={"text": "y"})).json()
+                self.assertFalse(again["ok"])  # ссылка одноразовая
+                self.assertEqual((await client.get(path)).status, 410)
+        run(check())
+
+
 class ClanInfoTests(unittest.TestCase):
     def test_question_by_mention_answers_topic(self):
         import clan_info

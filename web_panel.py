@@ -392,6 +392,8 @@ def build_app():
     app.router.add_post("/api/assets", upload_asset)
     app.router.add_get("/assets/{name}", get_asset)
     app.router.add_get("/art/{name}", get_art)
+    import paste_page
+    paste_page.add_routes(app)  # временные страницы для длинного текста (JSON, новости)
     return app
 
 
