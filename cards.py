@@ -1545,8 +1545,8 @@ async def open_editor(interaction, card_id):
                                              attachments=[])
 
 
-def _skip_button(view, label_key, callback):
-    button = view._nav(discord.ui.Button(label=t(label_key)[:80], emoji="⏭️", style=discord.ButtonStyle.secondary,
+def _skip_button(view, label_key, callback, emoji="⏭️"):
+    button = view._nav(discord.ui.Button(label=t(label_key)[:80], emoji=emoji, style=discord.ButtonStyle.secondary,
                                          row=4))
     button.callback = callback
     button._carry = True
@@ -1590,6 +1590,10 @@ async def color_step(interaction, card, wizard):
     if wizard:
         async def keep(i):
             await DataKindsView.open(i, card_id, wizard=True)
+
+        async def back(i):  # передумала со стилем — шаг назад
+            await style_step(i, get_card(card_id), wizard=True)
+        _skip_button(view, "cards.wizard.back_style", back, emoji="◀️")
         _skip_button(view, "cards.wizard.keep_color", keep)
     else:
         _back_to_editor(view, card_id)
@@ -1739,6 +1743,14 @@ class DataKindsView(PanelView):
             yes.callback, no.callback = on_yes, on_no
             self.add_item(yes)
             self.add_item(no)
+            if wizard and card["template"] != "rating":  # шаг назад — к цвету
+                back = self._nav(discord.ui.Button(label=t("cards.wizard.back_color")[:80], emoji="◀️",
+                                                   style=discord.ButtonStyle.secondary, row=4))
+
+                async def to_color(i):
+                    await color_step(i, get_card(self.card_id), wizard=True)
+                back.callback = to_color
+                self.add_item(back)
             return
         select = discord.ui.Select(placeholder=t("cards.kinds.pick")[:150], options=[
             discord.SelectOption(label=label[:100], value=key,

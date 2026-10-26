@@ -1585,14 +1585,14 @@ class CardTemplateTests(unittest.TestCase):
                 png = ct.sample(template, "night", style)
                 self.assertEqual(PILImage.open(io.BytesIO(png)).width, 1200, (template, style))
 
-    def test_glass_and_glitch_keep_own_colors(self):
+    def test_glass_and_glitch_follow_theme(self):
         import card_templates as ct
         from PIL import Image as PILImage
-        # у стекла и глитча свои цвета: тема картинки на них не влияет
+        # стекло и глитч — тёмные стили, но цвет картинки меняется и у них (раньше тема не действовала)
         for style in ("glass", "glitch"):
             a = PILImage.open(io.BytesIO(ct.sample("counter", "cream", style))).convert("RGB")
             b = PILImage.open(io.BytesIO(ct.sample("counter", "lime", style))).convert("RGB")
-            self.assertEqual(a.getpixel((600, 300)), b.getpixel((600, 300)), style)
+            self.assertNotEqual(a.getpixel((600, 300)), b.getpixel((600, 300)), style)
         self.assertNotIn("glass", ct.THEME_NAMES)
 
     def test_generic_command_semantics(self):
@@ -4122,7 +4122,7 @@ class LiveCardWizardTests(unittest.TestCase):
             self.assertIsInstance(kinds, cards.DataKindsView)
             self.assertTrue(kinds.ask)  # сначала вопрос «Поменять? Да / Нет»
             labels = [item.label for item in kinds.children]
-            self.assertEqual(labels, ["Да, поменять", "Нет, всё так"])
+            self.assertEqual(labels, ["Да, поменять", "Нет, всё так", "Назад к цвету"])
             i = self.interaction(g)
             await kinds.children[1].callback(i)
             self.assertIsInstance(i.edits[-1]["view"], cards.CardEditorView)
@@ -4171,6 +4171,27 @@ class LiveCardWizardTests(unittest.TestCase):
             fresh = cards.get_card(card["id"])
             self.assertEqual(fresh["data"]["value"], 7)
             self.assertEqual(fresh["data"]["kinds"], {"caption": "mention"})
+
+        run(check())
+
+    def test_colour_works_for_every_style_and_back_buttons(self):
+        import cards
+        import card_templates as ct
+        for style in ("glass", "glitch", "figma"):  # у стекла и глитча цвет раньше не менялся
+            self.assertNotEqual(ct.sample("counter", "cream", style), ct.sample("counter", "blue", style), style)
+        for theme in ct.THEME_NAMES:  # текст на вертикальной плашке читается: оба конца градиента одного тона
+            start, end = ct.vertical_grad(ct.THEMES[theme])
+            self.assertEqual(ct.contrast(start), ct.contrast(end), theme)
+        g = make_guild()
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "Назад", "counter"))
+
+        async def check():
+            i = self.interaction(g)
+            await cards.color_step(i, card, wizard=True)
+            back = next(item for item in i.edits[-1]["view"].children if item.label == "Назад к стилю")
+            i = self.interaction(g)
+            await back.callback(i)
+            self.assertIsInstance(i.edits[-1]["view"], cards.StyleGalleryView)
 
         run(check())
 

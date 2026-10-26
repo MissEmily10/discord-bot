@@ -32,6 +32,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FONT_DIR = os.path.join(ROOT, "fonts")
 WIDTH, PAD, HEAD = 1200, 56, 190
+ROW_INSET = 24  # текст строк списка — внутри выделенной строки, а не на её краю
 MAX_TEXT = 600
 MAX_TABLE_ROWS, MAX_TABLE_COLUMNS = 12, 5
 
@@ -67,15 +68,61 @@ THEME_GRADIENTS = {
 }
 for _key, _extra in THEME_GRADIENTS.items():
     THEMES[_key].update(_extra)
-# свои цвета у стекла и глитча (тема на них не влияет, в выборе темы их нет)
-STYLE_PALETTES = {
-    "glass": dict(bg=(92, 52, 64), ink=(244, 240, 236), muted=(226, 196, 206), accent=LIME, accent2=BLUE,
-                  soft=(112, 70, 84), head=(244, 240, 236), head_ink=(92, 52, 64), grad=(LIME, PINK),
-                  tile=((120, 78, 92), (150, 112, 128))),
+# Стекло и глитч — тёмные стили: из темы берут тёмную основу и два ярких
+# («неоновых») цвета, чтобы цвет картинки менялся и у них.
+DARK_TONES = {  # тема -> (тёмная основа, яркий 1, яркий 2)
+    "cream": ((22, 20, 24), LIME, PINK),
+    "night": ((16, 16, 22), LIME, (196, 170, 255)),
+    "pink": ((56, 16, 30), (255, 150, 190), (255, 218, 228)),
+    "blue": ((14, 28, 46), (130, 200, 255), LIME),
+    "lime": ((20, 30, 8), LIME, (236, 255, 190)),
+    "maroon": ((46, 8, 18), (255, 96, 128), PINK),
+    "mono": ((16, 16, 16), (240, 240, 240), (150, 150, 150)),
+}
+LIGHT_INK = (244, 240, 236)
+# у «Сливочной» стекло — как на баннерах бота (серо-голубой → бордо)
+GLASS_CREAM = dict(top=(150, 160, 172), bottom=(54, 26, 34),
+                   blobs=((120, 82, 94), (176, 150, 168), (122, 22, 38), (60, 30, 40)))
+
+
+STYLE_CREAM = {
+    "glass": dict(bg=(92, 52, 64), ink=LIGHT_INK, muted=(226, 196, 206), accent=LIME, accent2=BLUE,
+                  soft=(112, 70, 84), head=LIGHT_INK, head_ink=(92, 52, 64), grad=(LIME, PINK),
+                  tile=((120, 78, 92), (150, 112, 128)), glass=GLASS_CREAM),
     "glitch": dict(bg=(22, 20, 24), ink=(238, 236, 240), muted=(150, 146, 156), accent=LIME, accent2=PINK,
                    soft=(40, 36, 44), head=LIME, head_ink=(22, 20, 24), grad=(LIME, PINK),
                    tile=((40, 36, 44), (62, 54, 70))),
 }
+
+
+def glass_tones(theme):
+    """Фон стекла в цветах темы: сверху светлее, снизу — тёмная основа, размытые пятна ярких цветов."""
+    if theme not in DARK_TONES or theme == "cream":
+        return GLASS_CREAM
+    dark, bright, second = DARK_TONES[theme]
+    # верх — приглушённый (белый заголовок должен читаться), низ — тёмная основа
+    top = mix(mix(mix(second, bright, 0.3), (120, 124, 132), 0.45), dark, 0.4)
+    return dict(top=top, bottom=mix(dark, (0, 0, 0), 0.1),
+                blobs=(mix(bright, dark, 0.55), mix(second, (255, 255, 255), 0.1), mix(bright, dark, 0.3),
+                       mix(dark, (0, 0, 0), 0.3)))
+
+
+def style_palette(name, theme):
+    """Цвета стекла/глитча под тему (тема та же, что у остальных стилей)."""
+    if theme not in DARK_TONES or theme == "cream":  # «Сливочная» — исходные цвета стекла и глитча
+        return dict(STYLE_CREAM[name])
+    dark, bright, second = DARK_TONES[theme]
+    if name == "glass":
+        tones = glass_tones(theme)
+        bg = mix(tones["top"], tones["bottom"], 0.55)
+        soft = mix(bg, (255, 255, 255), 0.12)
+        return dict(bg=bg, ink=LIGHT_INK, muted=mix(LIGHT_INK, bright, 0.25), accent=bright,
+                    accent2=mix(second, (255, 255, 255), 0.35), soft=soft, head=LIGHT_INK, head_ink=bg,
+                    grad=(bright, second), tile=(soft, mix(soft, second, 0.25)), glass=tones)
+    soft = mix(dark, (255, 255, 255), 0.08)
+    # приглушённый текст темнее порога глитча — подписи не двоятся
+    return dict(bg=dark, ink=(238, 236, 240), muted=mix((238, 236, 240), dark, 0.46), accent=bright, accent2=second,
+                soft=soft, head=bright, head_ink=dark, grad=(bright, second), tile=(soft, mix(soft, second, 0.2)))
 
 # Стиль = приёмы оформления поверх темы (цвета берутся из темы):
 #   accent — чем залит главный акцент: gradient / solid / soft / outline / stripes / dots / duo
@@ -84,7 +131,7 @@ STYLE_PALETTES = {
 #   header — что под заголовком: fade / bar / underline / highlight / dots / box / none; case — lower / upper
 #   bg     — узор фона: plain / dots / grid / frame / corner / band / confetti; bang — «!» справа
 #   fx     — особый приём: glass (стекло), sticker3d (объёмный бок + 3D-дудлы), glitch (расслоение, сканлайны)
-#   palette — свои цвета стиля вместо темы (у стекла и глитча)
+#   palette — тёмная палитра из цветов темы (у стекла и глитча, см. style_palette)
 def _style(name, accent, tile, radius, stroke, shadow, header, case, bg, bang=True, fx=None, palette=None):
     return dict(name=name, accent=accent, tile=tile, radius=radius, stroke=stroke, shadow=shadow, header=header,
                 case=case, bg=bg, bang=bang, fx=fx, palette=palette)
@@ -452,6 +499,12 @@ def clean(text):
     return re.sub(r"\s{2,}", " ", _EMOJI.sub("", str(text if text is not None else ""))).strip()
 
 
+def readable(color, fill):
+    """color поверх fill, если различимы; иначе — тёмный/светлый по фону."""
+    lum = lambda c: 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]  # noqa: E731
+    return color if abs(lum(color) - lum(fill)) > 100 else contrast(fill)
+
+
 def contrast(fill):
     """Тёмный или светлый текст поверх заливки fill."""
     r, g, b = fill[:3]
@@ -516,6 +569,15 @@ def grad_box(cv, box, radius, colors, stops=(0.26, 0.79), vertical=False, bottom
         cv.draw.rounded_rectangle((x0, y0, x1, y1), radius=radius, outline=outline, width=width)
 
 
+def _inside(cv, box):
+    """Плашка у правого отступа + тень стиля -> сузить плашку, чтобы тень не вылезала за отступ."""
+    off = cv.st["shadow"]
+    x0, y0, x1, y1 = box
+    if off and x1 > WIDTH - PAD - off:
+        x1 = max(x0 + 1, WIDTH - PAD - off)
+    return (x0, y0, x1, y1)
+
+
 def _r(cv, box, radius):
     x0, y0, x1, y1 = box
     return int(max(0, min(radius * cv.st["radius"], (x1 - x0) / 2, (y1 - y0) / 2)))
@@ -554,6 +616,7 @@ def glass_box(cv, box, radius, alpha=40):
 
 def shape(cv, box, radius, fill, outline=True):
     """Плашка в духе стиля: скругление, обводка и тень берутся из стиля."""
+    box = _inside(cv, box)
     r = _r(cv, box, radius)
     if cv.st.get("fx") == "glass" and fill in (cv.theme["soft"], cv.theme["bg"]):
         glass_box(cv, box, r)
@@ -590,14 +653,16 @@ def _pattern(cv, box, radius, base, ink, kind):
 def accent_fill(cv, box, radius, outline=True, vertical=False):
     """Главный акцент — по стилю: градиент, сплошной, контур, полоски, горошек, дуотон…"""
     c, kind = cv.theme, cv.st["accent"]
+    box = _inside(cv, box) if outline else box
     r = _r(cv, box, radius)
     if outline:
         _shadow(cv, box, r, c["grad"][1] if kind == "gradient" else c["accent"])
     if kind == "gradient":
-        grad_box(cv, box, r, c["grad"], (0.26, 0.79) if not vertical else (0.08, 1.0), vertical=vertical,
-                 bottom_up=vertical)
+        grad_box(cv, box, r, c["grad"] if not vertical else vertical_grad(c), (0.26, 0.79) if not vertical
+                 else (0.08, 1.0), vertical=vertical, bottom_up=vertical)
     elif kind == "outline":
-        cv.draw.rounded_rectangle(box, radius=r, fill=c["bg"], outline=c["grad"][0], width=max(4, cv.st["stroke"]))
+        line = c["grad"][0] if readable(c["grad"][0], c["bg"]) == c["grad"][0] else c["accent"]  # бледный контур не видно
+        cv.draw.rounded_rectangle(box, radius=r, fill=c["bg"], outline=line, width=max(4, cv.st["stroke"]))
         return
     elif kind in ("stripes", "dots"):
         # узор мягкий (тон в тон), чтобы текст поверх читался
@@ -617,9 +682,26 @@ def accent_fill(cv, box, radius, outline=True, vertical=False):
     _outline(cv, box, r, outline)
 
 
-def accent_ink(cv, end=False):
+def vertical_grad(c):
+    """
+    Градиент вертикальной плашки (с текстом по центру). Если концы градиента
+    требуют разного текста (салатовый → бордо), смесь вышла бы грязной, а текст
+    не читался бы на одном из концов — тогда плашка в главном цвете темы с
+    лёгким переходом в его же оттенок, и текст читается по всей высоте.
+    """
+    start, end = c["grad"]
+    if contrast(start) == contrast(end):
+        return start, end
+    base = c["accent"] if c["accent"] in (tuple(start), tuple(end)) else start
+    shade = mix(base, (0, 0, 0), 0.18) if contrast(base) == INK else mix(base, (255, 255, 255), 0.18)
+    return base, shade
+
+
+def accent_ink(cv, end=False, vertical=False):
     """Цвет текста поверх акцента (end — у дальнего конца градиента / второй половины)."""
     c, kind = cv.theme, cv.st["accent"]
+    if kind == "gradient" and vertical:
+        return contrast(vertical_grad(c)[0])
     if kind == "gradient":
         return contrast(c["grad"][1] if end else c["grad"][0])
     if kind == "outline":
@@ -634,6 +716,7 @@ def accent_ink(cv, end=False):
 def tile_fill(cv, box, radius, outline=True):
     """Второстепенная плашка — по стилю: градиент светлый → голубой, сплошная или только контур."""
     c, kind = cv.theme, cv.st["tile"]
+    box = _inside(cv, box) if outline else box
     r = _r(cv, box, radius)
     if cv.st.get("fx") == "glass":
         glass_box(cv, box, r, 52)
@@ -655,7 +738,7 @@ def background(cv):
     w, h = cv.image.size
     faint = tuple(int(a * 0.85 + b * 0.15) for a, b in zip(c["bg"], c["muted"]))
     if kind == "glass":
-        cv.image.paste(glass_background(w, h), (0, 0))
+        cv.image.paste(glass_background(w, h, c.get("glass") or GLASS_CREAM), (0, 0))
         return
     if kind == "scan":
         for y in range(0, h, 4):
@@ -675,18 +758,18 @@ def background(cv):
     elif kind == "frame":
         d.rounded_rectangle((14, 14, w - 14, h - 14), radius=24, outline=c["ink"], width=4)
     elif kind == "corner":
-        d.ellipse((w - 260, -180, w + 160, 240), fill=c["soft"])
-        d.ellipse((-140, h - 120, 140, h + 160), fill=c["soft"])
+        d.ellipse((w - 230, -190, w + 150, 176), fill=c["soft"])
+        d.ellipse((-150, h - 96, 120, h + 170), fill=c["soft"])
     elif kind == "band":
         d.rectangle((0, 0, 18, h), fill=c["accent"])
     elif kind == "confetti":
         import random as _random
         rng = _random.Random(7)
         colors = [c["accent"], c["accent2"], c["grad"][1]]
-        for _ in range(28):
+        for _ in range(60):
             x, y = rng.randint(0, w), rng.randint(0, h)
-            if PAD < x < w - PAD and 190 < y < h - 40:
-                continue  # не под текстом
+            if PAD - 22 < x < w - PAD + 6 and 18 < y < h - 26:
+                continue  # только поля: на заголовке и тексте конфетти читалось бы как точки и буквы
             size = rng.randint(6, 14)
             d.rounded_rectangle((x, y, x + size, y + size // 2), radius=3, fill=rng.choice(colors))
 
@@ -694,16 +777,19 @@ def background(cv):
 _glass_cache = {}
 
 
-def glass_background(w, h):
-    """Фон «стекла» как на баннерах бота: размытые пятна серо-голубого, бордо и тёмного."""
+def glass_background(w, h, tones=None):
+    """Фон «стекла»: вертикальный градиент и размытые пятна (у «Сливочной» — как на баннерах бота)."""
     from PIL import ImageFilter
-    key = (w, h)
+    tones = tones or GLASS_CREAM
+    key = (w, h, tones["top"], tones["bottom"], tones["blobs"])
     if key not in _glass_cache:
-        base = gradient((w, h), ((150, 160, 172), (54, 26, 34)), (0.0, 1.0), vertical=True).convert("RGB")
+        if len(_glass_cache) > 32:
+            _glass_cache.clear()
+        base = gradient((w, h), (tones["top"], tones["bottom"]), (0.0, 1.0), vertical=True).convert("RGB")
         blobs = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         d = ImageDraw.Draw(blobs)
-        for x, y, r, col in ((0.15, 0.2, 0.45, (120, 82, 94)), (0.85, 0.15, 0.4, (176, 150, 168)),
-                             (0.7, 0.9, 0.5, (122, 22, 38)), (0.1, 0.95, 0.35, (60, 30, 40))):
+        for (x, y, r), col in zip(((0.15, 0.2, 0.45), (0.85, 0.15, 0.4), (0.7, 0.9, 0.5), (0.1, 0.95, 0.35)),
+                                  tones["blobs"]):
             d.ellipse(((x - r) * w, (y - r * 0.6) * h * 1.6, (x + r) * w, (y + r * 0.6) * h * 1.6), fill=col + (150,))
         blobs = blobs.filter(ImageFilter.GaussianBlur(max(w, h) * 0.07))
         out = base.convert("RGBA")
@@ -730,7 +816,7 @@ def _stickers(cv, title):
         cv.image.paste(im, (x, y), im)
 
 
-def glitch(image, seed=3):
+def glitch(image, seed=3, colors=(LIME, PINK)):
     """
     Глитч: салатовая и розовая кромки у светлых контуров (сдвиг влево/вправо),
     сканлайны и цветные «сбои» на полях. Сам текст и плашки не рвём — читается.
@@ -740,30 +826,29 @@ def glitch(image, seed=3):
     rng = _random.Random(seed)
     base = image.convert("RGBA")
     w, h = base.size
-    light = image.convert("L").point(lambda v: 255 if v > 150 else 0)
+    light = image.convert("L").point(lambda v: 255 if v > 175 else 0)  # подписи (приглушённые) не двоятся
     edges = Image.eval(light, lambda v: v).filter(ImageFilter.FIND_EDGES).point(lambda v: 255 if v > 40 else 0)
     edges = edges.filter(ImageFilter.MaxFilter(3))
     out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    for color, dx in ((LIME, -4), (PINK, 4)):
+    for color, dx in ((colors[0], -4), (colors[1], 4)):
         tint = Image.new("RGBA", (w, h), color + (0,))
         tint.putalpha(edges.point(lambda v: int(v * 0.75)))
         out.paste(tint, (dx, 0), tint)
     result = base.copy()
     result.alpha_composite(out)
-    # исходник поверх кромок — сами буквы остаются чистыми
-    keep = light.filter(ImageFilter.MinFilter(3))
+    # исходник поверх кромок — сами буквы остаются чистыми; светлые плашки «закрываем» целиком,
+    # чтобы тёмный текст на них (подпись на салатовой плашке) не обводился цветом
+    keep = light.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.MinFilter(9)).filter(ImageFilter.MinFilter(3))
     result.paste(base, (0, 0), keep)
     d = ImageDraw.Draw(result)
-    # «сбои» на правом поле и в шапке
-    for _ in range(6):
-        x = rng.randrange(w - PAD + 6, w - 8)
-        y = rng.randrange(HEAD, max(HEAD + 1, h - 20))
-        d.rectangle((x, y, min(w - 4, x + rng.randrange(10, 30)), y + rng.randrange(3, 8)),
-                    fill=rng.choice((LIME, PINK, (238, 236, 240))) + (220,))
-    for _ in range(3):
-        x = rng.randrange(PAD + 820, w - PAD - 120)
-        y = rng.randrange(150, 182)
-        d.rectangle((x, y, x + rng.randrange(20, 60), y + 4), fill=rng.choice((LIME, PINK)) + (200,))
+    # «сбои» — только у самого края картинки (у текста они читались бы как минусы)
+    for _ in range(5):
+        y = rng.randrange(20, max(21, h - 20))
+        if rng.random() < 0.5:
+            x0, x1 = w - rng.randrange(14, 26), w
+        else:
+            x0, x1 = 0, rng.randrange(12, 24)
+        d.rectangle((x0, y, x1, y + rng.randrange(3, 7)), fill=rng.choice(colors) + (220,))
     # сканлайны
     lines = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     ld = ImageDraw.Draw(lines)
@@ -779,7 +864,8 @@ class Canvas:
     def __init__(self, title, data, body_height, accent=True):
         self.style = data.get("style") if data.get("style") in STYLE_DEFS else DEFAULT_STYLE
         self.st = STYLE_DEFS[self.style]
-        self.theme = STYLE_PALETTES.get(self.st.get("palette")) or THEMES.get(data.get("theme"), THEMES["cream"])
+        theme = data.get("theme") if data.get("theme") in THEMES else "cream"
+        self.theme = style_palette(self.st["palette"], theme) if self.st.get("palette") else THEMES[theme]
         self.height = HEAD + body_height + PAD
         self.image = Image.new("RGB", (WIDTH, self.height), self.theme["bg"])
         self.draw = ImageDraw.Draw(self.image)
@@ -789,23 +875,26 @@ class Canvas:
         stickers = st.get("fx") == "sticker3d"
         right = WIDTH - PAD - (140 if bang else 260 if stickers else 0)
         text = (title or "").upper() if st["case"] == "upper" else (title or "").lower()
-        shown, title_font = fit(text, "title", 104 if st["case"] == "lower" else 92, right - PAD, 40)
-        title_w = title_font.getlength(shown)
         header = st["header"] if accent else "none"
-        if header == "highlight":  # плашка-маркер под нижней половиной заголовка
-            self.draw.rounded_rectangle((PAD - 10, 82, PAD + title_w + 10, 128), radius=12, fill=c["accent2"])
-        if header == "box":  # заголовок в тёмной плашке
-            self.draw.rectangle((PAD - 16, 30, PAD + title_w + 20, 140), fill=c["head"])
-        self.draw.text((PAD, 122), shown, font=title_font, fill=c["head_ink"] if header == "box" else c["ink"],
-                       anchor="ls")
+        inset = 22 if header == "box" else 0  # в плашке текст отступает от её края
+        shown, title_font = fit(text, "title", 104 if st["case"] == "lower" else 92, right - PAD - 2 * inset, 40)
+        title_w = title_font.getlength(shown)
+        if header == "highlight":  # плашка-маркер под нижней половиной заголовка (от отступа, не левее)
+            marker = c["accent2"] if readable(c["ink"], c["accent2"]) == c["ink"] else mix(c["accent2"], c["bg"], 0.65)
+            self.draw.rounded_rectangle((PAD, 84, PAD + title_w + 12, 128), radius=12, fill=marker)
+        if header == "box":  # заголовок в тёмной плашке, плашка — ровно по отступу
+            self.draw.rounded_rectangle((PAD, 32, PAD + title_w + 2 * inset, 146), radius=_r(self, (0, 0, 999, 999), 10),
+                                        fill=c["head"])
+        self.draw.text((PAD + inset, 122), shown, font=title_font,
+                       fill=c["head_ink"] if header == "box" else c["ink"], anchor="ls")
         if header == "bar":  # короткая черта с обводкой
             self.draw.rounded_rectangle((PAD, 140, PAD + 120, 152), radius=6, fill=c["accent"], outline=c["ink"],
                                         width=3)
         elif header == "fade":  # линия 800×12: цвет акцента растворяется к концу
             start = c["grad"][0]
             grad_box(self, (PAD, 160, PAD + 801, 172), 6, (start, tuple(start) + (0,)), (0.0, 1.0))
-        elif header == "underline":
-            self.draw.rectangle((PAD, 150, WIDTH - PAD, 154), fill=c["ink"])
+        elif header == "underline":  # до «!» / наклеек, не сквозь них
+            self.draw.rectangle((PAD, 150, right if (bang or stickers) else WIDTH - PAD, 154), fill=c["ink"])
         elif header == "dots":
             for n in range(12):
                 self.draw.ellipse((PAD + n * 22, 150, PAD + n * 22 + 10, 160), fill=c["accent"] if n % 2 else c["ink"])
@@ -821,7 +910,7 @@ class Canvas:
 
     def png(self):
         if self.st.get("fx") == "glitch":
-            self.image = glitch(self.image)
+            self.image = glitch(self.image, colors=self.theme["grad"])
         output = io.BytesIO()
         self.image.save(output, "PNG", optimize=True)
         return output.getvalue()
@@ -942,7 +1031,7 @@ def render_countdown(title, data):
                 accent_fill(cv, (x, HEAD + 20, x + box_w, HEAD + 200), 28, vertical=True)
             else:
                 shape(cv, (x, HEAD + 20, x + box_w, HEAD + 200), 28, c["soft"])
-            on = accent_ink(cv) if n == 0 else c["ink"]
+            on = accent_ink(cv, vertical=True) if n == 0 else c["ink"]
             d.text((x + box_w // 2, HEAD + 120), str(number), font=font("title", 110), fill=on, anchor="ms")
             d.text((x + box_w // 2, HEAD + 170), word, font=font("semi", 32), fill=on if n == 0 else c["muted"],
                    anchor="ms")
@@ -1110,9 +1199,9 @@ def render_spotlight(title, data, empty_text="—"):
     cv = Canvas(title, data, 320, accent=(data.get("style") or DEFAULT_STYLE) != "figma")
     c, d = cv.theme, cv.draw
     size = 226  # аватарка внутри кольца-градиента 276 (толщина 25)
-    x, y = PAD + 17, HEAD + 37
+    x, y = PAD + 25, HEAD + 37
     avatar = data.get("_avatar")
-    ring = (PAD - 8, HEAD + 12, PAD - 8 + 276, HEAD + 12 + 276)
+    ring = (PAD, HEAD + 12, PAD + 276, HEAD + 12 + 276)
     if cv.st["accent"] != "gradient":
         d.ellipse(ring, fill=c["accent"], outline=c["ink"] if cv.st["stroke"] else None, width=max(1, cv.st["stroke"]))
     else:
@@ -1135,7 +1224,7 @@ def render_spotlight(title, data, empty_text="—"):
         text, bfnt = fit(badge, "bold", 30, WIDTH - left - PAD - 40)
         width = max(int(bfnt.getlength(text)) + 60, 602)
         d.rounded_rectangle((left, y - 10, min(left + width, WIDTH - PAD), y + 59), radius=26, fill=c["head"])
-        d.text((left + 30, y + 25), text, font=bfnt, fill=c["accent2"], anchor="lm")
+        d.text((left + 30, y + 25), text, font=bfnt, fill=readable(c["accent2"], c["head"]), anchor="lm")
     name, nfnt = fit(data.get("_name") or data.get("who") or empty_text, "title", 96, WIDTH - left - PAD, 40)
     d.text((left, y + 160), name, font=nfnt, fill=c["ink"], anchor="ls")
     reason_lines = wrap(data.get("reason") or "", font("semi", 34), WIDTH - left - PAD)[:3]
@@ -1157,7 +1246,7 @@ def render_versus(title, data):
             accent_fill(cv, (x, HEAD + 20, x + half, HEAD + 280), 32, vertical=True)
         else:
             tile_fill(cv, (x, HEAD + 20, x + half, HEAD + 280), 32)
-        ink = accent_ink(cv) if leader else c["ink"]
+        ink = accent_ink(cv, vertical=True) if leader else c["ink"]
         d.text((x + half // 2, HEAD + 180), number_text(score), font=font("title", 150), fill=ink, anchor="ms")
         shown, fnt = fit(name, "bold", 38, half - 40)
         d.text((x + half // 2, HEAD + 240), shown, font=fnt, fill=ink, anchor="ms")
@@ -1243,7 +1332,7 @@ def render_calendar(title, data, empty_text="—"):
             elif is_today:
                 d.rounded_rectangle((x + 8, y + 6, x + cell_w - 8, y + cell_h - 6), radius=22, outline=c["ink"],
                                     width=4)
-            ink = accent_ink(cv) if day in events and cv.st["accent"] != "gradient" else c["ink"]
+            ink = accent_ink(cv, vertical=True) if day in events else c["ink"]
             d.text((x + cell_w // 2, y + cell_h // 2), str(day), font=font("title", 44), fill=ink, anchor="mm")
     y = top + cell_h * len(weeks) + 50
     for day, names in listed:
@@ -1265,13 +1354,15 @@ def render_queue(title, data, empty_text="—"):
     for n, row in enumerate(rows, 1):
         now_here = n == current
         if now_here:
-            accent_fill(cv, (PAD - 14, y + 4, WIDTH - PAD + 14, y + 76), 24)
+            accent_fill(cv, (PAD, y + 4, WIDTH - PAD, y + 76), 24)
         ink = accent_ink(cv) if now_here else c["ink"]
-        d.text((PAD + 30, y + 40), str(n), font=font("title", 48), fill=ink if now_here else c["muted"], anchor="mm")
-        name, fnt = fit(row[0] if row else "", "bold", 38, WIDTH - 2 * PAD - 260)
-        d.text((PAD + 90, y + 40), name, font=fnt, fill=ink, anchor="lm")
+        d.text((PAD + ROW_INSET + 22, y + 40), str(n), font=font("title", 48), fill=ink if now_here else c["muted"],
+               anchor="mm")
+        name, fnt = fit(row[0] if row else "", "bold", 38, WIDTH - 2 * PAD - 300)
+        d.text((PAD + ROW_INSET + 76, y + 40), name, font=fnt, fill=ink, anchor="lm")
         if now_here:
-            d.text((WIDTH - PAD, y + 40), "сейчас", font=font("bold", 30), fill=accent_ink(cv, end=True), anchor="rm")
+            d.text((WIDTH - PAD - ROW_INSET - cv.st["shadow"], y + 40), "сейчас", font=font("bold", 30),
+                   fill=accent_ink(cv, end=True), anchor="rm")
         y += 82
     cv.caption(data.get("caption"), y + 40)
     return cv.png()
@@ -1308,14 +1399,14 @@ def render_birthdays(title, data, empty_text="—"):
         days = (when.date() - today.date()).days
         is_today = days == 0
         if is_today:
-            accent_fill(cv, (PAD - 14, y + 4, WIDTH - PAD + 14, y + 76), 24)
+            accent_fill(cv, (PAD, y + 4, WIDTH - PAD, y + 76), 24)
         ink = accent_ink(cv) if is_today else c["ink"]
-        d.text((PAD, y + 40), when.strftime("%d.%m"), font=font("title", 46), fill=ink, anchor="lm")
-        shown, fnt = fit(name, "bold", 38, WIDTH - 2 * PAD - 460)
-        d.text((PAD + 170, y + 40), shown, font=fnt, fill=ink, anchor="lm")
+        d.text((PAD + ROW_INSET, y + 40), when.strftime("%d.%m"), font=font("title", 46), fill=ink, anchor="lm")
+        shown, fnt = fit(name, "bold", 38, WIDTH - 2 * PAD - 500)
+        d.text((PAD + ROW_INSET + 170, y + 40), shown, font=fnt, fill=ink, anchor="lm")
         note = "сегодня!" if is_today else \
             f"через {days} {plural(days, 'день', 'дня', 'дней')}"
-        d.text((WIDTH - PAD, y + 40), note, font=font("semi", 30),
+        d.text((WIDTH - PAD - ROW_INSET - cv.st["shadow"], y + 40), note, font=font("semi", 30),
                fill=accent_ink(cv, end=True) if is_today else c["muted"], anchor="rm")
         y += 82
     cv.caption(data.get("caption"), y + 40)

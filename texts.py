@@ -1991,6 +1991,8 @@ CATALOG = {
     "cards.wizard.keep_style": "Оставить этот стиль",
     "cards.wizard.keep_color": "Оставить этот цвет",
     "cards.wizard.to_editor": "К картинке",
+    "cards.wizard.back_style": "Назад к стилю",
+    "cards.wizard.back_color": "Назад к цвету",
     "cards.kinds_ask.title": "ШАГ 5 ИЗ 5 · ЧТО ПОКАЗЫВАЮТ ПОЛЯ",
     "cards.kinds_ask.text": "Вот твоя картинка и её поля — что каждое показывает сейчас:\n{fields}\n\n**Поменять, что показывает какое-то поле?** Например: число → онлайн сервера, свой счётчик или участник.",
     "cards.kinds_ask.yes": "Да, поменять",
