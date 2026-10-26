@@ -299,10 +299,10 @@ class EmbedHomeView(PanelView):
 
     @discord.ui.button(label="Создать новый", emoji="➕", style=discord.ButtonStyle.success)
     async def create(self, interaction, button):
-        state = EmbedState(self.guild_id, self.owner_id)
+        # один вопрос: где собирать — здесь по шагам или на сайте с живым предпросмотром
         await interaction.response.edit_message(
-            embed=panel_embed(interaction, "embed.visibility"),
-            view=VisibilityView(state, back_target=(core.screen(interaction), self))
+            embed=panel_embed(interaction, "embed.where", hints=False),
+            view=CreateWhereView(self.guild_id, self.owner_id, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="Мои сохранённые", emoji="📦", style=discord.ButtonStyle.secondary)
@@ -363,6 +363,27 @@ def all_triggers_embed(interaction):
         lines.append(t("embed.all_triggers.line", build=f"{name} · #{row[2]}", what=what))
     return panel_embed(interaction, "embed.all_triggers",
                        list="\n".join(lines)[:3500] or t("embed.all_triggers.empty"))
+
+
+class CreateWhereView(PanelView):
+    """Новое сообщение: собрать здесь, в Discord, или на сайте (весь /embed с живым предпросмотром)."""
+
+    def __init__(self, guild_id, owner_id, back_target):
+        super().__init__(back_target=back_target)
+        self.guild_id, self.owner_id = guild_id, owner_id
+
+    @discord.ui.button(label="Здесь, в Discord", emoji="💬", style=discord.ButtonStyle.primary)
+    async def here(self, interaction, button):
+        state = EmbedState(self.guild_id, self.owner_id)
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "embed.visibility"),
+            view=VisibilityView(state, back_target=(core.screen(interaction), self))
+        )
+
+    @discord.ui.button(label="На сайте", emoji="🌐", style=discord.ButtonStyle.success)
+    async def site(self, interaction, button):
+        import post_builder
+        await post_builder.send_link(interaction)
 
 
 class AllTriggersView(PanelView):

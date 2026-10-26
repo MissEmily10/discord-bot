@@ -196,6 +196,17 @@ def build_post(data, banner_png):
     return {"content": str(data.get("content") or "")[:2000], "embeds": embeds[:10], "buttons": []}
 
 
+async def clan_template():
+    """Пустой пост в клановом оформлении: баннер-заготовка + 3 раздела с трофеем и дудлами — заполнить на сайте."""
+    data = {"sections": [
+        {"heading": "Заголовок раздела", "text": "- **Главное:** текст пункта\n- **Ещё:** текст", "icon": "trophy"},
+        {"heading": "Второй раздел", "text": "Текст раздела", "icon": "gift"},
+        {"heading": "Третий раздел", "text": "Текст раздела", "icon": "heart"}]}
+    banner = await asyncio.to_thread(render_banner, "alert", {"title": "Заголовок новости",
+                                                              "text": "Коротко — о чём эта новость"})
+    return await asyncio.to_thread(build_post, data, banner)
+
+
 async def generate(brief, secretary=True):
     """Суть новости -> (payload, None) или (None, ключ ошибки)."""
     import clan_info
@@ -213,9 +224,10 @@ async def generate(brief, secretary=True):
 
 
 async def run(interaction, brief):
-    """/post новость: … — сгенерировать и открыть в конструкторе (или в /embed)."""
+    """/post → «Новость» — сгенерировать и открыть в конструкторе (или в /embed)."""
     import post_builder
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
     secretary = core.level_value(core.get_user_level(interaction)) >= core.level_value("admin")
     payload, error = await generate(brief, secretary=secretary)
     if error:

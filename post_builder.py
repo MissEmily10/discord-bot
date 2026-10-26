@@ -802,24 +802,59 @@ def add_routes(app):
 # /post
 # ============================================================
 
-async def send_link(interaction, draft=None, build_id=None):
+async def send_link(interaction, draft=None, build_id=None, context="site"):
+    """Личная ссылка на конструктор (из /embed → «Создать новый» → «На сайте» и из /post)."""
     link = open_link(interaction.guild.id, interaction.user.id, draft=draft, build_id=build_id)
     if link is None:
         await interaction.response.send_message(t("post.disabled"), ephemeral=True)
         return
     view = discord.ui.View()
-    view.add_item(discord.ui.Button(label=t("post.open")[:80], emoji="🌐", url=link))
-    await interaction.response.send_message(embed=core.panel_embed(interaction, "post"), view=view, ephemeral=True)
+    view.add_item(discord.ui.Button(label=t("site.open")[:80], emoji="🌐", url=link))
+    kwargs = dict(embed=core.panel_embed(interaction, context, hints=False), view=view, ephemeral=True)
+    if interaction.response.is_done():
+        await interaction.followup.send(**kwargs)
+    else:
+        await interaction.response.send_message(**kwargs)
+
+
+class ClanPostView(discord.ui.View):
+    """/post — посты для кланов: один вопрос — что делаем."""
+
+    def __init__(self):
+        super().__init__(timeout=600)
+
+    @discord.ui.button(label="Новость — напишет нейросеть", emoji="📰", style=discord.ButtonStyle.primary)
+    async def news(self, interaction, button):
+        await interaction.response.send_modal(NewsModal())
+
+    @discord.ui.button(label="Пустой пост в стиле кланов", emoji="🧩", style=discord.ButtonStyle.secondary)
+    async def blank(self, interaction, button):
+        import news_generator
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        draft = await news_generator.clan_template()
+        await send_link(interaction, draft=draft, context="post.blank")
+
+
+class NewsModal(core.Modal, title="НОВОСТЬ ДЛЯ КЛАНОВ"):
+    def __init__(self):
+        super().__init__(title=t("post.news_modal.title")[:45])
+        self.brief = discord.ui.TextInput(style=discord.TextStyle.paragraph, min_length=3, max_length=4000,
+                                          placeholder=t("post.news_modal.placeholder")[:100])
+        self.add_item(discord.ui.Label(text=t("post.news_modal.label")[:45],
+                                       description=t("post.news_modal.help")[:100], component=self.brief))
+
+    async def on_submit(self, interaction):
+        import news_generator
+        await news_generator.run(interaction, self.brief.value)
 
 
 def register(bot):
     global _bot
     _bot = bot
 
-    @bot.tree.command(name="post", description="Конструктор сообщений на сайте: весь /embed с живым предпросмотром")
+    @bot.tree.command(name="post", description="Посты для кланов: новость с нейросетью или пост в клановом оформлении")
     @discord.app_commands.guild_only()
-    @discord.app_commands.describe(
-        news="Новость для кланов: о чём она — нейросеть напишет текст, бот нарисует баннер и соберёт пост")
+    @discord.app_commands.describe(news="О чём новость — нейросеть напишет текст, бот нарисует баннер и соберёт пост")
     async def post_command(interaction, news: discord.app_commands.Range[str, 3, 4000] = None):
         if not await core.require_command_access(interaction, "post"):
             return
@@ -827,4 +862,5 @@ def register(bot):
             import news_generator
             await news_generator.run(interaction, news)
             return
-        await send_link(interaction)
+        await interaction.response.send_message(embed=core.panel_embed(interaction, "post", hints=False),
+                                                view=ClanPostView(), ephemeral=True)
