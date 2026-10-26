@@ -366,6 +366,17 @@ async def process(guild, clan, now=None):
     state = state_of(clan["scope_id"], clan["tag"], now)
     tag, term = state["tag"], state["term_no"]
     done = []
+    vacant = (2 - len(clan["deputies"])) + (2 - len(clan["reps"]))
+    day_key = f"vacant:{now // DAY}"
+    if vacant > 0 and day_key not in state["notified"]:
+        import clan_members
+        state["notified"].add(day_key)
+        save_state(state)
+        leader = await clan_members.fetch_member(guild, clan["leader_id"])
+        if leader is not None:
+            await clan_members.dm(leader, t("clan_life.vacant", tag=tag, deputies=2 - len(clan["deputies"]),
+                                            reps=2 - len(clan["reps"])))
+        done.append("vacant")
     if state["state"] == "active":
         left = state["due_at"] - now
         treasury, _ = clan_treasury.balance(state["scope_id"], tag)

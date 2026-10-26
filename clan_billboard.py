@@ -478,6 +478,8 @@ async def loop(bot):
         try:
             voice_tick(bot)
             flush_messages()
+            import clan_events
+            clan_events.tick(bot)  # клановые ивенты: кто в войсе ивента
             for scope_id in clan_life.scopes(bot):
                 await close_due(bot, scope_id)
                 if time.time() - last_card >= CARD_EVERY:

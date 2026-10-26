@@ -4481,7 +4481,7 @@ class ClanMembershipTests(unittest.TestCase):
 
         def labels(rank, admin=False):
             return {item.label for item in cm.MyClanView(clan, rank, admin).children}
-        common = {"Карточка клана", "Квесты"}
+        common = {"Карточка клана", "Квесты", "Ивенты"}
         self.assertEqual(labels("member"), common | {"Выйти из клана"})
         self.assertEqual(labels("rep"), common | {"Пригласить", "Выйти из клана"})
         self.assertIn("Исключить", labels("deputy"))
@@ -4692,7 +4692,7 @@ class ClanLifeTests(unittest.TestCase):
         self.money(6000)
         done = run(clan_life.process(self.g, self.clan, now=due - 2 * 86400))
         self.assertIn("pre3:1", done)
-        self.assertEqual(run(clan_life.process(self.g, self.clan, now=due - 2 * 86400)), [])  # второй раз — тишина
+        self.assertEqual(run(clan_life.process(self.g, self.clan, now=due - 2 * 86400 + 5)), [])  # второй раз — тишина
         self.assertIn("renewed", run(clan_life.process(self.g, self.clan, now=due + 1)))
         state = clan_life.state_of(GUILD, self.tag)
         self.assertEqual((state["term_no"], state["due_at"], state["reliable"]), (2, due + 30 * 86400, 1))
@@ -4846,6 +4846,34 @@ class ClanLifeTests(unittest.TestCase):
         run(clan_shop.refund(clan_shop.get_purchase(purchase["id"]), "тест"))
         self.assertEqual(clan_treasury.balance(GUILD, self.tag)[0], 8000)  # деньги вернулись
         self.assertEqual(run(clan_shop.buy(interaction, clan, "tag", {"tag": "x"})), "clan_shop.error.tag_format")
+
+    def test_events_counted_classified_and_limited(self):
+        import clan_events as ce
+        import clan_members
+        clan_members.add_member(GUILD, self.tag, 901)
+        start = 1_800_000_000
+        event_id = ce.create(GUILD, self.tag, "Мафия", GUILD, 555, "server", start, 901)
+        guests = [types.SimpleNamespace(id=7000 + n, bot=False) for n in range(12)]
+        voice = types.SimpleNamespace(members=[types.SimpleNamespace(id=901, bot=False)] + guests)
+        bot = types.SimpleNamespace(get_guild=lambda gid: types.SimpleNamespace(get_channel=lambda cid: voice))
+        for minute in range(70):
+            ce.tick(bot, now=start + minute * 60)
+        event = ce.get_event(event_id)
+        self.assertEqual(event["status"], "running")
+        self.assertEqual((len(event["seen_guests"]), event["active_minutes"]), (12, 70))
+        self.assertEqual(ce.classify(event, 2), "open")
+        self.assertEqual(ce.parse_when("25.12 20:00", now=start) is not None, True)
+        self.assertIsNone(ce.parse_when("когда-нибудь"))
+        ce._save(event, status="accepted")
+        same_day = ce.get_event(ce.create(GUILD, self.tag, "Ещё", GUILD, 555, "own", start + 3600, 901))
+        self.assertEqual(ce.limit_problem(same_day), "clan_events.limit_day")
+
+    def test_vacant_seats_remind_leader_daily(self):
+        import clan_life
+        due = self.state["due_at"]
+        self.assertIn("vacant", run(clan_life.process(self.g, self.clan, now=due - 20 * 86400)))
+        self.assertNotIn("vacant", run(clan_life.process(self.g, self.clan, now=due - 20 * 86400 + 60)))
+        self.assertTrue(any(uid == 901 and "свободно" in (text or "") for uid, text in self.dms))
 
     def test_hub_card_and_visibility(self):
         import clan_hub

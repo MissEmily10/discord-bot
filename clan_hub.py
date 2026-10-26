@@ -317,7 +317,7 @@ def admin_embed(interaction):
 
 class AdminView(PanelView):
     texts = "clan_hub.admin"
-    button_order = ("life", "channels", "publish_billboard", "publish_hub", "manage_clan", "hub_days")
+    button_order = ("life", "channels", "publish_billboard", "publish_hub", "manage_clan", "directions", "hub_days")
 
     def __init__(self, interaction, back_target=None):
         super().__init__(back_target=back_target, timeout=900)
@@ -406,10 +406,60 @@ class AdminView(PanelView):
         view.add_item(select)
         await interaction.response.edit_message(view=view)
 
+    @discord.ui.button(label="Направления наград", emoji="🧭", style=discord.ButtonStyle.secondary)
+    async def directions(self, interaction, button):
+        if await self._ok(interaction):
+            await interaction.response.edit_message(embed=directions_embed(interaction),
+                                                    view=DirectionsView(back_target=(core.screen(interaction), self)))
+
     @discord.ui.button(label="Новые кланы в списке", emoji="🗓️", style=discord.ButtonStyle.secondary)
     async def hub_days(self, interaction, button):
         if await self._ok(interaction):
             await interaction.response.send_modal(HubDaysModal())
+
+
+def directions_embed(interaction):
+    """Кто из глав категорий даёт респект в каком направлении (за .награду в казну)."""
+    import clan_life
+    import clan_treasury
+    mapping = clan_life.setting(ecosystem.scope(interaction.guild.id), "giver_directions", {})
+    lines = [f"<@{giver}> → {clan_treasury.DIRECTIONS.get(direction, direction)}" for giver, direction in mapping.items()]
+    return panel_embed(interaction, "clan_hub.directions", hints=False, lines="\n".join(lines) or "—")
+
+
+class DirectionsView(PanelView):
+    """Сначала — направление, потом — кто (глава категории). Остальные — «👥 Сообщество»."""
+
+    def __init__(self, back_target=None, direction=None):
+        import clan_treasury
+        super().__init__(back_target=back_target, timeout=600)
+        self.direction = direction
+        select = discord.ui.Select(placeholder=t("clan_hub.directions.pick")[:150], options=[
+            discord.SelectOption(label=label, value=key, default=key == direction)
+            for key, label in clan_treasury.DIRECTIONS.items()])
+
+        async def picked(i):
+            await i.response.edit_message(view=DirectionsView(self.back_target, select.values[0]))
+        select.callback = picked
+        self.add_item(select)
+        if direction:
+            users = discord.ui.UserSelect(placeholder=t("clan_hub.directions.who")[:150], max_values=10)
+
+            async def chosen(i):
+                import clan_life
+                import clan_members
+                if not clan_members.is_admin(i.guild, i.user):
+                    await reply(i, "common.need_admin")
+                    return
+                scope_id = ecosystem.scope(i.guild.id)
+                mapping = clan_life.setting(scope_id, "giver_directions", {})
+                for user in users.values:
+                    mapping[str(user.id)] = self.direction
+                clan_life.set_setting(scope_id, "giver_directions", mapping)
+                core.audit(i, "clans.giver_directions", "guild", scope_id, self.direction)
+                await i.response.edit_message(embed=directions_embed(i), view=DirectionsView(self.back_target))
+            users.callback = chosen
+            self.add_item(users)
 
 
 class LifeConfirmView(PanelView):

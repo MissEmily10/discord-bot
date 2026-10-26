@@ -83,7 +83,7 @@ async def setup_hook():
                           *form_packs.DYNAMIC_ITEMS, *cards.DYNAMIC_ITEMS, *quotes.DYNAMIC_ITEMS,
                           *whispers.DYNAMIC_ITEMS, *clan_info.DYNAMIC_ITEMS,
                           *clan_members.DYNAMIC_ITEMS, *clan_billboard.DYNAMIC_ITEMS, *clan_quests.DYNAMIC_ITEMS,
-                          *clan_shop.DYNAMIC_ITEMS, *clan_hub.DYNAMIC_ITEMS)
+                          *clan_shop.DYNAMIC_ITEMS, *clan_hub.DYNAMIC_ITEMS, *clan_events.DYNAMIC_ITEMS)
     await web_panel.start(bot)
     automation.setup(bot)  # расписание, триггеры, живое обновление
     await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)
@@ -414,6 +414,7 @@ import clan_billboard  # noqa: E402
 import clan_quests  # noqa: E402
 import clan_shop  # noqa: E402
 import clan_hub  # noqa: E402
+import clan_events  # noqa: E402
 import clan_info  # noqa: E402
 clan_info.register(bot)  # «@Purr как работают кланы?» — рассказ о системе кланов
 

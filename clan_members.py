@@ -752,7 +752,8 @@ class MyClanView(PanelView):
     """Моя панель в клане: кнопки — только те, что можно по роли в клане."""
 
     texts = "clan.home"
-    button_order = ("card", "quests", "shop", "invite", "kick", "team", "transfer", "dissolve", "leave", "admin_panel")
+    button_order = ("card", "quests", "events", "shop", "invite", "kick", "team", "transfer", "dissolve", "leave",
+                    "admin_panel")
 
     def __init__(self, clan, rank, admin=False):
         super().__init__(timeout=900)
@@ -760,6 +761,7 @@ class MyClanView(PanelView):
         allowed = {
             "card": True,
             "quests": True,
+            "events": True,
             "shop": rank in ("leader", "deputy") or admin,
             "invite": rank in ("leader", "deputy", "rep") or admin,
             "kick": rank in ("leader", "deputy") or admin,
@@ -796,6 +798,15 @@ class MyClanView(PanelView):
             embed=clan_quests.quests_embed(interaction, self.scope_id, self.tag, term),
             view=clan_quests.QuestsView(self.scope_id, self.tag, term, can_submit,
                                         back_target=(core.screen(interaction), self)))
+
+    @discord.ui.button(label="Ивенты", emoji="🎉", style=discord.ButtonStyle.secondary)
+    async def events(self, interaction, button):
+        import clan_events
+        clan = self.clan()
+        can_run = rank_of(clan, interaction.user.id) in ("leader", "deputy", "rep") or self.admin(interaction)
+        await interaction.response.edit_message(
+            embed=clan_events.events_embed(interaction, self.scope_id, self.tag),
+            view=clan_events.EventsView(self.scope_id, self.tag, can_run, back_target=(core.screen(interaction), self)))
 
     @discord.ui.button(label="Магазин", emoji="🛒", style=discord.ButtonStyle.secondary)
     async def shop(self, interaction, button):
