@@ -396,6 +396,8 @@ def build_app():
     paste_page.add_routes(app)  # временные страницы для длинного текста (JSON, новости)
     import post_builder
     post_builder.add_routes(app)  # /post — конструктор постов на сайте
+    import scene_editor
+    scene_editor.add_routes(app)  # /scene — редактор холста: живые картинки и баннер сервера
     return app
 
 

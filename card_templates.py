@@ -1512,6 +1512,9 @@ def texts_of(card):
     """Все тексты картинки, где могут быть переменные: [(путь, значение)]."""
     data = card["data"]
     found = [("title", card["title"])]
+    for n, layer in enumerate((data.get("scene") or {}).get("layers") or []):  # тексты холста с сайта
+        if layer.get("type") == "text" and layer.get("text"):
+            found.append((f"scene:{n}", layer["text"]))
     for key, _, kind in spec(card["template"]).get("fields", []):
         if (kind == T or isinstance(data.get(key), str)) and data.get(key):
             found.append((key, data[key]))  # и число, ставшее живым: «{online}»
@@ -1569,7 +1572,7 @@ def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=(
     import banner_render
     ratio = size[0] / size[1]
     data = dict(data, _no_fx=True)
-    first = Image.open(io.BytesIO(render(card, title, data, empty_text))).convert("RGB")
+    first = data.pop("_png", None) or Image.open(io.BytesIO(render(card, title, data, empty_text))).convert("RGB")
     height = first.height
     lines = [line for line in lines or () if str(line.get("text") or "").strip()]
     plain = card["template"] not in RENDERERS  # рейтинг рисуется сам — фон у него ровный
@@ -1623,6 +1626,13 @@ def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=(
     output = io.BytesIO()
     back.resize(size, Image.LANCZOS).save(output, "PNG", optimize=True)
     return output.getvalue()
+
+
+def banner_from_png(png, lines=(), size=BANNER_SIZE):
+    """Готовая картинка (холст с сайта) -> баннер 16:9: по краям — цвет её угла, строки — под ней. -> PNG."""
+    first = Image.open(io.BytesIO(png)).convert("RGB")
+    fake = {"template": "__png__"}
+    return render_banner(fake, "", {"_png": first}, "", size, lines)
 
 
 # ============================================================

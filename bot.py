@@ -386,6 +386,8 @@ logo_module.register_logo(bot)
 web_panel.register_panel(bot)
 import post_builder  # noqa: E402
 post_builder.register(bot)  # /post — конструктор постов на сайте бота
+import scene_editor  # noqa: E402
+scene_editor.register(bot)  # редактор холста на сайте: живые картинки и баннер сервера
 # /library, /interactive, /forms, /eminemovna (docs/STRUCTURE.md)
 hubs.register_hubs(bot, make_button_sets=StandaloneButtonStartView)
 import emoji_cmd  # noqa: E402

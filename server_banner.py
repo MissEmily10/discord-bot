@@ -57,6 +57,9 @@ def ensure_table():
         interval_min INTEGER NOT NULL DEFAULT 10, last_hash TEXT NOT NULL DEFAULT '',
         last_applied INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT ''
     )""")
+    if "scene_json" not in {row[1] for row in connection.execute("PRAGMA table_info(server_banners)")}:
+        # холст из редактора на сайте (scene.py); пусто — обычный баннер: фон + строки
+        connection.execute("ALTER TABLE server_banners ADD COLUMN scene_json TEXT NOT NULL DEFAULT ''")
     connection.commit()
     connection.close()
 
@@ -69,11 +72,16 @@ def get_banner(guild_id):
     ensure_table()
     connection = get_connection()
     row = connection.execute("SELECT guild_id, owner_id, base, lines_json, auto, interval_min, last_hash, "
-                             "last_applied, last_error FROM server_banners WHERE guild_id = ?", (guild_id,)).fetchone()
+                             "last_applied, last_error, scene_json FROM server_banners WHERE guild_id = ?",
+                             (guild_id,)).fetchone()
     connection.close()
     if row is None:
         return None
-    banner = dict(zip(_COLUMNS, row))
+    banner = dict(zip(_COLUMNS + ("scene",), row))
+    try:
+        banner["scene"] = json.loads(banner["scene"]) if banner["scene"] else None
+    except ValueError:
+        banner["scene"] = None
     try:
         banner["lines"] = [clean_line(line) for line in json.loads(banner["lines"])][:MAX_LINES]
     except (ValueError, TypeError):
@@ -97,10 +105,10 @@ def save(banner):
     connection = get_connection()
     connection.execute(
         "UPDATE server_banners SET base = ?, lines_json = ?, auto = ?, interval_min = ?, last_hash = ?, "
-        "last_applied = ?, last_error = ? WHERE guild_id = ?",
+        "last_applied = ?, last_error = ?, scene_json = ? WHERE guild_id = ?",
         (banner["base"], json.dumps(banner["lines"][:MAX_LINES], ensure_ascii=False), int(banner["auto"]),
          int(banner["interval_min"]), banner["last_hash"], int(banner["last_applied"]), banner["last_error"],
-         banner["guild_id"]))
+         json.dumps(banner["scene"], ensure_ascii=False) if banner.get("scene") else "", banner["guild_id"]))
     connection.commit()
     connection.close()
 
@@ -209,6 +217,9 @@ async def line_texts(guild, banner):
 
 
 async def render_for(guild, banner):
+    if banner.get("scene"):  # собран в редакторе на сайте — холст целиком
+        import scene
+        return await scene.render_live(banner["scene"], guild, size=SIZE)
     lines = await line_texts(guild, banner)
     texts = [line["text"] for line in lines]
     picture = None
@@ -305,6 +316,8 @@ def line_label(line):
 
 
 def _background_name(banner):
+    if banner.get("scene"):
+        return t("server_banner.base_scene", layers=len(banner["scene"].get("layers") or []))
     base = banner["base"] or ""
     if base.startswith("card:"):
         import cards
@@ -321,13 +334,17 @@ def home_embed(interaction, banner):
     key = problem(guild)
     status = t(key) if key else t("server_banner.ready")
     lines = "\n".join(f"{n}. {line_label(line)}" for n, line in enumerate(banner["lines"], 1))
+    if banner.get("scene"):
+        lines = t("server_banner.scene_lines")
     auto = (t("server_banner.auto_on", minutes=max(MIN_INTERVAL, banner["interval_min"]))
             if banner["auto"] else t("server_banner.auto_off"))
     last = (t("server_banner.last", when=f"<t:{banner['last_applied']}:R>") if banner["last_applied"] else "")
     if banner["last_error"]:
         last += "\n⚠️ " + t(banner["last_error"])
     import live
-    return panel_embed(interaction, "server_banner.home", status=status, lines=lines or t("server_banner.no_lines"),
+    hide = ("style", "lines", "background") if banner.get("scene") else ("plain",)
+    return panel_embed(interaction, "server_banner.home", hide=hide, status=status,
+                       lines=lines or t("server_banner.no_lines"),
                        auto=auto, last=last, background=_background_name(banner), variables=live.VARIABLE_HELP)
 
 
@@ -352,9 +369,15 @@ async def open_home(interaction, back_target=None, edit=True):
 
 class ServerBannerView(PanelView):
     texts = "server_banner.home"
-    button_order = ("style", "preview", "apply_now", "lines", "auto", "interval", "background", "save_to_library")
+    button_order = ("site_editor", "style", "preview", "apply_now", "lines", "auto", "interval", "background",
+                    "plain", "save_to_library")
 
     def refresh_labels(self, banner):
+        if banner.get("scene"):  # фон и строки — в редакторе на сайте, тут они ни при чём
+            for item in (self.style, self.lines, self.background):
+                self.remove_item(item)
+        else:
+            self.remove_item(self.plain)
         self.auto.label = t("server_banner.home.auto_off_button" if banner["auto"]
                             else "server_banner.home.auto")[:80]
         self.auto.style = discord.ButtonStyle.danger if banner["auto"] else discord.ButtonStyle.success
@@ -364,6 +387,23 @@ class ServerBannerView(PanelView):
             await reply(interaction, "common.need_admin")
             return None
         return get_or_create(interaction.guild.id, interaction.user.id)
+
+    @discord.ui.button(label="Редактор на сайте", emoji="🌐", style=discord.ButtonStyle.primary)
+    async def site_editor(self, interaction, button):
+        banner = await self._banner(interaction)
+        if banner:
+            import scene_editor
+            await scene_editor.send_link(interaction, "banner")
+
+    @discord.ui.button(label="Обычный баннер", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def plain(self, interaction, button):
+        banner = await self._banner(interaction)
+        if not banner:
+            return
+        banner["scene"] = None  # фон и строки, какими были до редактора, остались в настройках
+        save(banner)
+        core.audit(interaction, "server_banner.scene_removed", "guild", interaction.guild.id, None)
+        await open_home(interaction, back_target=self.back_target)
 
     @discord.ui.button(label="Стиль", emoji="🎨", style=discord.ButtonStyle.primary)
     async def style(self, interaction, button):

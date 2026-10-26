@@ -269,6 +269,9 @@ async def render_card(card, guild=None):
     """Картинка (PNG) с подставленными переменными и аватаркой «участника недели»."""
     import asyncio
     import card_templates as ct
+    if card["data"].get("scene"):  # собрана в редакторе на сайте: её же картинка — слоем, плюс стикеры, тексты
+        import scene
+        return await scene.render_live(card["data"]["scene"], guild, self_card=card)
     title, data = await _live_data(card, guild)
     return await asyncio.to_thread(ct.render, card, title, data, t("cards.rating.empty"))
 
@@ -280,6 +283,9 @@ async def render_banner(card, guild=None, lines=()):
     """
     import asyncio
     import card_templates as ct
+    if card["data"].get("scene"):  # холст с сайта — его и вписываем в баннер (ровным фоном по краям)
+        png = await render_card(card, guild)
+        return await asyncio.to_thread(ct.banner_from_png, png, lines)
     title, data = await _live_data(card, guild)
     return await asyncio.to_thread(ct.render_banner, card, title, data, t("cards.rating.empty"), ct.BANNER_SIZE,
                                    lines)
@@ -675,7 +681,7 @@ async def apply_change(interaction, card, problem=None):
 # только кнопки этого раздела (а не всё сразу).
 SECTIONS = {
     "data": ("set_score", "remove", "value", "fields", "row", "remove_row", "columns", "data_kinds"),
-    "look": ("look_style", "look_color", "rename", "bang"),
+    "look": ("look_site", "look_style", "look_color", "rename", "bang"),
     "where": ("publish", "unpublish", "to_banner", "command", "access", "save_to_library"),
 }
 SECTION_BUTTONS = ("open_data", "open_look", "open_where", "delete_card")
@@ -686,7 +692,7 @@ def visible_buttons(card, section):
     if section is None:
         return SECTION_BUTTONS
     keep = set(template_buttons(card["template"] if card else "rating")) | set(COMMON_BUTTONS) | \
-        {"data_kinds", "look_style", "look_color", "bang", "unpublish", "to_banner"}
+        {"data_kinds", "look_style", "look_color", "bang", "unpublish", "to_banner", "look_site"}
     if card and card["template"] == "rating":
         keep -= {"data_kinds", "look_style", "look_color", "bang"}  # у рейтинга один вид
     if card and not card.get("message_id"):
@@ -747,6 +753,13 @@ class CardEditorView(PanelView):
         card = await self._card(interaction)
         if card:
             await DataKindsView.open(interaction, card["id"], wizard=False)
+
+    @discord.ui.button(label="Редактор на сайте", emoji="🌐", style=discord.ButtonStyle.primary)
+    async def look_site(self, interaction, button):
+        card = await self._card(interaction)
+        if card:
+            import scene_editor
+            await scene_editor.send_link(interaction, "card", card["id"])
 
     @discord.ui.button(label="Стиль", emoji="🖼️", style=discord.ButtonStyle.primary)
     async def look_style(self, interaction, button):

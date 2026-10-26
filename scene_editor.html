@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Purr — редактор холста</title>
+<style>
+@font-face { font-family: "Coolvetica"; src: url("/fonts/Coolvetica-Regular.otf"); }
+@font-face { font-family: "DunkinSans"; src: url("/fonts/DunkinSans-Regular.otf"); font-weight: 400; }
+@font-face { font-family: "DunkinSans"; src: url("/fonts/DunkinSans-Bold.otf"); font-weight: 700; }
+@font-face { font-family: "Dunkin"; src: url("/fonts/Dunkin-Bold.otf"); font-weight: 700; }
+@font-face { font-family: "Drunk"; src: url("/fonts/DrunkFonts-Regular.otf"); }
+@font-face { font-family: "Inter"; src: url("/fonts/Inter-Regular.otf"); font-weight: 400; }
+@font-face { font-family: "Inter"; src: url("/fonts/Inter-SemiBold.otf"); font-weight: 600; }
+@font-face { font-family: "Inter"; src: url("/fonts/Inter-Bold.otf"); font-weight: 700; }
+:root {
+  --bg: #15131a; --side: #1b1820; --panel: #201c26; --panel2: #29242f; --line: #3a3342; --text: #f2eef6; --muted: #a69eb1;
+  --lime: #c6f135; --pink: #f2a7c9; --bad: #ff8585; --ok: #8fe3a7; --sel: #c6f135;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 "Inter", system-ui, sans-serif; overflow: hidden;
+  display: grid; grid-template-rows: 52px 1fr; grid-template-columns: 64px 1fr 300px; grid-template-areas: "top top top" "rail stage side"; }
+button, input, select, textarea { font: inherit; color: inherit; }
+.brand { font-family: "Dunkin", "Coolvetica", "Inter", sans-serif; font-weight: 700; color: var(--lime); font-size: 20px; word-spacing: -0.2em; }
+
+/* ---------- верхняя панель ---------- */
+#top { grid-area: top; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--side); border-bottom: 1px solid var(--line); min-width: 0; }
+#top .title { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.btn { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: #5a5064; }
+.btn.primary { background: var(--lime); color: #17200a; border-color: var(--lime); font-weight: 600; }
+.btn.pink { background: var(--pink); color: #2b1020; border-color: var(--pink); font-weight: 600; }
+.btn.danger { color: var(--bad); }
+.btn.icon { padding: 7px 10px; }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.on { border-color: var(--lime); color: var(--lime); }
+
+/* ---------- инструменты ---------- */
+#rail { grid-area: rail; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; }
+#rail button { width: 46px; height: 46px; border-radius: 12px; border: 1px solid transparent; background: transparent; cursor: pointer; font-size: 20px; position: relative; }
+#rail button:hover { background: var(--panel); }
+#rail button.on { background: var(--panel2); border-color: var(--lime); }
+#rail button span { position: absolute; left: 0; right: 0; bottom: 1px; font-size: 9px; color: var(--muted); }
+
+/* ---------- холст ---------- */
+#stageWrap { grid-area: stage; position: relative; overflow: auto; background:
+  repeating-conic-gradient(#1d1a22 0 25%, #18151c 0 50%) 0 0 / 24px 24px; touch-action: none; }
+#stageBox { position: absolute; }
+#stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden; box-shadow: 0 10px 40px #000c; }
+#stage .bgimg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.layer { position: absolute; transform-origin: center center; user-select: none; -webkit-user-select: none; }
+.layer img { width: 100%; height: 100%; display: block; pointer-events: none; -webkit-user-drag: none; }
+.layer.text { white-space: pre-wrap; overflow-wrap: normal; word-break: keep-all; paint-order: stroke fill; }
+.layer.hiddenL { display: none; }
+#overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
+.selbox { position: absolute; border: 1.5px solid var(--sel); transform-origin: center center; }
+.handle { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; background: #fff; border: 2px solid var(--sel); border-radius: 4px; pointer-events: auto; touch-action: none; }
+.handle.rot { border-radius: 50%; background: var(--sel); }
+.rotline { position: absolute; left: 50%; top: -28px; height: 28px; border-left: 1.5px solid var(--sel); }
+.guide { position: absolute; background: #ff4fa3; pointer-events: none; }
+@media (pointer: coarse) { .handle { width: 22px; height: 22px; margin: -11px 0 0 -11px; } }
+
+/* ---------- боковая панель ---------- */
+#side { grid-area: side; background: var(--side); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+#tabs { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--line); }
+#tabs button { flex: 1; border: 0; background: transparent; padding: 7px; border-radius: 8px; cursor: pointer; color: var(--muted); }
+#tabs button.on { background: var(--panel2); color: var(--text); }
+#sideBody { overflow-y: auto; padding: 10px 12px 80px; flex: 1; }
+h3 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+h3:first-child { margin-top: 2px; }
+.row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.row > * { min-width: 0; }
+.row label { color: var(--muted); font-size: 12px; width: 92px; flex: 0 0 92px; }
+.num { display: flex; align-items: center; background: #141217; border: 1px solid var(--line); border-radius: 8px; flex: 1; }
+.num b { color: var(--muted); font-weight: 500; font-size: 11px; padding-left: 7px; }
+.num input { width: 100%; background: transparent; border: 0; padding: 6px 7px; outline: 0; }
+input[type=text], textarea, select { width: 100%; background: #141217; border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; outline: 0; }
+textarea { min-height: 80px; resize: vertical; }
+input[type=color] { width: 40px; height: 32px; border: 1px solid var(--line); border-radius: 8px; background: #141217; padding: 2px; flex: 0 0 40px; }
+input[type=range] { flex: 1; accent-color: var(--lime); }
+.seg { display: inline-flex; background: #141217; border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; flex: 1; }
+.seg button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 5px 6px; border-radius: 7px; cursor: pointer; }
+.seg button.on { background: var(--panel2); color: var(--text); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 6px; }
+.btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+.layerRow { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 9px; cursor: pointer; border: 1px solid transparent; }
+.layerRow:hover { background: var(--panel); }
+.layerRow.on { background: var(--panel2); border-color: var(--lime); }
+.layerRow .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.layerRow button { border: 0; background: transparent; cursor: pointer; opacity: .75; padding: 2px 4px; }
+.layerRow button.off { opacity: .3; }
+
+/* ---------- выдвижные окна инструментов ---------- */
+#drawer { position: absolute; left: 70px; top: 60px; width: 330px; max-height: calc(100vh - 80px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 12px; z-index: 40; display: none; box-shadow: 0 12px 40px #000b; }
+#drawer.open { display: block; }
+#drawer .close { float: right; }
+.stickers { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.stickers button { aspect-ratio: 1; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 4px; cursor: pointer; }
+.stickers img { width: 100%; height: 100%; object-fit: contain; }
+.pickList button { display: block; width: 100%; text-align: left; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; }
+.pickList small { display: block; color: var(--muted); }
+
+/* ---------- окна ---------- */
+.modal { position: fixed; inset: 0; background: #000a; z-index: 60; display: none; align-items: center; justify-content: center; padding: 16px; }
+.modal.open { display: flex; }
+.modal .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; width: min(560px, 100%); max-height: 90vh; overflow-y: auto; }
+.modal .card.wide { width: min(1000px, 100%); }
+.modal img { max-width: 100%; border-radius: 8px; display: block; }
+#toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 16px;
+  z-index: 70; display: none; max-width: 90vw; }
+#toast.bad { border-color: var(--bad); }
+#toast.ok { border-color: var(--ok); }
+#loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--bg); z-index: 80; color: var(--muted); }
+#sheetBtn { display: none; }
+#zoomBox { position: fixed; right: 316px; bottom: 16px; z-index: 20; display: flex; gap: 4px; background: #15131acc; padding: 4px; border-radius: 12px; }
+
+/* ---------- телефон ---------- */
+@media (max-width: 900px) {
+  body { grid-template-columns: minmax(0, 1fr); grid-template-rows: 52px 1fr 62px; grid-template-areas: "top" "stage" "rail"; }
+  #top { gap: 6px; padding: 0 8px; }
+  #top .brand { font-size: 17px; }
+  #rail { flex-direction: row; border-right: 0; border-top: 1px solid var(--line); padding: 6px 8px; overflow-x: auto; justify-content: flex-start; }
+  #rail button { flex: 0 0 48px; }
+  #side { position: fixed; left: 0; right: 0; bottom: 62px; height: 55vh; z-index: 30; border-left: 0; border-top: 1px solid var(--line);
+    border-radius: 16px 16px 0 0; transform: translateY(110%); transition: transform .2s; box-shadow: 0 -10px 40px #000b; }
+  #side.open { transform: none; }
+  #sheetBtn { display: inline-block; }
+  #drawer { left: 8px; right: 8px; width: auto; top: auto; bottom: 70px; max-height: 55vh; }
+  #top .hideM { display: none; }
+  #zoomBox { right: 10px; bottom: 72px; }
+  #side.open ~ #zoomBox, body:has(#side.open) #zoomBox { display: none; }
+}
+</style>
+</head>
+<body>
+<div id="loading">Загружаю редактор…</div>
+
+<div id="top">
+  <span class="brand">Purr</span>
+  <span class="title" id="title">—</span>
+  <button class="btn icon" id="undoBtn" title="Отменить (Ctrl+Z)">↶</button>
+  <button class="btn icon" id="redoBtn" title="Вернуть (Ctrl+Shift+Z)">↷</button>
+  <button class="btn on hideM" id="liveBtn" title="Показывать в текстах живые значения переменных">{ } → 42</button>
+  <button class="btn" id="sheetBtn" title="Свойства и слои">⚙</button>
+  <button class="btn" id="previewBtn" title="Как нарисует бот — с живыми значениями">👁<span class="hideM"> Как нарисует бот</span></button>
+  <button class="btn primary" id="saveBtn">Сохранить</button>
+</div>
+
+<div id="rail">
+  <button data-tool="select" class="on" title="Выбор и перемещение (V)">🖐<span>выбор</span></button>
+  <button data-tool="text" title="Текст (T)">🅣<span>текст</span></button>
+  <button data-tool="sticker" title="Стикеры-дудлы (S)">🐱<span>стикер</span></button>
+  <button data-tool="shape" title="Фигура (R)">⬛<span>фигура</span></button>
+  <button data-tool="image" title="Своя картинка">🖼<span>фото</span></button>
+  <button data-tool="picture" title="Живая картинка">📊<span>живая</span></button>
+  <button data-tool="vars" title="Переменные и счётчики">{ }<span>перем.</span></button>
+  <button data-tool="bg" title="Фон и размер холста">🎨<span>фон</span></button>
+</div>
+
+<div id="stageWrap">
+  <div id="stageBox">
+    <div id="stage"></div>
+    <div id="overlay"></div>
+  </div>
+</div>
+
+<div id="zoomBox">
+  <button class="btn icon" id="zoomOut" title="Отдалить">−</button>
+  <button class="btn" id="zoomFit" title="По размеру окна">⤢</button>
+  <button class="btn icon" id="zoomIn" title="Приблизить">+</button>
+</div>
+
+<div id="side">
+  <div id="tabs">
+    <button data-tab="props" class="on">Свойства</button>
+    <button data-tab="layers">Слои</button>
+  </div>
+  <div id="sideBody"></div>
+</div>
+
+<div id="drawer"></div>
+
+<div class="modal" id="previewModal"><div class="card wide">
+  <div class="row"><b style="flex:1">Так бот нарисует — с живыми значениями</b><button class="btn" data-close>Закрыть</button></div>
+  <div id="previewBody" class="hint">Рисую…</div>
+</div></div>
+
+<div class="modal" id="varModal"><div class="card">
+  <div class="row"><b style="flex:1">Вставить переменную</b><button class="btn" data-close>Закрыть</button></div>
+  <input type="text" id="varSearch" placeholder="Поиск: онлайн, войс, сообщения…">
+  <div class="hint">Значение подставляется само и обновляется вместе с картинкой.</div>
+  <div id="varList" class="pickList"></div>
+</div></div>
+
+<input type="file" id="fileInput" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const TOKEN = location.pathname.split("/")[2];
+const API = `/scene/${TOKEN}`;
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+
+function h(tag, props, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "style") el.style.cssText = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k in el && k !== "list") el[k] = v;
+    else el.setAttribute(k, v);
+  }
+  for (const c of children.flat(Infinity)) if (c !== null && c !== undefined && c !== false)
+    el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+
+async function call(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(API + path, opts);
+  let data;
+  try { data = await res.json(); } catch (e) { data = { ok: false, error: "Сайт бота не ответил." }; }
+  if (!data.ok) throw new Error(data.error || "Ошибка");
+  return data;
+}
+
+let toastTimer;
+function toast(text, kind = "") {
+  const el = $("#toast");
+  el.textContent = text; el.className = kind; el.style.display = "block";
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.style.display = "none", 3500);
+}
+
+// ============================================================
+// СОСТОЯНИЕ
+// ============================================================
+let INIT = null;
+let scene = null;           // {w, h, bg, layers}
+let selected = null;        // id слоя
+let zoom = 1;
+let showLive = true;
+let liveValues = {};        // текст -> текст со значениями
+let dirty = false;
+const undoStack = [], redoStack = [];
+const FONT_CSS = {
+  coolvetica: ["Coolvetica", 400, "Inter", 700], dunkin: ["DunkinSans", 400, "Inter", 600],
+  dunkin_bold: ["DunkinSans", 700, "Inter", 700], drunk: ["Drunk", 400, "Inter", 700],
+  inter: ["Inter", 400, "Inter", 400], inter_semi: ["Inter", 600, "Inter", 600], inter_bold: ["Inter", 700, "Inter", 700],
+};
+const CYR = /[а-яё]/i;
+const uid = () => "l" + Math.random().toString(36).slice(2, 9);
+const layerById = id => scene.layers.find(l => l.id === id);
+const clone = o => JSON.parse(JSON.stringify(o));
+const TYPE_NAMES = { picture: "Живая картинка", text: "Текст", sticker: "Стикер", image: "Картинка", shape: "Фигура" };
+const TYPE_ICONS = { picture: "📊", text: "🅣", sticker: "🐱", image: "🖼", shape: "⬛" };
+
+function snapshot() { return JSON.stringify(scene); }
+function commit() {   // изменение завершено — в историю
+  const snap = snapshot();
+  if (undoStack.length && undoStack[undoStack.length - 1] === snap) return;
+  undoStack.push(snap); if (undoStack.length > 120) undoStack.shift();
+  redoStack.length = 0; dirty = true; updateUndo();
+}
+function undo() {
+  if (undoStack.length < 2) return;
+  redoStack.push(undoStack.pop());
+  scene = JSON.parse(undoStack[undoStack.length - 1]); dirty = true;
+  if (selected && !layerById(selected)) selected = null;
+  renderAll(); updateUndo();
+}
+function redo() {
+  if (!redoStack.length) return;
+  const snap = redoStack.pop(); undoStack.push(snap);
+  scene = JSON.parse(snap); dirty = true;
+  renderAll(); updateUndo();
+}
+function updateUndo() { $("#undoBtn").disabled = undoStack.length < 2; $("#redoBtn").disabled = !redoStack.length; }
+
+// ============================================================
+// ХОЛСТ
+// ============================================================
+const stage = $("#stage"), overlay = $("#overlay"), wrap = $("#stageWrap"), box = $("#stageBox");
+
+function fitZoom() {
+  const pad = window.innerWidth <= 900 ? 12 : 32;
+  const zw = (wrap.clientWidth - pad * 2) / scene.w, zh = (wrap.clientHeight - pad * 2) / scene.h;
+  zoom = Math.max(0.05, Math.min(zw, zh, 2));
+  layoutStage();
+}
+function layoutStage() {
+  stage.style.width = scene.w + "px"; stage.style.height = scene.h + "px";
+  stage.style.transform = `scale(${zoom})`;
+  const W = scene.w * zoom, H = scene.h * zoom;
+  const phone = window.innerWidth <= 900;   // на телефоне снизу — панель свойств: холст прижимаем к верху
+  const left = Math.max(16, (wrap.clientWidth - W) / 2), top = phone ? 12 : Math.max(16, (wrap.clientHeight - H) / 2);
+  box.style.left = left + "px"; box.style.top = top + "px"; box.style.width = W + "px"; box.style.height = H + "px";
+  overlay.style.width = W + "px"; overlay.style.height = H + "px";
+  drawSelection();
+}
+
+function bgUrl() {
+  const bg = scene.bg || {};
+  if (bg.image) return `/assets/${bg.image}`;
+  if (bg.card !== undefined && bg.card !== null) return `${API}/api/bg.png?card=${bg.card}&w=${scene.w}&h=${scene.h}`;
+  if (bg.style) return `${API}/api/bg.png?style=${bg.style}&w=${scene.w}&h=${scene.h}`;
+  return null;
+}
+
+let cardStamp = Date.now();
+function layerEl(layer) {
+  const el = h("div", { class: "layer " + layer.type + (layer.hidden ? " hiddenL" : ""), "data-id": layer.id });
+  el.style.left = layer.x + "px"; el.style.top = layer.y + "px"; el.style.width = layer.w + "px";
+  el.style.transform = `rotate(${layer.rot || 0}deg)`;
+  el.style.opacity = layer.opacity ?? 1;
+  const shadow = layer.shadow ? `drop-shadow(0 ${layer.shadow / 2}px ${layer.shadow}px rgba(0,0,0,.45))` : "";
+  if (layer.type === "text") {
+    const css = FONT_CSS[layer.font] || FONT_CSS.coolvetica;
+    const shown = showLive && liveValues[layer.text] !== undefined ? liveValues[layer.text] : layer.text;
+    const font = CYR.test(shown) && !fontCyr(layer.font) ? [css[2], css[3]] : [css[0], css[1]];
+    el.style.cssText += `;font-family:"${font[0]}";font-weight:${font[1]};font-size:${layer.size}px;line-height:${layer.lh};color:${layer.color};text-align:${layer.align}`;
+    if (layer.stroke) el.style.webkitTextStroke = `${layer.stroke * 2}px ${layer.stroke_color}`;
+    el.textContent = shown || " ";
+  } else {
+    el.style.height = layer.h + "px";
+    if (layer.type === "shape") {
+      el.style.background = layer.no_fill ? "transparent" : layer.fill;
+      if (layer.stroke) el.style.border = `${layer.stroke}px solid ${layer.stroke_color}`;
+      el.style.borderRadius = layer.shape === "ellipse" ? "50%" : (layer.radius || 0) + "px";
+    } else {
+      let src = "";
+      if (layer.type === "picture") src = `${API}/api/card/${layer.card}.png?t=${cardStamp}`;
+      if (layer.type === "sticker") src = `${API}/sticker/${layer.set}/${layer.sticker}.png`;
+      if (layer.type === "image") src = `/assets/${layer.asset}`;
+      const img = h("img", { src, draggable: false });
+      if (layer.radius) img.style.borderRadius = layer.radius + "px";
+      el.append(img);
+      if (shadow) el.style.filter = shadow;
+    }
+  }
+  return el;
+}
+const fontCyr = key => (INIT.fonts.find(f => f.key === key) || {}).cyrillic;
+
+function renderStage() {
+  stage.innerHTML = "";
+  stage.style.background = (scene.bg && scene.bg.color) || "#F1EEEC";
+  const url = bgUrl();
+  if (url) stage.append(h("img", { class: "bgimg", src: url, draggable: false }));
+  for (const layer of scene.layers) stage.append(layerEl(layer));
+  measureTexts();
+  layoutStage();
+}
+function measureTexts() {   // у текста высота — по строкам
+  for (const layer of scene.layers) if (layer.type === "text") {
+    const el = stage.querySelector(`[data-id="${layer.id}"]`);
+    if (el) layer.h = Math.max(1, el.offsetHeight);
+  }
+}
+function updateLayerEl(layer) {
+  const old = stage.querySelector(`[data-id="${layer.id}"]`);
+  const fresh = layerEl(layer);
+  if (old) old.replaceWith(fresh); else stage.append(fresh);
+  if (layer.type === "text") layer.h = Math.max(1, fresh.offsetHeight);
+  drawSelection();
+}
+
+// ---------- выделение ----------
+const HANDLES = [["nw", -1, -1], ["n", 0, -1], ["ne", 1, -1], ["e", 1, 0], ["se", 1, 1], ["s", 0, 1], ["sw", -1, 1], ["w", -1, 0]];
+function drawSelection(guides = []) {
+  overlay.innerHTML = "";
+  const layer = selected && layerById(selected);
+  for (const g of guides) {
+    overlay.append(h("div", { class: "guide", style: g.x !== undefined
+      ? `left:${g.x * zoom}px;top:0;width:1px;height:100%` : `top:${g.y * zoom}px;left:0;height:1px;width:100%` }));
+  }
+  if (!layer || layer.hidden) return;
+  const sb = h("div", { class: "selbox" });
+  sb.style.left = layer.x * zoom + "px"; sb.style.top = layer.y * zoom + "px";
+  sb.style.width = layer.w * zoom + "px"; sb.style.height = layer.h * zoom + "px";
+  sb.style.transform = `rotate(${layer.rot || 0}deg)`;
+  if (!layer.locked) {
+    const small = layer.w * zoom < 70 || layer.h * zoom < 70;   // маленький слой — только уголки
+    for (const [name, sx, sy] of HANDLES) {
+      if (layer.type === "text" && sy !== 0 && sx === 0) continue;   // у текста высота — по строкам
+      if (small && (sx === 0 || sy === 0) && !(layer.type === "text" && sy === 0)) continue;
+      const hd = h("div", { class: "handle", "data-h": name });
+      hd.style.left = (sx + 1) * 50 + "%"; hd.style.top = (sy + 1) * 50 + "%";
+      hd.addEventListener("pointerdown", e => startResize(e, layer, sx, sy));
+      sb.append(hd);
+    }
+    sb.append(h("div", { class: "rotline" }));
+    const rot = h("div", { class: "handle rot", style: "left:50%;top:-28px" });
+    rot.addEventListener("pointerdown", e => startRotate(e, layer));
+    sb.append(rot);
+  }
+  overlay.append(sb);
+}
+
+function toScene(e) {
+  const r = box.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom };
+}
+
+// ---------- перетаскивание ----------
+let drag = null;
+stage.addEventListener("pointerdown", e => {
+  if (tool === "text") { addText(toScene(e)); setTool("select"); return; }
+  const el = e.target.closest(".layer");
+  if (!el) { select(null); return; }
+  const layer = layerById(el.dataset.id);
+  select(layer.id);
+  if (layer.locked) return;
+  const p = toScene(e);
+  drag = { kind: "move", layer, sx: p.x, sy: p.y, x0: layer.x, y0: layer.y };
+  e.preventDefault();
+});
+stage.addEventListener("dblclick", e => {
+  const el = e.target.closest(".layer.text");
+  if (el) { select(el.dataset.id); openSheet(); setTimeout(() => { const ta = $("#textField"); if (ta) { ta.focus(); ta.select(); } }, 50); }
+});
+
+function startResize(e, layer, sx, sy) {
+  e.stopPropagation(); e.preventDefault();
+  const p = toScene(e);
+  drag = { kind: "resize", layer, sx, sy, px: p.x, py: p.y, start: clone(layer) };
+}
+function startRotate(e, layer) {
+  e.stopPropagation(); e.preventDefault();
+  drag = { kind: "rotate", layer, start: clone(layer) };
+}
+// рамка выделения перерисовывается на каждом шаге — слушаем окно, а не ручку
+window.addEventListener("pointermove", onMove);
+window.addEventListener("pointerup", onUp);
+window.addEventListener("pointercancel", onUp);
+
+function snapMove(layer, x, y) {
+  // примагничивание к краям и центру холста и других слоёв
+  const tol = 6 / zoom, guides = [];
+  const xs = [0, scene.w / 2, scene.w], ys = [0, scene.h / 2, scene.h];
+  for (const o of scene.layers) if (o.id !== layer.id && !o.hidden) {
+    xs.push(o.x, o.x + o.w / 2, o.x + o.w); ys.push(o.y, o.y + o.h / 2, o.y + o.h);
+  }
+  const mine = (v, size) => [v, v + size / 2, v + size];
+  let bestX = null, bestY = null;
+  mine(x, layer.w).forEach((v, i) => xs.forEach(t => { const d = Math.abs(v - t); if (d < tol && (!bestX || d < bestX.d)) bestX = { d, dx: t - v, t }; }));
+  mine(y, layer.h).forEach((v, i) => ys.forEach(t => { const d = Math.abs(v - t); if (d < tol && (!bestY || d < bestY.d)) bestY = { d, dy: t - v, t }; }));
+  if (bestX) { x += bestX.dx; guides.push({ x: bestX.t }); }
+  if (bestY) { y += bestY.dy; guides.push({ y: bestY.t }); }
+  return { x, y, guides };
+}
+
+function onMove(e) {
+  if (!drag) return;
+  const p = toScene(e), L = drag.layer;
+  if (drag.kind === "move") {
+    let x = drag.x0 + p.x - drag.sx, y = drag.y0 + p.y - drag.sy, guides = [];
+    if (!e.altKey && !(L.rot % 360)) ({ x, y, guides } = snapMove(L, x, y));
+    L.x = Math.round(x); L.y = Math.round(y);
+    const el = stage.querySelector(`[data-id="${L.id}"]`);
+    el.style.left = L.x + "px"; el.style.top = L.y + "px";
+    drawSelection(guides); fillNumbers();
+  } else if (drag.kind === "rotate") {
+    const cx = L.x + L.w / 2, cy = L.y + L.h / 2;
+    let ang = Math.atan2(p.y - cy, p.x - cx) * 180 / Math.PI + 90;
+    if (!e.altKey) { const s = Math.round(ang / 15) * 15; if (Math.abs(s - ang) < 4 || e.shiftKey) ang = s; }
+    L.rot = Math.round(((ang + 540) % 360) - 180);
+    stage.querySelector(`[data-id="${L.id}"]`).style.transform = `rotate(${L.rot}deg)`;
+    drawSelection(); fillNumbers();
+  } else if (drag.kind === "resize") {
+    const S = drag.start, a = (S.rot || 0) * Math.PI / 180, cos = Math.cos(a), sin = Math.sin(a);
+    const dx = p.x - drag.px, dy = p.y - drag.py;
+    const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;   // смещение в осях слоя
+    let w = S.w + drag.sx * lx, hgt = S.h + drag.sy * ly;
+    const keep = ["picture", "sticker", "image"].includes(L.type) ? !e.shiftKey : e.shiftKey;
+    const corner = drag.sx !== 0 && drag.sy !== 0;
+    if (L.type === "text") {
+      if (corner) { const k = Math.max(0.05, w / S.w); L.size = Math.max(6, Math.round(S.size * k)); w = S.w * k; }
+      hgt = S.h * (corner ? w / S.w : 1);
+    } else if (keep) {
+      const k = corner ? Math.max(w / S.w, hgt / S.h) : (drag.sx ? w / S.w : hgt / S.h);
+      w = S.w * k; hgt = S.h * k;
+    }
+    w = Math.max(8, w); hgt = Math.max(8, hgt);
+    // противоположная точка остаётся на месте
+    const ax = -drag.sx * S.w / 2, ay = -drag.sy * S.h / 2;
+    const cx0 = S.x + S.w / 2, cy0 = S.y + S.h / 2;
+    const anchorX = cx0 + ax * cos - ay * sin, anchorY = cy0 + ax * sin + ay * cos;
+    const bx = drag.sx * w / 2, by = drag.sy * hgt / 2;
+    const cx = anchorX + bx * cos - by * sin, cy = anchorY + bx * sin + by * cos;
+    L.w = Math.round(w); L.h = Math.round(hgt);
+    L.x = Math.round(cx - w / 2); L.y = Math.round(cy - hgt / 2);
+    updateLayerEl(L); fillNumbers();
+  }
+}
+function onUp() {
+  if (!drag) return;
+  drag = null; commit(); drawSelection(); renderSide();
+}
+
+// ============================================================
+// СЛОИ: добавить, выбрать, порядок
+// ============================================================
+function select(id) {
+  selected = id; drawSelection(); renderSide();
+}
+function addLayer(layer) {
+  if (scene.layers.length >= INIT.limits.layers) { toast(`Больше ${INIT.limits.layers} слоёв нельзя`, "bad"); return; }
+  layer.id = uid(); layer.rot = layer.rot || 0; layer.opacity = layer.opacity ?? 1; layer.hidden = false; layer.locked = false;
+  scene.layers.push(layer);
+  updateLayerEl(layer); select(layer.id); commit();
+  if (layer.type === "text") refreshLive();
+}
+function centerAt(w, hgt, p) {
+  return p ? { x: Math.round(p.x - w / 2), y: Math.round(p.y - hgt / 2) } : { x: Math.round((scene.w - w) / 2), y: Math.round((scene.h - hgt) / 2) };
+}
+function addText(p) {
+  const size = Math.round(Math.max(24, scene.h * 0.09)), w = Math.round(scene.w * 0.5);
+  addLayer({ type: "text", name: "Текст", text: "Новый текст", font: "coolvetica", size, color: "#201C1E", align: "left", lh: 1.15,
+    stroke: 0, stroke_color: "#FFFFFF", w, h: size, ...(p ? { x: Math.round(p.x), y: Math.round(p.y - size / 2) } : centerAt(w, size)) });
+}
+function addSticker(set, name) {
+  const s = Math.round(Math.min(scene.w, scene.h) * 0.22);
+  addLayer({ type: "sticker", name: `Стикер ${name}`, set, sticker: name, w: s, h: s, shadow: 0, ...centerAt(s, s) });
+}
+function addShape(shape) {
+  const w = Math.round(scene.w * 0.3), hgt = shape === "ellipse" ? w : Math.round(scene.h * 0.2);
+  addLayer({ type: "shape", name: shape === "ellipse" ? "Круг" : "Прямоугольник", shape, fill: "#C6F135", no_fill: false, stroke: 0,
+    stroke_color: "#201C1E", radius: shape === "rect" ? 16 : 0, w, h: hgt, ...centerAt(w, hgt) });
+}
+async function addPicture(card) {
+  const img = new Image();
+  img.src = `${API}/api/card/${card}.png?t=${cardStamp}`;
+  await img.decode().catch(() => null);
+  const ratio = img.naturalWidth ? img.naturalHeight / img.naturalWidth : 0.5;
+  let w = Math.round(scene.w * 0.7), hgt = Math.round(w * ratio);
+  if (hgt > scene.h * 0.9) { hgt = Math.round(scene.h * 0.9); w = Math.round(hgt / ratio); }
+  const title = card === "self" ? "Эта картинка" : (INIT.cards.find(c => String(c.id) === String(card)) || {}).title;
+  addLayer({ type: "picture", name: title || "Живая картинка", card, radius: 0, shadow: 0, w, h: hgt, ...centerAt(w, hgt) });
+}
+async function uploadFile(file, asBackground) {
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) { toast("Файл больше 8 МБ", "bad"); return; }
+  const data = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
+  toast("Загружаю…");
+  try {
+    const res = await call("/api/upload", { data });
+    if (asBackground) { scene.bg.image = res.asset; commit(); renderStage(); renderSide(); toast("Фон загружен", "ok"); return; }
+    const img = new Image(); img.src = res.url; await img.decode().catch(() => null);
+    const ratio = img.naturalWidth ? img.naturalHeight / img.naturalWidth : 1;
+    let w = Math.round(scene.w * 0.5), hgt = Math.round(w * ratio);
+    if (hgt > scene.h * 0.9) { hgt = Math.round(scene.h * 0.9); w = Math.round(hgt / ratio); }
+    addLayer({ type: "image", name: file.name.slice(0, 40), asset: res.asset, radius: 0, shadow: 0, w, h: hgt, ...centerAt(w, hgt) });
+    toast("Картинка добавлена", "ok");
+  } catch (err) { toast(err.message, "bad"); }
+}
+function removeLayer(id) {
+  scene.layers = scene.layers.filter(l => l.id !== id);
+  if (selected === id) selected = null;
+  renderStage(); renderSide(); commit();
+}
+function duplicate(id) {
+  const src = layerById(id); if (!src) return;
+  const copy = clone(src); copy.x += 20; copy.y += 20; copy.name = (src.name || TYPE_NAMES[src.type]) + " (копия)";
+  addLayer(copy);
+}
+function move(id, where) {
+  const i = scene.layers.findIndex(l => l.id === id); if (i < 0) return;
+  const [layer] = scene.layers.splice(i, 1);
+  const j = where === "top" ? scene.layers.length : where === "bottom" ? 0 : Math.max(0, Math.min(scene.layers.length, i + (where === "up" ? 1 : -1)));
+  scene.layers.splice(j, 0, layer);
+  renderStage(); renderSide(); commit();
+}
+function align(id, how) {
+  const L = layerById(id); if (!L) return;
+  if (how === "left") L.x = 0; if (how === "hcenter") L.x = Math.round((scene.w - L.w) / 2); if (how === "right") L.x = scene.w - L.w;
+  if (how === "top") L.y = 0; if (how === "vcenter") L.y = Math.round((scene.h - L.h) / 2); if (how === "bottom") L.y = scene.h - L.h;
+  if (how === "fill") { L.x = 0; L.y = 0; L.w = scene.w; L.h = scene.h; }
+  updateLayerEl(L); fillNumbers(); commit();
+}
+
+// ============================================================
+// ЖИВЫЕ ЗНАЧЕНИЯ ПЕРЕМЕННЫХ (для просмотра)
+// ============================================================
+let liveTimer;
+function refreshLive() {
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(async () => {
+    const texts = [...new Set(scene.layers.filter(l => l.type === "text" && /\{[a-z_]+/.test(l.text)).map(l => l.text))];
+    if (!texts.length) return;
+    try {
+      const res = await call("/api/values", { texts });
+      texts.forEach((t, i) => liveValues[t] = res.values[i]);
+      if (showLive) { for (const l of scene.layers) if (l.type === "text") updateLayerEl(l); }
+    } catch (e) { /* не страшно — покажем как есть */ }
+  }, 450);
+}
+
+// ============================================================
+// БОКОВАЯ ПАНЕЛЬ: свойства и слои
+// ============================================================
+let sideTab = "props";
+$$("#tabs button").forEach(b => b.addEventListener("click", () => { sideTab = b.dataset.tab; renderSide(); }));
+
+function num(label, value, onchange, opts = {}) {
+  const input = h("input", { type: "number", value: Math.round(value * 100) / 100, step: opts.step || 1 });
+  input.addEventListener("input", () => { const v = parseFloat(input.value); if (!isNaN(v)) onchange(v, false); });
+  input.addEventListener("change", () => { const v = parseFloat(input.value); if (!isNaN(v)) onchange(v, true); });
+  if (opts.id) input.id = opts.id;
+  return h("div", { class: "num" }, h("b", {}, label), input);
+}
+function field(label, ...control) { return h("div", { class: "row" }, h("label", {}, label), ...control); }
+function seg(options, current, onpick) {
+  return h("div", { class: "seg" }, options.map(([v, label, title]) =>
+    h("button", { class: v === current ? "on" : "", title: title || "", onclick: () => onpick(v) }, label)));
+}
+function colorInput(value, onchange) {
+  const c = h("input", { type: "color", value: value || "#000000" });
+  const txt = h("input", { type: "text", value: (value || "").toUpperCase(), maxLength: 7 });
+  c.addEventListener("input", () => { txt.value = c.value.toUpperCase(); onchange(c.value.toUpperCase(), false); });
+  c.addEventListener("change", () => onchange(c.value.toUpperCase(), true));
+  txt.addEventListener("change", () => { if (/^#[0-9a-f]{6}$/i.test(txt.value)) { c.value = txt.value; onchange(txt.value.toUpperCase(), true); } });
+  return [c, txt];
+}
+function slider(value, min, max, step, onchange) {
+  const r = h("input", { type: "range", min, max, step, value });
+  const out = h("span", { style: "width:42px;text-align:right;color:var(--muted)" }, value);
+  r.addEventListener("input", () => { out.textContent = r.value; onchange(parseFloat(r.value), false); });
+  r.addEventListener("change", () => onchange(parseFloat(r.value), true));
+  return [r, out];
+}
+
+function setProp(L, key, value, done) {
+  L[key] = value;
+  updateLayerEl(L);
+  if (done) { commit(); if (L.type === "text") refreshLive(); }
+}
+
+function fillNumbers() {   // при перетаскивании — только цифры, без перерисовки панели
+  const L = selected && layerById(selected); if (!L) return;
+  for (const k of ["x", "y", "w", "h", "rot"]) { const el = $(`#n_${k}`); if (el && document.activeElement !== el) el.value = Math.round(L[k]); }
+}
+
+function renderSide() {
+  $$("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === sideTab));
+  const body = $("#sideBody"); body.innerHTML = "";
+  if (sideTab === "layers") { body.append(layersPanel()); return; }
+  const L = selected && layerById(selected);
+  body.append(L ? layerPanel(L) : canvasPanel());
+}
+
+function layersPanel() {
+  const list = h("div", {});
+  list.append(h("div", { class: "hint" }, "Сверху — то, что лежит поверх. Нажми — выбрать."));
+  [...scene.layers].reverse().forEach(L => {
+    list.append(h("div", { class: "layerRow" + (L.id === selected ? " on" : ""), onclick: () => { select(L.id); } },
+      h("span", {}, TYPE_ICONS[L.type]),
+      h("span", { class: "nm" }, L.name || (L.type === "text" ? L.text : TYPE_NAMES[L.type])),
+      h("button", { class: L.hidden ? "off" : "", title: "Показать / скрыть", onclick: e => { e.stopPropagation(); L.hidden = !L.hidden; renderStage(); renderSide(); commit(); } }, "👁"),
+      h("button", { class: L.locked ? "" : "off", title: "Закрепить", onclick: e => { e.stopPropagation(); L.locked = !L.locked; drawSelection(); renderSide(); commit(); } }, "🔒")));
+  });
+  if (!scene.layers.length) list.append(h("div", { class: "hint" }, "Слоёв пока нет — добавь текст, стикер или живую картинку слева."));
+  return list;
+}
+
+function layerPanel(L) {
+  const p = h("div", {});
+  p.append(h("h3", {}, TYPE_NAMES[L.type]));
+  const name = h("input", { type: "text", value: L.name || "", placeholder: "Название слоя" });
+  name.addEventListener("change", () => { L.name = name.value.slice(0, 40); commit(); });
+  p.append(field("Название", name));
+
+  if (L.type === "text") {
+    const ta = h("textarea", { id: "textField", value: L.text });
+    ta.addEventListener("input", () => setProp(L, "text", ta.value.slice(0, 500), false));
+    ta.addEventListener("change", () => { commit(); refreshLive(); });
+    p.append(ta);
+    p.append(h("div", { class: "btns" },
+      h("button", { class: "btn", onclick: () => openVars(ta, L) }, "{ } Вставить переменную"),
+      showLive && liveValues[L.text] && liveValues[L.text] !== L.text ? h("span", { class: "hint" }, "сейчас: " + liveValues[L.text]) : null));
+    const font = h("select", {}, INIT.fonts.map(f => h("option", { value: f.key, selected: f.key === L.font }, f.label + (f.cyrillic ? "" : " (латиница)"))));
+    font.addEventListener("change", () => setProp(L, "font", font.value, true));
+    p.append(field("Шрифт", font));
+    p.append(h("div", { class: "grid2" },
+      num("Размер", L.size, (v, d) => setProp(L, "size", Math.max(6, Math.min(600, v)), d)),
+      num("Интервал", L.lh, (v, d) => setProp(L, "lh", Math.max(0.7, Math.min(3, v)), d), { step: 0.05 })));
+    p.append(field("Цвет", ...colorInput(L.color, (v, d) => setProp(L, "color", v, d))));
+    p.append(field("Выравнивание", seg([["left", "⟸", "влево"], ["center", "≡", "по центру"], ["right", "⟹", "вправо"]], L.align,
+      v => { setProp(L, "align", v, true); renderSide(); })));
+    p.append(field("Обводка", ...slider(L.stroke, 0, 20, 1, (v, d) => setProp(L, "stroke", v, d))));
+    if (L.stroke) p.append(field("Цвет обводки", ...colorInput(L.stroke_color, (v, d) => setProp(L, "stroke_color", v, d))));
+  }
+  if (L.type === "picture") {
+    const sel = h("select", {},
+      INIT.kind === "card" ? h("option", { value: "self", selected: L.card === "self" }, "Эта картинка") : null,
+      INIT.cards.map(c => h("option", { value: c.id, selected: String(c.id) === String(L.card) }, c.title)));
+    sel.addEventListener("change", () => { setProp(L, "card", sel.value === "self" ? "self" : parseInt(sel.value), true); });
+    p.append(field("Картинка", sel));
+    p.append(field("Скругление", ...slider(L.radius, 0, 200, 1, (v, d) => setProp(L, "radius", v, d))));
+    p.append(field("Тень", ...slider(L.shadow, 0, 60, 1, (v, d) => setProp(L, "shadow", v, d))));
+    p.append(h("div", { class: "hint" }, "Значения в живой картинке меняются в Discord («Данные») — тут её место и размер."));
+  }
+  if (L.type === "sticker") {
+    p.append(h("div", { class: "btns" }, h("button", { class: "btn", onclick: () => openDrawer("sticker", L) }, "Заменить стикер")));
+    p.append(field("Тень", ...slider(L.shadow, 0, 60, 1, (v, d) => setProp(L, "shadow", v, d))));
+  }
+  if (L.type === "image") {
+    p.append(field("Скругление", ...slider(L.radius, 0, 200, 1, (v, d) => setProp(L, "radius", v, d))));
+    p.append(field("Тень", ...slider(L.shadow, 0, 60, 1, (v, d) => setProp(L, "shadow", v, d))));
+  }
+  if (L.type === "shape") {
+    p.append(field("Форма", seg([["rect", "▭ Прямоуг."], ["ellipse", "◯ Круг"]], L.shape, v => { setProp(L, "shape", v, true); renderSide(); })));
+    const nofill = h("input", { type: "checkbox", checked: !!L.no_fill });
+    nofill.addEventListener("change", () => setProp(L, "no_fill", nofill.checked, true));
+    p.append(field("Заливка", ...colorInput(L.fill, (v, d) => setProp(L, "fill", v, d))));
+    p.append(field("Без заливки", nofill));
+    p.append(field("Обводка", ...slider(L.stroke, 0, 40, 1, (v, d) => setProp(L, "stroke", v, d))));
+    if (L.stroke) p.append(field("Цвет обводки", ...colorInput(L.stroke_color, (v, d) => setProp(L, "stroke_color", v, d))));
+    if (L.shape === "rect") p.append(field("Скругление", ...slider(L.radius, 0, 300, 1, (v, d) => setProp(L, "radius", v, d))));
+  }
+
+  p.append(h("h3", {}, "Место и размер"));
+  const geo = (k, label) => num(label, L[k], (v, d) => { L[k] = v; updateLayerEl(L); if (d) commit(); }, { id: "n_" + k });
+  p.append(h("div", { class: "grid2" }, geo("x", "X"), geo("y", "Y"), geo("w", "Ш"), L.type === "text" ? h("div", {}) : geo("h", "В")));
+  p.append(h("div", { class: "grid2" }, num("Поворот°", L.rot || 0, (v, d) => { L.rot = Math.max(-360, Math.min(360, v)); updateLayerEl(L); if (d) commit(); }, { id: "n_rot" }), h("div", {})));
+  p.append(field("Прозрачность", ...slider(Math.round((L.opacity ?? 1) * 100), 0, 100, 1, (v, d) => setProp(L, "opacity", v / 100, d))));
+  p.append(h("h3", {}, "Выровнять по холсту"));
+  p.append(h("div", { class: "grid3" }, ...[["left", "⇤ слева"], ["hcenter", "↔ центр"], ["right", "справа ⇥"], ["top", "⤒ сверху"], ["vcenter", "↕ середина"], ["bottom", "снизу ⤓"]]
+    .map(([k, label]) => h("button", { class: "btn", onclick: () => align(L.id, k) }, label))));
+  if (L.type !== "text") p.append(h("div", { class: "btns" }, h("button", { class: "btn", onclick: () => align(L.id, "fill") }, "⛶ На весь холст")));
+  p.append(h("h3", {}, "Слой"));
+  p.append(h("div", { class: "grid2" },
+    h("button", { class: "btn", onclick: () => move(L.id, "top") }, "⤒ Наверх"), h("button", { class: "btn", onclick: () => move(L.id, "up") }, "↑ Выше"),
+    h("button", { class: "btn", onclick: () => move(L.id, "bottom") }, "⤓ Вниз"), h("button", { class: "btn", onclick: () => move(L.id, "down") }, "↓ Ниже")));
+  p.append(h("div", { class: "btns" },
+    h("button", { class: "btn", onclick: () => duplicate(L.id) }, "⧉ Дублировать"),
+    h("button", { class: "btn", onclick: () => { L.locked = !L.locked; drawSelection(); renderSide(); commit(); } }, L.locked ? "🔓 Открепить" : "🔒 Закрепить"),
+    h("button", { class: "btn danger", onclick: () => removeLayer(L.id) }, "🗑 Удалить")));
+  return p;
+}
+
+function canvasPanel() {
+  const p = h("div", {});
+  p.append(h("h3", {}, "Холст"));
+  p.append(h("div", { class: "hint" }, `${scene.w} × ${scene.h} px · слоёв: ${scene.layers.length}. Нажми на слой на холсте, чтобы его менять.`));
+  p.append(bgControls());
+  p.append(h("h3", {}, "Как пользоваться"));
+  p.append(h("div", { class: "hint" }, "Тяни слой — двигается (примагничивается к краям и центру, Alt — без магнита). Уголки — размер, кружок сверху — поворот (шаг 15°). "
+    + "Двойной щелчок по тексту — правка. Клавиши: Delete — удалить, стрелки — сдвиг (Shift — на 10), Ctrl+D — копия, Ctrl+Z / Ctrl+Shift+Z — отмена и возврат."));
+  if (INIT.has_scene) p.append(h("div", { class: "btns" }, h("button", { class: "btn danger", onclick: resetScene }, "Убрать холст — вернуть как было")));
+  return p;
+}
+
+function bgControls() {
+  const p = h("div", {});
+  p.append(h("h3", {}, "Фон"));
+  p.append(field("Цвет", ...colorInput(scene.bg.color || "#F1EEEC", (v, d) => { scene.bg.color = v; stage.style.background = v; if (d) commit(); })));
+  const style = h("select", {}, h("option", { value: "" }, "— без стиля —"),
+    INIT.styles.map(s => h("option", { value: s.key, selected: scene.bg.style === s.key }, s.name)));
+  style.addEventListener("change", () => { if (style.value) scene.bg.style = style.value; else delete scene.bg.style; commit(); renderStage(); });
+  p.append(field("Готовый стиль", style));
+  const cardOpts = [h("option", { value: "" }, "— нет —")];
+  if (INIT.kind === "card") cardOpts.push(h("option", { value: "self", selected: scene.bg.card === "self" }, "Фон этой картинки"));
+  INIT.cards.forEach(c => cardOpts.push(h("option", { value: c.id, selected: String(scene.bg.card) === String(c.id) }, "Фон «" + c.title + "»")));
+  const cardSel = h("select", {}, cardOpts);
+  cardSel.addEventListener("change", () => {
+    if (cardSel.value) scene.bg.card = cardSel.value === "self" ? "self" : parseInt(cardSel.value); else delete scene.bg.card;
+    commit(); renderStage();
+  });
+  p.append(field("Фон картинки", cardSel));
+  p.append(h("div", { class: "btns" },
+    h("button", { class: "btn", onclick: () => { pickFile(true); } }, "⬆ Своя картинка фона"),
+    scene.bg.image ? h("button", { class: "btn danger", onclick: () => { delete scene.bg.image; commit(); renderStage(); renderSide(); } }, "Убрать картинку") : null));
+  p.append(h("div", { class: "hint" }, "Сверху вниз по силе: своя картинка → фон живой картинки → готовый стиль → цвет."));
+  if (!INIT.fixed_size) {
+    p.append(h("h3", {}, "Размер холста"));
+    p.append(h("div", { class: "btns" }, INIT.presets.map(pr =>
+      h("button", { class: "btn" + (pr.w === scene.w && pr.h === scene.h ? " on" : ""), onclick: () => resize(pr.w, pr.h) }, `${pr.label} · ${pr.w}×${pr.h}`))));
+    p.append(h("div", { class: "grid2" },
+      num("Ш", scene.w, (v, d) => d && resize(v, scene.h)), num("В", scene.h, (v, d) => d && resize(scene.w, v))));
+  } else {
+    p.append(h("div", { class: "hint" }, "Баннер сервера — всегда 960×540 (16:9)."));
+  }
+  return p;
+}
+function resize(w, hgt) {
+  scene.w = Math.max(64, Math.min(2400, Math.round(w))); scene.h = Math.max(64, Math.min(2400, Math.round(hgt)));
+  commit(); renderStage(); fitZoom(); renderSide();
+}
+
+// ============================================================
+// ИНСТРУМЕНТЫ И ВЫДВИЖНЫЕ ОКНА
+// ============================================================
+let tool = "select";
+function setTool(t) {
+  tool = t;
+  $$("#rail button").forEach(b => b.classList.toggle("on", b.dataset.tool === t));
+  wrap.style.cursor = t === "text" ? "text" : "";
+}
+$$("#rail button").forEach(b => b.addEventListener("click", () => {
+  const t = b.dataset.tool;
+  if (t === "select") { closeDrawer(); setTool("select"); return; }
+  if (t === "text") { closeDrawer(); addText(); return; }
+  if (t === "image") { closeDrawer(); pickFile(false); return; }
+  if (t === "vars") { openVars(null, null); return; }
+  if (t === "bg") { select(null); sideTab = "props"; renderSide(); openSheet(); closeDrawer(); return; }
+  openDrawer(t);
+}));
+function pickFile(asBg) {
+  const input = $("#fileInput"); input.value = "";
+  input.onchange = () => uploadFile(input.files[0], asBg);
+  input.click();
+}
+function closeDrawer() { $("#drawer").classList.remove("open"); }
+function openDrawer(kind, replace) {
+  const d = $("#drawer"); d.innerHTML = "";
+  d.append(h("button", { class: "btn close", onclick: closeDrawer }, "✕"));
+  if (kind === "sticker") {
+    d.append(h("b", {}, replace ? "Заменить стикер" : "Стикеры — дудлы бота"));
+    let current = Object.keys(INIT.stickers)[0];
+    const tabs = h("div", { class: "btns" }), grid = h("div", { class: "stickers" });
+    const draw = () => {
+      tabs.innerHTML = ""; grid.innerHTML = "";
+      for (const [key, set] of Object.entries(INIT.stickers))
+        tabs.append(h("button", { class: "btn" + (key === current ? " on" : ""), onclick: () => { current = key; draw(); } }, set.label));
+      for (const name of INIT.stickers[current].names)
+        grid.append(h("button", { title: name, onclick: () => {
+          if (replace) { replace.set = current; replace.sticker = name; replace.name = `Стикер ${name}`; updateLayerEl(replace); commit(); renderSide(); }
+          else addSticker(current, name);
+          closeDrawer();
+        } }, h("img", { src: `${API}/sticker/${current}/${name}.png`, loading: "lazy" })));
+    };
+    d.append(tabs, grid); draw();
+  }
+  if (kind === "shape") {
+    d.append(h("b", {}, "Фигура"));
+    d.append(h("div", { class: "btns" },
+      h("button", { class: "btn", onclick: () => { addShape("rect"); closeDrawer(); } }, "▭ Прямоугольник"),
+      h("button", { class: "btn", onclick: () => { addShape("ellipse"); closeDrawer(); } }, "◯ Круг")));
+    d.append(h("div", { class: "hint" }, "Подложка под текст, плашка, рамка (без заливки + обводка)."));
+  }
+  if (kind === "picture") {
+    d.append(h("b", {}, "Живая картинка слоем"));
+    d.append(h("div", { class: "hint" }, "Картинка обновляется сама — значения меняются в Discord."));
+    const list = h("div", { class: "pickList" });
+    if (INIT.kind === "card") list.append(h("button", { onclick: () => { addPicture("self"); closeDrawer(); } }, "Эта картинка", h("small", {}, "ещё одна копия")));
+    INIT.cards.forEach(c => list.append(h("button", { onclick: () => { addPicture(c.id); closeDrawer(); } }, c.title)));
+    if (!list.children.length) list.append(h("div", { class: "hint" }, "Других живых картинок на сервере пока нет — /pictures → Живые картинки."));
+    d.append(list);
+  }
+  d.classList.add("open");
+}
+
+// ---------- переменные ----------
+let varTarget = null;
+function openVars(textarea, layer) {
+  varTarget = { textarea, layer };
+  $("#varModal").classList.add("open");
+  $("#varSearch").value = ""; drawVars(); setTimeout(() => $("#varSearch").focus(), 30);
+}
+$("#varSearch").addEventListener("input", drawVars);
+function drawVars() {
+  const q = $("#varSearch").value.trim().toLowerCase();
+  const list = $("#varList"); list.innerHTML = "";
+  const counter = h("div", { class: "box", style: "border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:10px" },
+    h("b", {}, "Свой счётчик"), h("div", { class: "hint" }, "Число, которое меняют кнопки и команды: {counter:имя}."));
+  const name = h("input", { type: "text", placeholder: "имя нового счётчика, например «победы»" });
+  counter.append(h("div", { class: "row" }, name, h("button", { class: "btn", onclick: async () => {
+    try { const res = await call("/api/counter", { name: name.value }); INIT.counters = res.counters; insertVar(`{counter:${res.name}}`); }
+    catch (e) { toast(e.message, "bad"); }
+  } }, "Создать")));
+  if (INIT.counters.length) counter.append(h("div", { class: "btns" }, INIT.counters.filter(c => !q || c.toLowerCase().includes(q))
+    .map(c => h("button", { class: "btn", onclick: () => insertVar(`{counter:${c}}`) }, c))));
+  list.append(counter);
+  let section = "";
+  for (const v of INIT.variables) {
+    const hay = (v.name + " " + v.title + " " + v.about + " " + v.section).toLowerCase();
+    if (q && !hay.includes(q)) continue;
+    if (v.section !== section) { section = v.section; list.append(h("h3", {}, section)); }
+    const example = (v.examples && v.examples[0]) || `{${v.name}}`;
+    list.append(h("button", { onclick: () => insertVar(example) }, v.title, h("small", {}, `${example} — ${v.about}`)));
+  }
+}
+function insertVar(token) {
+  $("#varModal").classList.remove("open");
+  let { textarea, layer } = varTarget || {};
+  if (!layer) {   // переменная без выбранного текста — новый текст с ней
+    addText(); layer = layerById(selected); layer.text = token; layer.name = token;
+    updateLayerEl(layer); commit(); refreshLive(); renderSide(); return;
+  }
+  const pos = textarea ? textarea.selectionStart : layer.text.length;
+  layer.text = (layer.text.slice(0, pos) + token + layer.text.slice(textarea ? textarea.selectionEnd : pos)).slice(0, 500);
+  updateLayerEl(layer); commit(); refreshLive(); renderSide();
+}
+
+// ============================================================
+// СОХРАНИТЬ, ПРЕДПРОСМОТР, СБРОС
+// ============================================================
+const payload = () => clone(scene);
+$("#previewBtn").addEventListener("click", async () => {
+  $("#previewModal").classList.add("open"); $("#previewBody").innerHTML = "Рисую…";
+  try {
+    const res = await call("/api/preview", { scene: payload() });
+    $("#previewBody").innerHTML = ""; $("#previewBody").append(h("img", { src: res.png }));
+  } catch (e) { $("#previewBody").textContent = e.message; }
+});
+async function save(apply) {
+  try {
+    const res = await call("/api/save", { scene: payload(), apply: !!apply });
+    dirty = false; INIT.has_scene = true; toast(res.note || "Сохранено", "ok");
+  } catch (e) { toast(e.message, "bad"); }
+}
+$("#saveBtn").addEventListener("click", () => {
+  if (INIT.kind !== "banner") { save(false); return; }
+  if (confirm("Сохранить и сразу поставить баннером сервера?\nОК — да, поставить. Отмена — только сохранить.")) save(true); else save(false);
+});
+async function resetScene() {
+  if (!confirm("Убрать холст? Картинка / баннер станут обычными, как до редактора.")) return;
+  try { await call("/api/reset", {}); dirty = false; toast("Холст убран — открой редактор заново из Discord, чтобы начать с начала.", "ok"); }
+  catch (e) { toast(e.message, "bad"); }
+}
+window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+$$("[data-close]").forEach(b => b.addEventListener("click", () => b.closest(".modal").classList.remove("open")));
+$$(".modal").forEach(m => m.addEventListener("click", e => { if (e.target === m) m.classList.remove("open"); }));
+
+// ---------- верхние кнопки ----------
+$("#undoBtn").addEventListener("click", undo);
+$("#redoBtn").addEventListener("click", redo);
+$("#zoomFit").addEventListener("click", fitZoom);
+$("#zoomIn").addEventListener("click", () => { zoom = Math.min(4, zoom * 1.25); layoutStage(); });
+$("#zoomOut").addEventListener("click", () => { zoom = Math.max(0.05, zoom / 1.25); layoutStage(); });
+$("#liveBtn").addEventListener("click", () => { showLive = !showLive; $("#liveBtn").classList.toggle("on", showLive); renderStage(); });
+function openSheet() { $("#side").classList.add("open"); }
+$("#sheetBtn").addEventListener("click", () => $("#side").classList.toggle("open"));
+window.addEventListener("resize", () => layoutStage());
+
+// ---------- клавиши ----------
+let clipboard = null, nudgeTimer = null;
+document.addEventListener("keydown", e => {
+  const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === "z") { if (typing) return; e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && e.key.toLowerCase() === "y") { if (typing) return; e.preventDefault(); redo(); return; }
+  if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); $("#saveBtn").click(); return; }
+  if (typing) return;
+  const L = selected && layerById(selected);
+  if (e.key === "Escape") { select(null); closeDrawer(); return; }
+  if (e.key === "t" || e.key === "е") { addText(); return; }
+  if (!L) return;
+  if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removeLayer(L.id); return; }
+  if (mod && e.key.toLowerCase() === "d") { e.preventDefault(); duplicate(L.id); return; }
+  if (mod && e.key.toLowerCase() === "c") { clipboard = clone(L); return; }
+  if (mod && e.key.toLowerCase() === "v" && clipboard) { const c = clone(clipboard); c.x += 20; c.y += 20; addLayer(c); return; }
+  if (e.key === "]") { move(L.id, "up"); return; }
+  if (e.key === "[") { move(L.id, "down"); return; }
+  const step = e.shiftKey ? 10 : 1;
+  const arrows = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+  if (arrows[e.key] && !L.locked) { e.preventDefault(); L.x += arrows[e.key][0]; L.y += arrows[e.key][1]; updateLayerEl(L); fillNumbers(); clearTimeout(nudgeTimer); nudgeTimer = setTimeout(commit, 400); }
+});
+
+// ============================================================
+// СТАРТ
+// ============================================================
+function renderAll() { renderStage(); renderSide(); }
+(async () => {
+  try {
+    INIT = await call("/api/init");
+  } catch (e) { $("#loading").textContent = e.message; return; }
+  INIT.has_scene = INIT.scene && INIT.saved;
+  scene = INIT.scene; scene.bg = scene.bg || {};
+  $("#title").textContent = `${INIT.title} · ${INIT.guild}`;
+  document.title = `Purr — ${INIT.title}`;
+  await document.fonts.ready.catch(() => null);
+  $("#loading").remove();
+  renderAll(); fitZoom();
+  undoStack.push(snapshot()); updateUndo();
+  refreshLive();
+  // шрифты подгружаются лениво — пересчитать высоту текстов, когда загрузятся
+  document.fonts.onloadingdone = () => { measureTexts(); drawSelection(); };
+})();
+</script>
+</body>
+</html>

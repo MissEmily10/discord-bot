@@ -4490,5 +4490,136 @@ class ClanMembershipTests(unittest.TestCase):
         self.assertIn("место представителя свободно", cm.roster_text(self.g, clan))
 
 
+class SceneEditorTests(unittest.TestCase):
+    """Редактор холста на сайте: проверка данных, отрисовка слоёв, права, сохранение в картинку и баннер."""
+
+    def guild(self):
+        g = make_guild()
+        for member in g.members.values():
+            member.display_name = member.name
+        return g
+
+    def full_scene(self, card_id):
+        import scene
+        sticker_set, names = next(iter(scene.stickers().items()))
+        return {"w": 960, "h": 540, "bg": {"color": "#202020", "style": "night"}, "layers": [
+            {"id": "a", "type": "picture", "card": card_id, "x": 40, "y": 40, "w": 600, "h": 300, "radius": 24,
+             "shadow": 20, "rot": 3},
+            {"id": "b", "type": "text", "text": "Онлайн: {member_count}", "font": "dunkin", "size": 48,
+             "color": "#FFFFFF", "align": "center", "x": 100, "y": 380, "w": 700, "stroke": 3, "rot": -5},
+            {"id": "c", "type": "sticker", "set": sticker_set, "sticker": names[0], "x": 700, "y": 40, "w": 200,
+             "h": 200, "rot": 20, "shadow": 10, "opacity": 0.8},
+            {"id": "d", "type": "shape", "shape": "ellipse", "fill": "#C6F135", "x": -50, "y": 450, "w": 200,
+             "h": 200, "stroke": 6},
+            {"id": "e", "type": "shape", "shape": "rect", "no_fill": True, "stroke": 4, "radius": 30, "x": 20,
+             "y": 20, "w": 920, "h": 500, "hidden": True},
+        ]}
+
+    def test_clean_rejects_and_limits(self):
+        import scene
+        cleaned, error = scene.clean({"w": 99999, "h": "x", "bg": {"color": "red", "image": "../../etc/passwd"},
+                                      "layers": [{"type": "picture", "card": 123456},  # чужая картинка — нельзя
+                                                 {"type": "image", "asset": "../bot.db"},
+                                                 {"type": "sticker", "set": "doodle", "sticker": "../../x"},
+                                                 {"type": "text", "text": "x" * 900, "font": "comic", "size": 1e9},
+                                                 {"type": "virus"}]}, card_ids={1})
+        self.assertIsNone(error)
+        self.assertEqual((cleaned["w"], cleaned["h"]), (scene.MAX_SIDE, scene.BANNER[1]))
+        self.assertEqual(cleaned["bg"], {"color": "#F1EEEC"})
+        self.assertEqual([layer["type"] for layer in cleaned["layers"]], ["text"])
+        text = cleaned["layers"][0]
+        self.assertEqual((len(text["text"]), text["font"], text["size"]), (500, "coolvetica", 600))
+        self.assertIsNotNone(scene.clean({"layers": [{"type": "text"}] * (scene.MAX_LAYERS + 1)})[1])
+        self.assertIsNone(scene.clean({"layers": [{"type": "picture", "card": "self"}]})[0]["layers"] or None)
+
+    def test_render_every_layer_type_live(self):
+        import cards
+        import scene
+        g = self.guild()
+        card = cards.get_card(cards.create_card(GUILD, ADMIN, "Слой", "counter"))
+        cleaned, error = scene.clean(self.full_scene(card["id"]), card_ids={card["id"]})
+        self.assertIsNone(error)
+        self.assertEqual(len(cleaned["layers"]), 5)
+        png = run(scene.render_live(cleaned, g, size=scene.BANNER))
+        self.assertEqual(PILImage.open(io.BytesIO(png)).size, scene.BANNER)
+        ready, pictures, _ = run(scene.prepare(cleaned, g))
+        self.assertEqual(ready["layers"][1]["text"], "Онлайн: 42")  # переменная подставлена
+        self.assertIn(card["id"], pictures)
+
+    def test_banner_scene_from_lines_and_rendering(self):
+        import scene
+        import server_banner
+        g = self.guild()
+        banner = server_banner.get_or_create(GUILD, ADMIN)
+        start = scene.from_banner(banner)
+        self.assertEqual([layer["type"] for layer in start["layers"]], ["text"] * len(banner["lines"]))
+        banner["scene"] = start
+        server_banner.save(banner)
+        self.assertEqual(server_banner.get_banner(GUILD)["scene"]["layers"][0]["text"], banner["lines"][0]["text"])
+        png = run(server_banner.render_for(g, server_banner.get_banner(GUILD)))
+        self.assertEqual(PILImage.open(io.BytesIO(png)).size, server_banner.SIZE)
+        fresh = server_banner.get_banner(GUILD)
+        fresh["scene"] = None
+        server_banner.save(fresh)
+        self.assertIsNone(server_banner.get_banner(GUILD)["scene"])
+
+    def test_card_with_scene_renders_and_counts_variables(self):
+        import cards
+        import scene
+        g = self.guild()
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "Холст", "progress"))
+        png = run(cards.render_card(card, g))
+        size = PILImage.open(io.BytesIO(png)).size
+        start = scene.for_card(card, size)
+        start["layers"].append({"id": "t", "type": "text", "text": "в войсе {voice}", "x": 10, "y": 10, "w": 400,
+                                "size": 40})
+        card["data"]["scene"] = scene.clean(start, self_card=True)[0]
+        cards.save_card(card)
+        card = cards.get_card(card["id"])
+        self.assertTrue(cards.uses_variables(card))  # обновляется сама, как живая картинка
+        self.assertEqual(PILImage.open(io.BytesIO(run(cards.render_card(card, g)))).size, size)
+        banner = run(cards.render_banner(card, g))
+        self.assertEqual(PILImage.open(io.BytesIO(banner)).size, (960, 540))
+
+    def test_api_rights_and_save(self):
+        import cards
+        import scene_editor as se
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+        g = self.guild()
+        g.get_member = lambda uid: g.members.get(uid)
+        se._bot = types.SimpleNamespace(get_guild=lambda gid: g)
+        os.environ["WEB_PANEL_PORT"], os.environ["WEB_PANEL_URL"] = "8097", "http://127.0.0.1:8097"
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "API", "counter"))
+
+        async def check():
+            app = web.Application()
+            se.add_routes(app)
+            async with TestClient(TestServer(app)) as client:
+                member_link = se.open_link("banner", GUILD, MEMBER).rsplit("/", 1)[1]
+                response = await client.get(f"/scene/{member_link}/api/init")
+                self.assertEqual(response.status, 403)  # баннер — только админы
+                other = se.open_link("card", GUILD, MEMBER, card["id"]).rsplit("/", 1)[1]
+                self.assertEqual((await client.get(f"/scene/{other}/api/init")).status, 403)  # чужая картинка
+                token = se.open_link("card", GUILD, STAFF, card["id"]).rsplit("/", 1)[1]
+                data = await (await client.get(f"/scene/{token}/api/init")).json()
+                self.assertTrue(data["ok"])
+                self.assertEqual(data["scene"]["layers"][0]["card"], "self")
+                self.assertIn("doodle", data["stickers"])
+                values = await (await client.post(f"/scene/{token}/api/values",
+                                                  json={"texts": ["{member_count}"]})).json()
+                self.assertEqual(values["values"], ["42"])
+                saved = await (await client.post(f"/scene/{token}/api/save", json={"scene": data["scene"]})).json()
+                self.assertTrue(saved["ok"])
+                self.assertTrue(cards.get_card(card["id"])["data"]["scene"])
+                preview = await (await client.post(f"/scene/{token}/api/preview", json={"scene": data["scene"]})).json()
+                self.assertTrue(preview["png"].startswith("data:image/png;base64,"))
+                await client.post(f"/scene/{token}/api/reset", json={})
+                self.assertNotIn("scene", cards.get_card(card["id"])["data"])
+                self.assertEqual((await client.get("/scene/nope/api/init")).status, 403)
+
+        run(check())
+
+
 if __name__ == "__main__":
     unittest.main()
