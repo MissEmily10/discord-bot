@@ -57,7 +57,7 @@ USER_DAILY = 30
 SECRETARY_PAUSE = 3
 DOCS = pathlib.Path(__file__).resolve().parent / "docs"
 # база знаний секретаря: решения, планы, принципы (новые решения в CLANS_TODO важнее старого плана в CLANS.md)
-SECRETARY_DOCS = ("CLANS_TODO.md", "quests/README.md", "CLANS_INFO_CHANNEL.md", "CLANS.md")
+SECRETARY_DOCS = ("CLANS_PURR_PLAN.md", "CLANS_TODO.md", "quests/README.md", "CLANS_INFO_CHANNEL.md", "CLANS.md")
 QUEST_LISTS = ("quests/easy.md", "quests/medium.md", "quests/hard.md")
 _log = logging.getLogger(__name__)
 
