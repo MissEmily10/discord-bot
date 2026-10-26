@@ -200,19 +200,25 @@ def render(banner, texts, picture=None):
     return output.getvalue()
 
 
-async def render_for(guild, banner):
+async def line_texts(guild, banner):
+    """Строки баннера с подставленными значениями: [{text, size, pos, font, color}]."""
     import live
     needed = {(m[1], m[2]) for line in banner["lines"] for m in VARIABLE.finditer(line["text"])}
     variables = await live.collect(guild, needed) if needed else {}
-    texts = [substitute(line["text"], variables) for line in banner["lines"]]
+    return [dict(line, text=substitute(line["text"], variables)) for line in banner["lines"]]
+
+
+async def render_for(guild, banner):
+    lines = await line_texts(guild, banner)
+    texts = [line["text"] for line in lines]
     picture = None
     if (banner.get("base") or "").startswith("card:"):
-        # баннер = живая картинка: перерисовываем её со свежими данными сразу в формате баннера;
-        # строки текста поверх не рисуем — у картинки свои данные (строки хранятся до смены фона)
+        # баннер = живая картинка: перерисовываем её со свежими данными сразу в формате баннера,
+        # строки — не поверх картинки, а под ней, в общем макете
         import cards
         card = cards.get_card(int(banner["base"][5:] or 0))
         if card is not None and card["guild_id"] == guild.id:
-            png = await cards.render_banner(card, guild)
+            png = await cards.render_banner(card, guild, lines)
             picture = Image.open(io.BytesIO(png)).convert("RGBA").resize(SIZE, Image.LANCZOS)
             texts = ["" for _ in texts]
     return await asyncio.to_thread(render, banner, texts, picture)

@@ -273,12 +273,16 @@ async def render_card(card, guild=None):
     return await asyncio.to_thread(ct.render, card, title, data, t("cards.rating.empty"))
 
 
-async def render_banner(card, guild=None):
-    """Та же картинка в формате баннера сервера 960×540 (дорисована своим фоном, не в рамке). -> PNG."""
+async def render_banner(card, guild=None, lines=()):
+    """
+    Та же картинка в формате баннера сервера 960×540 (дорисована своим фоном, не в рамке);
+    lines — строки баннера с подставленными значениями, встают под картинкой. -> PNG.
+    """
     import asyncio
     import card_templates as ct
     title, data = await _live_data(card, guild)
-    return await asyncio.to_thread(ct.render_banner, card, title, data, t("cards.rating.empty"))
+    return await asyncio.to_thread(ct.render_banner, card, title, data, t("cards.rating.empty"), ct.BANNER_SIZE,
+                                   lines)
 
 
 async def _live_data(card, guild=None):
@@ -2115,7 +2119,9 @@ async def banner_step(interaction, card, back_target=None):
         await reply(interaction, key)
         return
     await interaction.response.defer()
-    banner_png = await render_banner(card, interaction.guild)
+    banner = server_banner.get_banner(interaction.guild.id)
+    banner_png = await render_banner(card, interaction.guild,
+                                     await server_banner.line_texts(interaction.guild, banner) if banner else ())
     await show_png(interaction, panel_embed(interaction, "cards.to_banner", hints=False, name=card["title"] or "—"),
                    BannerAskView(card["id"]), banner_png, "banner.png")
 

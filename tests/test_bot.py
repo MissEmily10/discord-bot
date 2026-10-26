@@ -4203,6 +4203,9 @@ class LiveCardWizardTests(unittest.TestCase):
             card["data"]["style"] = style
             png = run(cards.render_banner(card))
             self.assertEqual(PILImage.open(io.BytesIO(png)).size, ct.BANNER_SIZE, template)
+            lines = [{"text": "участников 10", "pos": "bl", "size": "XL", "font": "coolvetica", "color": "#201C1E"}]
+            png = run(cards.render_banner(card, lines=lines))  # строки — под картинкой, а не поверх
+            self.assertEqual(PILImage.open(io.BytesIO(png)).size, ct.BANNER_SIZE, template)
 
     def test_kind_choices_per_field(self):
         import cards

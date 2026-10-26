@@ -1544,26 +1544,67 @@ def render(card, title, data, empty_text="—"):
 BANNER_SIZE = (960, 540)
 
 
-def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE):
+DEFAULT_LINE_COLORS = {"#201C1E", "#5A5254"}  # стандартные цвета строк — под светлый фон, берём цвета темы
+LINE_SIZES = {"S": 0.065, "M": 0.095, "L": 0.15, "XL": 0.22}  # как у строк баннера сервера: доля высоты
+
+
+def _hex(color, default):
+    text = str(color or "").lstrip("#")
+    try:
+        return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4)) if len(text) == 6 else default
+    except ValueError:
+        return default
+
+
+def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=()):
     """
     Живая картинка в формате баннера (16:9): картинка не уменьшается в рамке,
     а дорисовывается под формат — её же фоном (узор, стекло, сетка) на всю
-    площадь, данные по центру во всю ширину. Потом сглаженное уменьшение. -> PNG.
+    площадь, данные по центру во всю ширину. Строки баннера сервера (lines:
+    [{text, size, pos, font, color}] с уже подставленными значениями) — не
+    поверх картинки, а под ней, в общем макете, цветом, который читается на
+    фоне темы. Потом сглаженное уменьшение. -> PNG.
     """
     import types
+    import banner_render
     ratio = size[0] / size[1]
     data = dict(data, _no_fx=True)
     first = Image.open(io.BytesIO(render(card, title, data, empty_text))).convert("RGB")
     height = first.height
-    width = max(WIDTH, math.ceil(height * ratio))
-    full_h = max(height, round(width / ratio))
-    dx, dy = (width - WIDTH) // 2, (full_h - height) // 2
+    lines = [line for line in lines or () if str(line.get("text") or "").strip()]
     plain = card["template"] not in RENDERERS  # рейтинг рисуется сам — фон у него ровный
+    _, st, theme = look_of(data) if not plain else (None, STYLE_DEFS[DEFAULT_STYLE], THEMES["cream"])
+
+    def layout(full_h):
+        """[(текст, шрифт, цвет, выравнивание)] и высота блока строк (размер — от ширины картинки)."""
+        placed, block = [], 0
+        for n, line in enumerate(lines):
+            text = clean(line["text"])
+            px = max(18, int(full_h * LINE_SIZES.get(line.get("size"), 0.065) * 0.8))
+            kind = banner_render.kind_for(line.get("font") or "coolvetica", text)
+            fnt = banner_render._font(kind, px)
+            while fnt.getlength(text) > WIDTH - 2 * PAD and px > 16:
+                px = int(px * 0.92)
+                fnt = banner_render._font(kind, px)
+            fallback = theme["ink"] if n == 0 else theme["muted"]
+            own = str(line.get("color") or "").upper() not in DEFAULT_LINE_COLORS  # цвет выбран вручную
+            color = _hex(line.get("color"), fallback) if own else fallback
+            if readable(color, theme["bg"]) != color:
+                color = fallback  # выбранный цвет не читается на фоне картинки — цвет темы
+            placed.append((text, fnt, color, (line.get("pos") or "bl")[1:2] or "l"))
+            block += int(fnt.size * 1.15)
+        return placed, block
+
+    # строки встают под данными картинки (вместо её нижнего отступа) и со своим отступом снизу
+    placed, block = layout(round(WIDTH / ratio))
+    content_h = height + (block + PAD // 2 if block else 0)
+    width = max(WIDTH, math.ceil(content_h * ratio))
+    full_h = max(content_h, round(width / ratio))
+    dx, dy = (width - WIDTH) // 2, max(0, (full_h - content_h) // 2)
     if plain:
         back = Image.new("RGB", (width, full_h), first.getpixel((4, 4)))
         picture = first
     else:
-        _, st, theme = look_of(data)
         holder = types.SimpleNamespace(st=st, theme=theme, image=Image.new("RGB", (width, full_h), theme["bg"]))
         holder.draw = ImageDraw.Draw(holder.image)
         background(holder)
@@ -1571,8 +1612,14 @@ def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE):
         data["_backdrop"] = back.crop((dx, dy, dx + WIDTH, dy + height))
         picture = Image.open(io.BytesIO(render(card, title, data, empty_text))).convert("RGB")
     back.paste(picture, (dx, dy))
-    if not plain and look_of(data)[1].get("fx") == "glitch":
-        back = glitch(back, colors=look_of(data)[2]["grad"])
+    draw = ImageDraw.Draw(back)
+    y = dy + height - PAD // 2
+    for text, fnt, color, align in placed:
+        x, anchor = {"l": (dx + PAD, "la"), "c": (dx + WIDTH // 2, "ma"), "r": (dx + WIDTH - PAD, "ra")}[align]
+        draw.text((x, y), text, font=fnt, fill=color, anchor=anchor)
+        y += int(fnt.size * 1.15)
+    if not plain and st.get("fx") == "glitch":
+        back = glitch(back, colors=theme["grad"])
     output = io.BytesIO()
     back.resize(size, Image.LANCZOS).save(output, "PNG", optimize=True)
     return output.getvalue()
