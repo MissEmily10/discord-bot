@@ -582,6 +582,15 @@ class SettingsView(PanelView):
         super().__init__(back_target=back_target)
         self.bot = bot
 
+    @discord.ui.button(label="Связка серверов", emoji="🔗", style=discord.ButtonStyle.primary)
+    async def servers(self, interaction, button):
+        import ecosystem
+        if not await ensure_owner(interaction):
+            return
+        await interaction.response.edit_message(
+            embed=ecosystem.status_embed(interaction),
+            view=ecosystem.EcosystemView(interaction, back_target=(core.screen(interaction), self)))
+
     @discord.ui.button(label="Бэкап bot.db", emoji="💾", style=discord.ButtonStyle.secondary)
     async def backup(self, interaction, button):
         if not await ensure_owner(interaction):

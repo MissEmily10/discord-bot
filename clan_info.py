@@ -77,8 +77,9 @@ def wants(message):
     from emoji_export import pinged
     if message.guild is None or message.guild.me is None or not pinged(message):
         return False
-    if clan_treasury.wants(message):
-        return False
+    import clans
+    if clan_treasury.wants(message) or clans.wants(message):
+        return False  # команды казны и реестра кланов — не вопрос
     words = words_of(message)
     if any(word in words for word in CLAN_WORDS):
         return True

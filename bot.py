@@ -396,6 +396,8 @@ whispers.register(bot)
 activity.register(bot)
 import clan_treasury  # noqa: E402
 clan_treasury.register(bot)  # казна кланов: «@Purr зафиксируй» на подтверждённый перевод
+import clans  # noqa: E402
+clans.register_listeners(bot)  # реестр кланов: клан создаёт бот сервера, дальше ведёт Purr
 import clan_info  # noqa: E402
 clan_info.register(bot)  # «@Purr как работают кланы?» — рассказ о системе кланов
 

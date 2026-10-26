@@ -165,7 +165,8 @@ async def on_message(message):
         return
     import clan_info
     import clan_treasury
-    if clan_treasury.wants(message) or clan_info.wants(message):
+    import clans
+    if clan_treasury.wants(message) or clans.wants(message) or clan_info.wants(message):
         return  # «@Purr зафиксируй / казна» или вопрос про кланы — не эмодзи
     if not core.is_owner_id(message.author.id):
         core._log.info("emoji export ping from non-owner %s (OWNER_ID=%s)", message.author.id, core.OWNER_ID)

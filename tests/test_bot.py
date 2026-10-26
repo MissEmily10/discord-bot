@@ -3493,6 +3493,87 @@ class ClanTreasuryTests(unittest.TestCase):
             os.environ.pop("CLAN_SOURCE_BOT_ID", None)
 
 
+class EcosystemAndClansTests(unittest.TestCase):
+    def test_link_servers_share_clan_data(self):
+        import ecosystem as eco
+        main, test, other = 880001, 880002, 880003
+        self.assertEqual(eco.scope(test), test)  # не связан — сам по себе
+        code = eco.new_code(main)
+        self.assertEqual(eco.link(main, code), (False, "ecosystem.self"))
+        self.assertEqual(eco.link(test, "НЕТТАКОГО"), (False, "ecosystem.bad_code"))
+        self.assertEqual(eco.link(test, code.lower()), (True, main))
+        self.assertEqual(eco.scope(test), main)
+        self.assertEqual(eco.guilds_of(test), [main, test])
+        self.assertEqual(eco.link(test, eco.new_code(main)), (False, "ecosystem.already_linked"))
+        self.assertEqual(eco.link(main, eco.new_code(other)), (False, "ecosystem.is_root"))
+        self.assertEqual(eco.link(other, eco.new_code(test)), (False, "ecosystem.root_is_linked"))
+        self.assertTrue(eco.unlink(test))
+        self.assertEqual(eco.scope(test), test)
+
+    def test_registry_from_server_bot_reply_and_manual(self):
+        import clans
+        import clan_info
+        guild = make_guild()
+        guild.id = 880010
+        guild.self_role = None
+        clan_role = guild.add_role(FakeRole(150, 10, name="[ANH] Anhedonia"))
+        clan_role.members = [guild.members[MEMBER], guild.members[STAFF]]
+        replies, reactions = [], []
+        creation = discord.Embed(title="🎉 Клан [ANH] Anhedonia создан!",
+                                 description="Сбор завершён, взнос списан.")
+        creation.add_field(name="Глава", value=f"<@{OWNER}>")
+        creation.add_field(name="Замы", value=f"<@{ADMIN}>, <@{ADMIN2}>")
+        creation.add_field(name="Представители", value=f"<@{STAFF}> <@{MEMBER}>")
+
+        async def add_reaction(emoji):
+            reactions.append(emoji)
+        source = types.SimpleNamespace(id=7777, author=types.SimpleNamespace(id=31337, bot=True), guild=guild,
+                                       channel=types.SimpleNamespace(id=5), embeds=[creation],
+                                       add_reaction=add_reaction)
+        clan, problem = clans.parse_creation(creation)
+        self.assertIsNone(problem)
+        self.assertEqual((clan["tag"], clan["name"], clan["leader_id"], clan["deputies"], clan["reps"]),
+                         ("ANH", "Anhedonia", OWNER, [ADMIN, ADMIN2], [STAFF, MEMBER]))
+        self.assertEqual(clans.parse_creation(discord.Embed(title="✅ Перевод в казну подтверждён"))[1],
+                         "clans.not_creation")
+
+        def ping(author_id, text, reference=None):
+            async def reply(content=None, **kwargs):
+                replies.append(content)
+            guild.members[author_id].bot = False
+            return types.SimpleNamespace(
+                author=guild.members[author_id], guild=guild, content=f"<@{guild.me.id}> {text}",
+                mentions=[guild.me], role_mentions=[], reply=reply, channel=types.SimpleNamespace(id=1),
+                reference=types.SimpleNamespace(resolved=reference) if reference else None)
+
+        os.environ["CLAN_SOURCE_BOT_ID"] = "31337"
+        try:
+            # 1) сам — по сообщению бота сервера
+            run(clans.on_message(source))
+            saved = clans.get_clan(880010, "anh")
+            self.assertEqual((saved["leader_id"], saved["role_id"]), (OWNER, 150))
+            self.assertEqual(reactions, ["🛡️"])
+            # 2) ответом — то же сообщение второй раз не записывается
+            run(clans.on_message(ping(OWNER, "зарегистрируй", reference=source)))
+            self.assertIn("уже записано", replies[-1])
+            # 3) вручную на пробном сервере
+            run(clans.on_message(ping(MEMBER, "новый клан [TST] Проба")))
+            self.assertIn("🔒", replies[-1])  # не админ
+            run(clans.on_message(ping(OWNER, f"новый клан [TST] Проба Клана <@{ADMIN}> <@{STAFF}>")))
+            self.assertIn("[TST] Проба Клана", replies[-1])
+            tst = clans.get_clan(880010, "TST")
+            self.assertEqual((tst["leader_id"], tst["deputies"]), (ADMIN, [STAFF]))
+            run(clans.on_message(ping(OWNER, "реестр кланов")))
+            self.assertIn("[ANH]", replies[-1])
+            self.assertIn("[TST]", replies[-1])
+            run(clans.on_message(ping(OWNER, "клан ANH")))
+            self.assertIn("Участников: 2", replies[-1])
+            self.assertFalse(clan_info.wants(ping(OWNER, "клан ANH")))  # команда, не вопрос нейросети
+            self.assertTrue(clan_info.wants(ping(OWNER, "как устроены кланы?")))
+        finally:
+            os.environ.pop("CLAN_SOURCE_BOT_ID", None)
+
+
 class JsonImportTests(unittest.TestCase):
     DISCOHOOK = json.dumps({"messages": [{"data": {
         "content": "Привет, кланы!",

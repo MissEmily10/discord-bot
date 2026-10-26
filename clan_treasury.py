@@ -25,6 +25,7 @@ import time
 import discord
 
 import core
+import ecosystem
 from core import t
 from database import get_connection
 
@@ -289,7 +290,8 @@ async def on_message(message):
     words = _words(message)
     if any(w in words for w in TRIGGERS_SHOW) and message.reference is None:
         tag = next((w for w in words.split() if w not in TRIGGERS_SHOW), None)
-        text = clan_text(message.guild.id, tag.strip("[]`")) if tag else summary_text(message.guild.id)
+        area = ecosystem.scope(message.guild.id)  # связка серверов — одна казна на всех
+        text = clan_text(area, tag.strip("[]`")) if tag else summary_text(area)
         try:
             await message.reply(text[:2000], mention_author=False, allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
@@ -315,7 +317,8 @@ async def on_message(message):
         await _say(message, problem)
         return
     done, treasury, respect = record(
-        message.guild.id, card["tag"], card["name"], card["to_treasury"], card["respect"], "награда в казну",
+        ecosystem.scope(message.guild.id), card["tag"], card["name"], card["to_treasury"], card["respect"],
+        "награда в казну",
         source_key=key, member_id=card["member_id"], giver_id=card["giver_id"], by_user=message.author.id,
         gross=card["gross"])
     if not done:
@@ -328,12 +331,12 @@ async def on_message(message):
 
 
 async def undo(message, key):
-    row = fixation_of(message.guild.id, key)
+    row = fixation_of(ecosystem.scope(message.guild.id), key)
     if row is None:
         await _say(message, "clan_treasury.nothing_to_undo")
         return
     tag, amount, respect = row
-    done, treasury, total = record(message.guild.id, tag, "", -amount, -respect, "отмена фиксации",
+    done, treasury, total = record(ecosystem.scope(message.guild.id), tag, "", -amount, -respect, "отмена фиксации",
                                    source_key=f"undo:{key}", by_user=message.author.id)
     if not done:
         await _say(message, "clan_treasury.already_undone")
