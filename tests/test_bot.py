@@ -3591,7 +3591,7 @@ class PostBuilderTests(unittest.TestCase):
         pb._bot = types.SimpleNamespace(get_guild=lambda gid: g if gid == GUILD else None, user=g.me)
         original_deliver, original_channels = live.deliver, pb.channels_for
 
-        async def fake_deliver(guild, author, build_id, target):
+        async def fake_deliver(guild, author, build_id, target, post_title=None):
             sent.append(build_id)
             return types.SimpleNamespace(jump_url="https://discord.com/channels/1/2/3"), None
         live.deliver = fake_deliver
@@ -3612,10 +3612,11 @@ class PostBuilderTests(unittest.TestCase):
                 self.assertEqual(parsed["payload"]["embeds"][0]["author_name"], "Purr")
                 post = {"content": "Всем привет", "embeds": [{"title": "Кланы", "description": "текст", "fields": []}],
                         "buttons": [{"label": "Сайт", "style": "link", "value": "https://example.com"}]}
-                saved = await (await client.post(path + "/api/save", json={"payload": post, "name": "Пост"})).json()
+                saved = await (await client.post(path + "/api/save", json={"payload": post, "meta": {"name": "Пост"}})).json()
                 self.assertTrue(saved["ok"], saved)
                 loaded = await (await client.get(f"{path}/api/build/{saved['id']}")).json()
-                self.assertEqual(loaded["build"]["embeds"][0]["title"], "Кланы")
+                self.assertEqual(loaded["build"]["payload"]["embeds"][0]["title"], "Кланы")
+                self.assertEqual(loaded["build"]["meta"]["name"], "Пост")
                 too_long = {"content": "x" * 2100, "embeds": []}
                 bad = await (await client.post(path + "/api/send", json={"payload": too_long, "channel_id": "9800"})).json()
                 self.assertFalse(bad["ok"])

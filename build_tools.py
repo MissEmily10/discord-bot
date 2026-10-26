@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 import discord
 
 import core
-from core import PanelView, Modal, t, panel_embed
+from core import PanelView, Modal, t, panel_embed, role_problem
 from actions import (
     MAX_EMBEDS, MAX_BUTTONS, NATIVE_SELECT_CLASSES,
     say, reply, normalize_button, validate_action_value, load_source, build_visible,
@@ -287,6 +287,18 @@ def sanitize_payload(interaction, payload):
     elif isinstance(interactive, dict) and interactive.get("type") == "native_select" \
             and interactive.get("kind") in NATIVE_SELECT_CLASSES:
         interactive = {"type": "native_select", "kind": interactive["kind"]}
+    elif isinstance(interactive, dict) and interactive.get("type") == "role_menu":
+        # меню ролей: только роли, которые создатель может раздавать (как в мастере)
+        roles = []
+        creator = interaction.user
+        if core.is_action_allowed(core.get_user_level(interaction), "role.toggle"):
+            for raw in (interactive.get("roles") or [])[:25]:
+                role = interaction.guild.get_role(int(raw)) if str(raw).isdigit() else None
+                if role is not None and not role_problem(interaction.guild, role, creator):
+                    roles.append(role)
+        dropped += len(interactive.get("roles") or []) - len(roles)
+        interactive = {"type": "role_menu", "roles": [r.id for r in roles], "names": [r.name for r in roles],
+                       "single": bool(interactive.get("single"))} if roles else None
     elif isinstance(interactive, dict) and interactive.get("type") == "form_packs":
         from form_packs import clean_interactive  # только паки этого сервера
         interactive = clean_interactive(interaction.guild.id, interactive)
