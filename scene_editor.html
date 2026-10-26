@@ -54,6 +54,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .layer.text { white-space: pre-wrap; overflow-wrap: normal; word-break: keep-all; paint-order: stroke fill; }
 .layer.hiddenL { display: none; }
 #overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
+#stage .safe { position: absolute; left: 0; right: 0; border-top: 2px dashed #ff4fa3aa; border-bottom: 2px dashed #ff4fa3aa; pointer-events: none; z-index: 5; }
+#stage .safe span { position: absolute; right: 8px; top: 4px; background: #ff4fa3; color: #fff; font: 600 13px Inter, sans-serif; padding: 2px 8px; border-radius: 6px; }
 .selbox { position: absolute; border: 1.5px solid var(--sel); transform-origin: center center; }
 .handle { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; background: #fff; border: 2px solid var(--sel); border-radius: 4px; pointer-events: auto; touch-action: none; }
 .handle.rot { border-radius: 50%; background: var(--sel); }
@@ -353,6 +355,10 @@ function renderStage() {
   const url = bgUrl();
   if (url) stage.append(h("img", { class: "bgimg", src: url, draggable: false }));
   for (const layer of scene.layers) stage.append(layerEl(layer));
+  if (INIT.kind === "banner") {   // Discord на телефоне срезает баннер сверху и снизу — видно ~2.6:1 по центру
+    const visible = scene.w / 2.6, top = (scene.h - visible) / 2;
+    stage.append(h("div", { class: "safe", style: `top:${top}px;height:${visible}px` }, h("span", {}, "видно на телефоне")));
+  }
   measureTexts();
   layoutStage();
 }
@@ -784,7 +790,7 @@ function bgControls() {
     p.append(h("div", { class: "grid2" },
       num("Ш", scene.w, (v, d) => d && resize(v, scene.h)), num("В", scene.h, (v, d) => d && resize(scene.w, v))));
   } else {
-    p.append(h("div", { class: "hint" }, "Баннер сервера — всегда 960×540 (16:9)."));
+    p.append(h("div", { class: "hint" }, "Баннер сервера — всегда 960×540 (16:9). Розовый пунктир — что видно на телефоне: Discord срезает сверху и снизу и скругляет верхний левый угол. Главное держи внутри."));
   }
   return p;
 }

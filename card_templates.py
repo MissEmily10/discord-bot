@@ -1561,12 +1561,11 @@ def _hex(color, default):
 
 def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=()):
     """
-    Живая картинка в формате баннера (16:9): картинка не уменьшается в рамке,
-    а дорисовывается под формат — её же фоном (узор, стекло, сетка) на всю
-    площадь, данные по центру во всю ширину. Строки баннера сервера (lines:
-    [{text, size, pos, font, color}] с уже подставленными значениями) — не
-    поверх картинки, а под ней, в общем макете, цветом, который читается на
-    фоне темы. Потом сглаженное уменьшение. -> PNG.
+    Живая картинка в формате баннера (16:9): скруглённая карточка в зоне,
+    которую Discord показывает и на телефоне, вокруг — рамка в цвете темы
+    (_framed). Строки баннера сервера (lines: [{text, size, pos, font, color}]
+    с уже подставленными значениями) — не поверх картинки, а под ней, внутри
+    карточки, цветом, который читается на фоне темы. -> PNG.
     """
     import types
     import banner_render
@@ -1599,32 +1598,64 @@ def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=(
         return placed, block
 
     # строки встают под данными картинки (вместо её нижнего отступа) и со своим отступом снизу
+    cw = first.width
     placed, block = layout(round(WIDTH / ratio))
     content_h = height + (block + PAD // 2 if block else 0)
-    width = max(WIDTH, math.ceil(content_h * ratio))
-    full_h = max(content_h, round(width / ratio))
-    dx, dy = (width - WIDTH) // 2, max(0, (full_h - content_h) // 2)
     if plain:
-        back = Image.new("RGB", (width, full_h), first.getpixel((4, 4)))
+        content = Image.new("RGB", (cw, content_h), first.getpixel((4, 4)))
         picture = first
-    else:
-        holder = types.SimpleNamespace(st=st, theme=theme, image=Image.new("RGB", (width, full_h), theme["bg"]))
+    else:  # фон картинки — на всю карточку вместе со строками, стык не виден
+        holder = types.SimpleNamespace(st=st, theme=theme, image=Image.new("RGB", (cw, content_h), theme["bg"]))
         holder.draw = ImageDraw.Draw(holder.image)
         background(holder)
-        back = holder.image
-        data["_backdrop"] = back.crop((dx, dy, dx + WIDTH, dy + height))
+        content = holder.image
+        data["_backdrop"] = content.crop((0, 0, cw, height))
         picture = Image.open(io.BytesIO(render(card, title, data, empty_text))).convert("RGB")
-    back.paste(picture, (dx, dy))
-    draw = ImageDraw.Draw(back)
-    y = dy + height - PAD // 2
+    content.paste(picture, (0, 0))
+    draw = ImageDraw.Draw(content)
+    y = height - PAD // 2
     for text, fnt, color, align in placed:
-        x, anchor = {"l": (dx + PAD, "la"), "c": (dx + WIDTH // 2, "ma"), "r": (dx + WIDTH - PAD, "ra")}[align]
+        x, anchor = {"l": (PAD, "la"), "c": (cw // 2, "ma"), "r": (cw - PAD, "ra")}[align]
         draw.text((x, y), text, font=fnt, fill=color, anchor=anchor)
         y += int(fnt.size * 1.15)
     if not plain and st.get("fx") == "glitch":
-        back = glitch(back, colors=theme["grad"])
+        content = glitch(content, colors=theme["grad"])
+    corner = first.getpixel((4, 4))
+    frame = theme["head"] if not plain else (INK if sum(corner) / 3 > 140 else mix(corner, (255, 255, 255), 0.14))
+    return _framed(content, frame, size)
+
+
+# Discord на телефоне показывает баннер не целиком: срезает ~16% сверху и снизу
+# (видно примерно 2.6:1) и скругляет только верхний левый угол. Поэтому картинка
+# лежит скруглённой карточкой в той зоне, что видна везде, а вокруг — рамка в
+# цвете темы: на компьютере видна вся рамка, на телефоне — бока, углы карточки
+# скруглены одинаково.
+BANNER_SAFE_Y = 0.19  # чуть больше обреза (~16%) — карточка не касается его края
+BANNER_SAFE_X = 0.035
+BANNER_RADIUS = 0.05  # доля высоты баннера
+
+
+def _framed(content, frame, size):
+    """Карточка (content) в рамке цвета frame, в безопасной зоне баннера. Рисуем вдвое крупнее — края гладкие."""
+    k = 2
+    W, H = size[0] * k, size[1] * k
+    mx, my = round(W * BANNER_SAFE_X), round(H * BANNER_SAFE_Y)
+    scale = min((W - 2 * mx) / content.width, (H - 2 * my) / content.height)
+    pw, ph = max(1, round(content.width * scale)), max(1, round(content.height * scale))
+    x, y = (W - pw) // 2, (H - ph) // 2
+    radius = round(H * BANNER_RADIUS)
+    canvas = Image.new("RGB", (W, H), frame)
+    # мягкая тень под карточкой — она «лежит» на рамке
+    from PIL import ImageFilter
+    shade = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(shade).rounded_rectangle((x, y + 10 * k, x + pw, y + ph + 10 * k), radius=radius, fill=110)
+    shade = shade.filter(ImageFilter.GaussianBlur(14 * k))
+    canvas.paste(Image.new("RGB", (W, H), mix(frame, (0, 0, 0), 0.55)), (0, 0), shade)
+    mask = Image.new("L", (pw, ph), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, pw - 1, ph - 1), radius=radius, fill=255)
+    canvas.paste(content.resize((pw, ph), Image.LANCZOS), (x, y), mask)
     output = io.BytesIO()
-    back.resize(size, Image.LANCZOS).save(output, "PNG", optimize=True)
+    canvas.resize(size, Image.LANCZOS).save(output, "PNG", optimize=True)
     return output.getvalue()
 
 

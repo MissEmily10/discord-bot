@@ -30,6 +30,7 @@ from database import get_connection
 _log = logging.getLogger(__name__)
 
 SIZE = (960, 540)            # рекомендуемый размер баннера сервера
+SAFE_Y = 0.19               # строки сверху/снизу — не ближе к краю: на телефоне баннер срезан
 MAX_LINES = 6
 MIN_INTERVAL, MAX_INTERVAL = 10, 1440  # минуты
 CHECK_EVERY = 60             # как часто фоновая задача смотрит, кому пора
@@ -198,7 +199,9 @@ def render(banner, texts, picture=None):
                 font = banner_render._font(kind, size)
             placed.append((line, text, font))
         block = sum(int(font.size * 1.12) for _, _, font in placed)
-        y = {"t": margin, "m": (height - block) // 2, "b": height - margin - block}[pos[0]]
+        # по вертикали — в зоне, которую Discord показывает и на телефоне (срезает ~16% сверху и снизу)
+        margin_y = max(margin, int(height * SAFE_Y))
+        y = {"t": margin_y, "m": (height - block) // 2, "b": height - margin_y - block}[pos[0]]
         x, anchor = {"l": (margin, "la"), "c": (width // 2, "ma"), "r": (width - margin, "ra")}[pos[1]]
         for line, text, font in placed:
             draw.text((x, y), text, font=font, fill=line["color"], anchor=anchor)

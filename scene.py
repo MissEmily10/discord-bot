@@ -429,7 +429,8 @@ def from_banner(banner):
     for pos, lines in groups.items():
         sizes = [h * _LINE_PX.get(line.get("size"), 0.065) for line in lines]
         block = sum(size * 1.12 for size in sizes)
-        y = {"t": margin, "m": (h - block) / 2, "b": h - margin - block}[pos[0]]
+        margin_y = max(margin, h * 0.19)  # как в обычном баннере: в зоне, видной на телефоне
+        y = {"t": margin_y, "m": (h - block) / 2, "b": h - margin_y - block}[pos[0]]
         align = {"l": "left", "c": "center", "r": "right"}[pos[1]]
         for n, (line, size) in enumerate(zip(lines, sizes)):
             layers.append({"id": f"t{len(layers)}", "type": "text", "name": line.get("text", "")[:30],
