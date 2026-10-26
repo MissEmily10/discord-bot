@@ -325,6 +325,19 @@ async def ask_ai(question, previous=None, secretary=False):
     return None
 
 
+async def complete(system, prompt, max_tokens=3000):
+    """Любая задача для нейросети (новости и т. п.): первая ответившая из настроенных. -> текст или None."""
+    for kind in providers():
+        if kind == "hf":
+            text = await _ask_hf(system, prompt, None, max_tokens)
+        else:
+            text = await _ask_api(kind, system, prompt, None, max_tokens)
+        if text:
+            return text
+        _log.warning("ai: %s did not answer, trying the next one", kind)
+    return None
+
+
 async def _ask_api(kind, system, question, previous, max_tokens):
     for model in _models(GEMINI_MODELS if kind == "google" else OPENROUTER_MODELS):
         try:

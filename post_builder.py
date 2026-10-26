@@ -347,7 +347,13 @@ def register(bot):
 
     @bot.tree.command(name="post", description="Конструктор постов на сайте: редактор и живой предпросмотр")
     @discord.app_commands.guild_only()
-    async def post_command(interaction):
+    @discord.app_commands.describe(
+        news="Новость для кланов: о чём она — нейросеть напишет текст, бот нарисует баннер и соберёт пост")
+    async def post_command(interaction, news: discord.app_commands.Range[str, 3, 4000] = None):
         if not await core.require_command_access(interaction, "post"):
+            return
+        if news:
+            import news_generator
+            await news_generator.run(interaction, news)
             return
         await send_link(interaction)

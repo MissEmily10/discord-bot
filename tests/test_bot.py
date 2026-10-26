@@ -3636,6 +3636,57 @@ class PostBuilderTests(unittest.TestCase):
             os.environ.pop("WEB_PANEL_URL", None)
 
 
+class NewsGeneratorTests(unittest.TestCase):
+    ANSWER = """```json
+{"template": "alert", "banner": {"title": "Как теперь работают кланы?",
+ "text": "Наконец рассказываем о том, как работает нынешняя система и как создать клан"},
+ "content": "",
+ "sections": [
+  {"heading": "Принципы", "text": "- **Активность поощряется:** огонёк и стипендии", "icon": "heart"},
+  {"heading": "Как же теперь создать клан?", "text": "- **Создание клана:** пять основателей", "icon": "save"},
+  {"heading": "Как пополнить казну клана?", "text": "- **Казна клана:** только награды", "icon": "gift"},
+  {"heading": "Ещё раздел", "text": "текст", "icon": "нет-такого"}]}
+```"""
+
+    def test_news_post_like_the_example(self):
+        import clan_info
+        import news_generator as ng
+        import tempfile
+        import web_panel
+        prompts = []
+
+        async def fake_complete(system, prompt, max_tokens=3000):
+            prompts.append(system)
+            return self.ANSWER
+        original, old_assets = clan_info.complete, web_panel.ASSETS_DIR
+        clan_info.complete = fake_complete
+        web_panel.ASSETS_DIR = pathlib.Path(tempfile.mkdtemp())
+        os.environ["OPENROUTER_API_KEY"], os.environ["WEB_PANEL_URL"] = "or", "http://panel.test"
+        try:
+            payload, error = run(ng.generate("расскажи, как теперь работают кланы и как создать клан"))
+        finally:
+            clan_info.complete, web_panel.ASSETS_DIR = original, old_assets
+            os.environ.pop("OPENROUTER_API_KEY", None)
+            os.environ.pop("WEB_PANEL_URL", None)
+        self.assertIsNone(error)
+        self.assertIn("alert — Важное объявление", prompts[0])  # нейросеть выбирает из шаблонов
+        self.assertIn("gift — подарок", prompts[0])  # и из дудлов
+        banner, *sections = payload["embeds"]
+        self.assertTrue(banner["image"].startswith("http://panel.test/assets/"))  # нарисованный баннер
+        self.assertEqual([s["author_name"] for s in sections][:3],
+                         ["Принципы", "Как же теперь создать клан?", "Как пополнить казну клана?"])
+        self.assertTrue(all(s["author_icon"] == sections[0]["author_icon"] for s in sections))  # трофей у всех
+        self.assertEqual(len({s["thumbnail"] for s in sections}), len(sections))  # дудлы разные
+        self.assertIn("**Активность поощряется:**", sections[0]["description"])
+        self.assertIsNone(ng.parse_answer("не json"))
+
+    def test_banner_shortens_text_that_does_not_fit(self):
+        import news_generator as ng
+        png = ng.render_banner("alert", {"title": "Очень длинный заголовок который точно не влезет в одну строку баннера",
+                                         "text": "коротко", "лишнее": "x"})
+        self.assertTrue(png.startswith(b"\x89PNG"))
+
+
 class ClanCategoryTests(unittest.TestCase):
     def channel(self, cls, name, channel_id):
         channel = object.__new__(cls)
