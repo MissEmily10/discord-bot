@@ -398,6 +398,8 @@ def build_app():
     post_builder.add_routes(app)  # /post — конструктор постов на сайте
     import scene_editor
     scene_editor.add_routes(app)  # /scene — редактор холста: живые картинки и баннер сервера
+    import site_icons
+    site_icons.add_routes(app)  # дудлы вместо эмодзи на всех страницах сайта
     return app
 
 

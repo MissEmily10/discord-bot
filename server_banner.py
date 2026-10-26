@@ -309,8 +309,10 @@ def start(bot):
 # ============================================================
 
 def can_manage(interaction):
-    from extended_modules import is_admin
-    return interaction.guild is not None and is_admin(interaction)
+    """Баннер сервера (панель и редактор на сайте) — весь стафф и выше."""
+    return interaction.guild is not None and (
+        core.is_owner(interaction)
+        or core.level_value(core.get_user_level(interaction)) >= core.level_value("staff"))
 
 
 def line_label(line):

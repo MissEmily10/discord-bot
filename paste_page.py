@@ -97,7 +97,7 @@ send.onclick = async () => {{
     if (!data.ok) send.disabled = false;
   }} catch (e) {{ status.className = "bad"; status.textContent = "Не получилось отправить: " + e; send.disabled = false; }}
 }};
-</script></body></html>"""
+</script><script src="/ui-icons.js"></script></body></html>"""
 
 
 async def page(request):

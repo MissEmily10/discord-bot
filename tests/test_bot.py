@@ -4621,5 +4621,34 @@ class SceneEditorTests(unittest.TestCase):
         run(check())
 
 
+class SiteIconsTests(unittest.TestCase):
+    """Дудлы вместо эмодзи на сайте: тот же набор, что на кнопках; пути к файлам — только свои."""
+
+    def test_map_and_routes(self):
+        import site_icons
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+        mapping = site_icons.icon_map()
+        self.assertIn("💾", mapping)
+        self.assertIn("🐱", mapping)
+
+        async def check():
+            app = web.Application()
+            site_icons.add_routes(app)
+            async with TestClient(TestServer(app)) as client:
+                script = await (await client.get("/ui-icons.js")).text()
+                self.assertIn("/ui-icon/ui_save.png", script)
+                self.assertEqual((await client.get("/ui-icon/ui_save.png")).status, 200)
+                self.assertEqual((await client.get("/ui-icon/..%2Fbot.db.png")).status, 404)
+                self.assertEqual((await client.get("/ui-icon/evil.png")).status, 404)
+
+        run(check())
+        core.set_setting("ui_emoji_style", "standard")
+        try:
+            self.assertEqual(site_icons.icon_map(), {})  # обычные эмодзи — и на сайте обычные
+        finally:
+            core.set_setting("ui_emoji_style", "doodle")
+
+
 if __name__ == "__main__":
     unittest.main()

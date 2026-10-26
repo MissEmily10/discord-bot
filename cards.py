@@ -497,10 +497,12 @@ async def refresh_loop(bot):
 # ============================================================
 
 def can_edit(interaction, card):
-    from extended_modules import is_admin
+    """Менять картинку (и в редакторе на сайте): автор, кому разрешил автор, и весь стафф сервера."""
     if card is None or interaction.guild is None or card["guild_id"] != interaction.guild.id:
         return False
-    if interaction.user.id == card["owner_id"] or interaction.user.id in card["editors"] or is_admin(interaction):
+    staff = core.is_owner(interaction) or \
+        core.level_value(core.get_user_level(interaction)) >= core.level_value("staff")
+    if interaction.user.id == card["owner_id"] or interaction.user.id in card["editors"] or staff:
         return True
     roles = {role.id for role in getattr(interaction.user, "roles", [])}
     return bool(roles & set(card["editor_roles"]))
