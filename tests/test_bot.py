@@ -3574,6 +3574,40 @@ class EcosystemAndClansTests(unittest.TestCase):
             os.environ.pop("CLAN_SOURCE_BOT_ID", None)
 
 
+class ClanCategoryTests(unittest.TestCase):
+    def channel(self, cls, name, channel_id):
+        channel = object.__new__(cls)
+        channel.name, channel.id = name, channel_id
+        return channel
+
+    def test_clans_found_by_category_template(self):
+        import clans
+        guild = make_guild()
+        guild.id = 880020
+        guild.self_role = None
+        role = guild.add_role(FakeRole(160, 9, name="NYA · няшки"))
+        anh = types.SimpleNamespace(id=501, name="ANH · anhedonia", overwrites={},
+                                    channels=[self.channel(discord.TextChannel, "anh-anhedonia", 1),
+                                              self.channel(discord.VoiceChannel, "ANH · anhedonia", 2)])
+        nya = types.SimpleNamespace(id=502, name="NYA · няшки вкусняшки", overwrites={},
+                                    channels=[self.channel(discord.TextChannel, "nya • няшки-вкусняшки", 3),
+                                              self.channel(discord.VoiceChannel, "NYA · няшки вкусняшки", 4)])
+        hoyo = types.SimpleNamespace(id=503, name="✨ · Hoyoverse", overwrites={},
+                                     channels=[self.channel(discord.TextChannel, "genshin", 5)])
+        info = types.SimpleNamespace(id=504, name="INFO · инфо", overwrites={},
+                                     channels=[self.channel(discord.TextChannel, "правила", 6)])
+        guild.categories = [anh, nya, hoyo, info]
+        guild.get_channel = lambda cid: next((c for c in guild.categories if c.id == cid), None)
+        found = run(clans.sync_categories(guild))
+        self.assertEqual(found, ["ANH", "NYA"])  # Hoyoverse и «инфо» — не кланы
+        saved = clans.get_clan(880020, "NYA")
+        self.assertEqual((saved["name"], saved["category_id"], saved["role_id"]), ("няшки вкусняшки", 502, role.id))
+        # команду дописали руками — повторная синхронизация её не стирает
+        clans.register(880020, {"tag": "ANH", "name": "", "leader_id": OWNER, "deputies": [ADMIN], "reps": []})
+        run(clans.sync_categories(guild))
+        self.assertEqual(clans.get_clan(880020, "ANH")["deputies"], [ADMIN])
+
+
 class JsonImportTests(unittest.TestCase):
     DISCOHOOK = json.dumps({"messages": [{"data": {
         "content": "Привет, кланы!",

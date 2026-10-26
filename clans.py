@@ -41,6 +41,7 @@ CREATED = re.compile(r"клан\w*[^\n]{0,60}?(созда|основ|зарег�
 TRIGGERS_REGISTER = ("зарегистрируй", "зарегистрировать", "регистрируй")
 TRIGGERS_NEW = ("новый клан",)
 TRIGGERS_LIST = ("реестр кланов", "кланы реестр", "список кланов")
+TRIGGERS_SYNC = ("синхронизируй кланы", "синхронизировать кланы", "найди кланы")
 TRIGGERS_SHOW = ("клан ",)
 
 
@@ -57,12 +58,15 @@ def ensure_tables():
         status TEXT NOT NULL DEFAULT 'active', source_key TEXT UNIQUE, registered_by INTEGER,
         created_at INTEGER NOT NULL, PRIMARY KEY (scope_id, tag)
     )""")
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(clans)")}
+    if "category_id" not in columns:  # категория клана (её создаёт бот сервера)
+        connection.execute("ALTER TABLE clans ADD COLUMN category_id INTEGER")
     connection.commit()
     connection.close()
 
 
 COLUMNS = ("scope_id", "tag", "name", "guild_id", "role_id", "leader_id", "deputies_json", "reps_json", "status",
-           "source_key", "registered_by", "created_at")
+           "source_key", "registered_by", "created_at", "category_id")
 
 
 def _row(row):
@@ -107,18 +111,23 @@ def register(scope_id, clan, guild_id=None, source_key=None, by_user=None):
             connection.rollback()
             return "duplicate", get_clan(scope_id, tag)
         exists = connection.execute("SELECT 1 FROM clans WHERE scope_id = ? AND tag = ?", (scope_id, tag)).fetchone()
-        values = (clan.get("name") or "", guild_id, clan.get("role_id"), clan.get("leader_id"),
-                  json.dumps(clan.get("deputies") or []), json.dumps(clan.get("reps") or []))
+        values = (clan.get("name") or "", guild_id, clan.get("role_id"), clan.get("leader_id"))
+        team = (json.dumps(clan["deputies"]) if clan.get("deputies") else None,
+                json.dumps(clan["reps"]) if clan.get("reps") else None)
         if exists:
+            # пустая команда (клан подхвачен по категории) не стирает уже записанную
             connection.execute(
                 "UPDATE clans SET name = CASE WHEN ? != '' THEN ? ELSE name END, guild_id = COALESCE(?, guild_id), "
-                "role_id = COALESCE(?, role_id), leader_id = COALESCE(?, leader_id), deputies_json = ?, "
-                "reps_json = ?, status = 'active', source_key = COALESCE(?, source_key) WHERE scope_id = ? AND tag = ?",
-                (values[0], values[0], *values[1:], source_key, scope_id, tag))
+                "role_id = COALESCE(?, role_id), leader_id = COALESCE(?, leader_id), "
+                "deputies_json = COALESCE(?, deputies_json), reps_json = COALESCE(?, reps_json), status = 'active', "
+                "source_key = COALESCE(source_key, ?), category_id = COALESCE(?, category_id) "
+                "WHERE scope_id = ? AND tag = ?",
+                (values[0], *values, *team, source_key, clan.get("category_id"), scope_id, tag))
         else:
             connection.execute(
-                f"INSERT INTO clans ({', '.join(COLUMNS)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
-                (scope_id, tag, *values, source_key, by_user, int(time.time())))
+                f"INSERT INTO clans ({', '.join(COLUMNS)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+                (scope_id, tag, *values, team[0] or "[]", team[1] or "[]", source_key, by_user, int(time.time()),
+                 clan.get("category_id")))
         connection.commit()
     finally:
         connection.close()
@@ -191,15 +200,44 @@ def parse_manual(text, author_id):
             "leader_id": leader[0], "deputies": ids[1:3], "reps": ids[3:5]}, None
 
 
+# Бот сервера создаёт клану категорию «ТЕГ · название», в ней текстовый
+# «тег-название» и голосовой «ТЕГ · название» — по этому Purr и узнаёт клан.
+CATEGORY = re.compile(r"^\s*([A-ZА-ЯЁ0-9]{2,5})\s*[·•|]\s*(\S.*?)\s*$")
+CATEGORY_WAIT = 20  # каналы в категории появляются через пару секунд после неё
+
+
+def clan_from_category(category):
+    """Категория клана -> {tag, name, category_id} или None (не по шаблону или нет каналов клана)."""
+    match = CATEGORY.match(getattr(category, "name", "") or "")
+    if not match:
+        return None
+    tag, name = match.group(1), match.group(2)
+    prefix = tag.lower()
+    channels = list(getattr(category, "channels", None) or [])
+    has_text = any(isinstance(c, discord.TextChannel) and c.name.lower().startswith(prefix) for c in channels)
+    has_voice = any(isinstance(c, (discord.VoiceChannel, discord.StageChannel))
+                    and c.name.upper().replace(" ", "").startswith(f"{tag}·") for c in channels)
+    if not (has_text and has_voice):
+        return None
+    return {"tag": tag, "name": name[:40], "category_id": category.id, "deputies": [], "reps": []}
+
+
 def find_role(guild, clan):
     """Роль клана на сервере: в названии [ТЕГ] или название клана."""
     if guild is None:
         return None
     tag, name = f"[{clan['tag']}]".lower(), (clan.get("name") or "").lower()
+    plain = clan["tag"].lower()
     for role in guild.roles:
         low = role.name.lower()
-        if tag in low or (name and low.strip() == name):
+        if tag in low or (name and low.strip() == name) or re.match(rf"^{re.escape(plain)}\s*[·•|]", low):
             return role
+    # роли нет — та, что открывает категорию клана (кроме @everyone и ролей персонала)
+    category = guild.get_channel(clan.get("category_id") or 0)
+    for target, overwrite in (getattr(category, "overwrites", None) or {}).items():
+        if isinstance(target, discord.Role) and not target.is_default() and overwrite.view_channel \
+                and not target.permissions.administrator:
+            return target
     return None
 
 
@@ -265,7 +303,8 @@ def wants(message):
     if message.guild is None or message.guild.me is None or not pinged(message):
         return False
     words = _words(message)
-    return (words.startswith(TRIGGERS_NEW) or words.startswith(TRIGGERS_LIST) or words in TRIGGERS_REGISTER
+    return (words.startswith(TRIGGERS_NEW) or words.startswith(TRIGGERS_LIST) or words.startswith(TRIGGERS_SYNC)
+            or words in TRIGGERS_REGISTER
             or any(words.startswith(w) for w in TRIGGERS_REGISTER)
             or bool(re.fullmatch(r"клан\s+\[?[^\s\[\]]{2,5}\]?", words)))
 
@@ -326,6 +365,10 @@ async def on_message(message):
     if words.startswith(TRIGGERS_LIST):
         await _say(message, "clans.list_wrap", text=list_text(scope_id))
         return
+    if words.startswith(TRIGGERS_SYNC):
+        found = await sync_categories(message.guild)
+        await _say(message, "clans.synced", count=len(found), tags=", ".join(f"[{tag}]" for tag in found) or "—")
+        return
     if re.fullmatch(r"клан\s+\[?[^\s\[\]]{2,5}\]?", words):
         tag = words.split()[1].strip("[]")
         clan = get_clan(scope_id, tag)
@@ -367,7 +410,38 @@ async def on_message_edit(before, after):
         await on_server_bot(after)
 
 
+async def save_category_clan(guild, clan):
+    role = find_role(guild, clan)
+    if role is not None:
+        clan["role_id"] = role.id
+    return register(ecosystem.scope(guild.id), clan, guild_id=guild.id, source_key=f"cat:{clan['category_id']}")
+
+
+async def sync_categories(guild):
+    """Все категории по шаблону клана на сервере -> в реестр. -> теги новых/обновлённых."""
+    found = []
+    for category in guild.categories:
+        clan = clan_from_category(category)
+        if clan is not None:
+            await save_category_clan(guild, clan)
+            found.append(clan["tag"])
+    return found
+
+
+async def on_category_create(channel):
+    if not isinstance(channel, discord.CategoryChannel) or not CATEGORY.match(channel.name or ""):
+        return
+    import asyncio
+    await asyncio.sleep(CATEGORY_WAIT)  # бот сервера создаёт каналы следом за категорией
+    category = channel.guild.get_channel(channel.id)
+    clan = clan_from_category(category) if category else None
+    if clan is not None:
+        result, saved = await save_category_clan(channel.guild, clan)
+        core._log.info("clan %s %s from category %s", saved["tag"], result, channel.id)
+
+
 def register_listeners(bot):
     ensure_tables()
     bot.add_listener(on_message, "on_message")
+    bot.add_listener(on_category_create, "on_guild_channel_create")
     bot.add_listener(on_message_edit, "on_message_edit")
