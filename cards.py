@@ -269,6 +269,21 @@ async def render_card(card, guild=None):
     """Картинка (PNG) с подставленными переменными и аватаркой «участника недели»."""
     import asyncio
     import card_templates as ct
+    title, data = await _live_data(card, guild)
+    return await asyncio.to_thread(ct.render, card, title, data, t("cards.rating.empty"))
+
+
+async def render_banner(card, guild=None):
+    """Та же картинка в формате баннера сервера 960×540 (дорисована своим фоном, не в рамке). -> PNG."""
+    import asyncio
+    import card_templates as ct
+    title, data = await _live_data(card, guild)
+    return await asyncio.to_thread(ct.render_banner, card, title, data, t("cards.rating.empty"))
+
+
+async def _live_data(card, guild=None):
+    """Название и данные картинки с подставленными значениями сервера."""
+    import card_templates as ct
     from actions import VARIABLE, substitute
     title, data = card["title"], json.loads(json.dumps(card["data"]))
     found = ct.texts_of(card)
@@ -294,7 +309,7 @@ async def render_card(card, guild=None):
         if member is not None:
             data["_name"] = member.display_name
             data["_avatar"] = await core.fetch_bytes(member.display_avatar.replace(size=256, format="png").url)
-    return await asyncio.to_thread(ct.render, card, title, data, t("cards.rating.empty"))
+    return title, data
 
 
 def mentions_to_names(guild, text):
@@ -2069,6 +2084,7 @@ class DeleteCardView(PanelView):
         banner = __import__("server_banner").get_banner(interaction.guild.id)
         if banner and banner.get("base") == f"card:{card['id']}":
             banner.update(base="", auto=0)  # баннер с этой картинкой остаётся как есть, но больше не обновляется
+            __import__("server_banner").restore_lines(banner)
             __import__("server_banner").save(banner)
         delete_card(card["id"])
         core.audit(interaction, "card.deleted", "card", card["id"], card["title"])
@@ -2090,7 +2106,6 @@ class DeleteCardView(PanelView):
 
 async def banner_step(interaction, card, back_target=None):
     """«В баннер сервера»: показать, как картинка ляжет в баннер, и спросить «Ставим? Да / Нет»."""
-    import asyncio
     import server_banner
     if not server_banner.can_manage(interaction):
         await reply(interaction, "common.need_admin")
@@ -2100,13 +2115,7 @@ async def banner_step(interaction, card, back_target=None):
         await reply(interaction, key)
         return
     await interaction.response.defer()
-    png = await render_card(card, interaction.guild)
-
-    def build():
-        output = io.BytesIO()
-        server_banner.fit_picture(png).convert("RGB").save(output, "PNG", optimize=True)
-        return output.getvalue()
-    banner_png = await asyncio.to_thread(build)
+    banner_png = await render_banner(card, interaction.guild)
     await show_png(interaction, panel_embed(interaction, "cards.to_banner", hints=False, name=card["title"] or "—"),
                    BannerAskView(card["id"]), banner_png, "banner.png")
 
@@ -2141,7 +2150,9 @@ class BannerAskView(PanelView):
             return
         await interaction.response.defer()
         banner = server_banner.get_or_create(interaction.guild.id, interaction.user.id)
-        banner.update(base=f"card:{self.card_id}", lines=[], auto=1 if yes else 0)
+        # строки текста баннера (название, «участников…») не трогаем: поверх картинки они не рисуются,
+        # а вернутся, если сменить фон баннера
+        banner.update(base=f"card:{self.card_id}", auto=1 if yes else 0)
         server_banner.save(banner)
         done, key = await server_banner.apply(interaction.guild, banner, force=True)
         core.audit(interaction, "server_banner.from_card", "card", self.card_id, "auto" if yes else "once")

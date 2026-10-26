@@ -858,19 +858,30 @@ def glitch(image, seed=3, colors=(LIME, PINK)):
     return result.convert("RGB")
 
 
+def look_of(data):
+    """(стиль, его описание, цвета) картинки — тема применяется ко всем стилям."""
+    style = data.get("style") if data.get("style") in STYLE_DEFS else DEFAULT_STYLE
+    st = STYLE_DEFS[style]
+    theme = data.get("theme") if data.get("theme") in THEMES else "cream"
+    return style, st, style_palette(st["palette"], theme) if st.get("palette") else THEMES[theme]
+
+
 class Canvas:
     """Картинка шаблона: шапка (заголовок, линия-акцент с растворением, «!») и тема."""
 
     def __init__(self, title, data, body_height, accent=True):
-        self.style = data.get("style") if data.get("style") in STYLE_DEFS else DEFAULT_STYLE
-        self.st = STYLE_DEFS[self.style]
-        theme = data.get("theme") if data.get("theme") in THEMES else "cream"
-        self.theme = style_palette(self.st["palette"], theme) if self.st.get("palette") else THEMES[theme]
+        self.style, self.st, self.theme = look_of(data)
         self.height = HEAD + body_height + PAD
-        self.image = Image.new("RGB", (WIDTH, self.height), self.theme["bg"])
-        self.draw = ImageDraw.Draw(self.image)
+        self.fx = not data.get("_no_fx")  # в баннере глитч накладывается на весь баннер разом
+        backdrop = data.get("_backdrop")
+        if backdrop is not None and backdrop.size == (WIDTH, self.height):
+            self.image = backdrop.convert("RGB").copy()  # фон — кусок фона баннера, стык не виден
+            self.draw = ImageDraw.Draw(self.image)
+        else:
+            self.image = Image.new("RGB", (WIDTH, self.height), self.theme["bg"])
+            self.draw = ImageDraw.Draw(self.image)
+            background(self)
         c, st = self.theme, self.st
-        background(self)
         bang = data.get("bang", True) and st["bang"]
         stickers = st.get("fx") == "sticker3d"
         right = WIDTH - PAD - (140 if bang else 260 if stickers else 0)
@@ -909,7 +920,7 @@ class Canvas:
             self.draw.text((PAD, y), shown, font=fnt, fill=self.theme["muted"], anchor="ls")
 
     def png(self):
-        if self.st.get("fx") == "glitch":
+        if self.st.get("fx") == "glitch" and self.fx:
             self.image = glitch(self.image, colors=self.theme["grad"])
         output = io.BytesIO()
         self.image.save(output, "PNG", optimize=True)
@@ -1524,6 +1535,47 @@ def render(card, title, data, empty_text="—"):
     if template in _TAKES_EMPTY:
         return renderer(title, data, empty_text)
     return renderer(title, data)
+
+
+# ============================================================
+# БАННЕР СЕРВЕРА ИЗ ЖИВОЙ КАРТИНКИ
+# ============================================================
+
+BANNER_SIZE = (960, 540)
+
+
+def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE):
+    """
+    Живая картинка в формате баннера (16:9): картинка не уменьшается в рамке,
+    а дорисовывается под формат — её же фоном (узор, стекло, сетка) на всю
+    площадь, данные по центру во всю ширину. Потом сглаженное уменьшение. -> PNG.
+    """
+    import types
+    ratio = size[0] / size[1]
+    data = dict(data, _no_fx=True)
+    first = Image.open(io.BytesIO(render(card, title, data, empty_text))).convert("RGB")
+    height = first.height
+    width = max(WIDTH, math.ceil(height * ratio))
+    full_h = max(height, round(width / ratio))
+    dx, dy = (width - WIDTH) // 2, (full_h - height) // 2
+    plain = card["template"] not in RENDERERS  # рейтинг рисуется сам — фон у него ровный
+    if plain:
+        back = Image.new("RGB", (width, full_h), first.getpixel((4, 4)))
+        picture = first
+    else:
+        _, st, theme = look_of(data)
+        holder = types.SimpleNamespace(st=st, theme=theme, image=Image.new("RGB", (width, full_h), theme["bg"]))
+        holder.draw = ImageDraw.Draw(holder.image)
+        background(holder)
+        back = holder.image
+        data["_backdrop"] = back.crop((dx, dy, dx + WIDTH, dy + height))
+        picture = Image.open(io.BytesIO(render(card, title, data, empty_text))).convert("RGB")
+    back.paste(picture, (dx, dy))
+    if not plain and look_of(data)[1].get("fx") == "glitch":
+        back = glitch(back, colors=look_of(data)[2]["grad"])
+    output = io.BytesIO()
+    back.resize(size, Image.LANCZOS).save(output, "PNG", optimize=True)
+    return output.getvalue()
 
 
 # ============================================================

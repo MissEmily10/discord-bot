@@ -162,29 +162,10 @@ def base_image(banner):
     return Image.new("RGBA", SIZE, CREAM + (255,))
 
 
-def fit_picture(png):
-    """
-    Любая картинка (живая картинка любого формата) -> фон баннера 960×540:
-    сзади она же, растянутая и размытая, спереди — целиком, по центру, с тенью.
-    """
-    from PIL import ImageFilter
-    image = Image.open(io.BytesIO(png)).convert("RGBA")
-    width, height = SIZE
-    cover = image.copy()
-    scale = max(width / cover.width, height / cover.height)
-    cover = cover.resize((int(cover.width * scale) + 1, int(cover.height * scale) + 1), Image.LANCZOS)
-    left, top = (cover.width - width) // 2, (cover.height - height) // 2
-    back = cover.crop((left, top, left + width, top + height)).filter(ImageFilter.GaussianBlur(28))
-    back = Image.blend(back, Image.new("RGBA", SIZE, (0, 0, 0, 255)), 0.25)
-    margin = int(height * 0.07)
-    scale = min((width - 2 * margin) / image.width, (height - 2 * margin) / image.height)
-    front = image.resize((max(1, int(image.width * scale)), max(1, int(image.height * scale))), Image.LANCZOS)
-    x, y = (width - front.width) // 2, (height - front.height) // 2
-    shadow = Image.new("RGBA", SIZE, (0, 0, 0, 0))
-    shadow.paste(Image.new("RGBA", front.size, (0, 0, 0, 150)), (x + 6, y + 10))
-    back.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)))
-    back.alpha_composite(front, (x, y))
-    return back
+def restore_lines(banner):
+    """Фон больше не живая картинка, а строк нет (раньше их стирала установка картинки) — стандартные строки."""
+    if not banner.get("lines") and not (banner.get("base") or "").startswith("card:"):
+        banner["lines"] = [dict(line) for line in DEFAULT_LINES]
 
 
 def render(banner, texts, picture=None):
@@ -226,11 +207,14 @@ async def render_for(guild, banner):
     texts = [substitute(line["text"], variables) for line in banner["lines"]]
     picture = None
     if (banner.get("base") or "").startswith("card:"):
-        # баннер = живая картинка: перерисовываем её со свежими данными и вписываем в формат баннера
+        # баннер = живая картинка: перерисовываем её со свежими данными сразу в формате баннера;
+        # строки текста поверх не рисуем — у картинки свои данные (строки хранятся до смены фона)
         import cards
         card = cards.get_card(int(banner["base"][5:] or 0))
         if card is not None and card["guild_id"] == guild.id:
-            picture = await asyncio.to_thread(fit_picture, await cards.render_card(card, guild))
+            png = await cards.render_banner(card, guild)
+            picture = Image.open(io.BytesIO(png)).convert("RGBA").resize(SIZE, Image.LANCZOS)
+            texts = ["" for _ in texts]
     return await asyncio.to_thread(render, banner, texts, picture)
 
 
@@ -450,6 +434,7 @@ def apply_style(banner, key):
     import banner_styles
     title, sub = banner_styles.colors(key)
     banner["base"] = f"style:{key}"
+    restore_lines(banner)
     for n, line in enumerate(banner["lines"]):
         line["color"] = title if n == 0 else sub
     save(banner)
@@ -646,6 +631,7 @@ class BaseModal(Modal, title="ФОН"):
         files = self.upload.values or []
         if not files:  # пусто — вернуть стандартный фон
             banner["base"] = ""
+            restore_lines(banner)
             save(banner)
             await open_home(interaction, back_target=self.back_target)
             return
@@ -657,6 +643,7 @@ class BaseModal(Modal, title="ФОН"):
             await interaction.followup.send(error, ephemeral=True)
             return
         banner["base"] = name
+        restore_lines(banner)
         save(banner)
         core.audit(interaction, "server_banner.base", "guild", interaction.guild.id, name)
         await open_home(interaction, back_target=self.back_target)

@@ -4195,6 +4195,15 @@ class LiveCardWizardTests(unittest.TestCase):
 
         run(check())
 
+    def test_banner_is_redrawn_in_banner_format(self):
+        import cards
+        import card_templates as ct
+        for template, style in (("calendar", "grid"), ("counter", "glass"), ("stats", "glitch"), ("rating", "figma")):
+            card = cards.get_card(cards.create_card(GUILD, STAFF, "Баннер", template))
+            card["data"]["style"] = style
+            png = run(cards.render_banner(card))
+            self.assertEqual(PILImage.open(io.BytesIO(png)).size, ct.BANNER_SIZE, template)
+
     def test_kind_choices_per_field(self):
         import cards
         import card_templates as ct
@@ -4299,6 +4308,13 @@ class LiveCardWizardTests(unittest.TestCase):
             banner = server_banner.get_banner(GUILD)
             self.assertEqual(banner["base"], f"card:{card['id']}")
             self.assertEqual(banner["auto"], 1)
+            self.assertTrue(banner["lines"])  # строки текста баннера не стираются
+            server_banner.apply_style(banner, next(iter(__import__("banner_styles").STYLES)))
+            self.assertTrue(banner["lines"])
+            banner["lines"] = []  # стёрла прошлая версия — при смене фона вернутся стандартные
+            banner["base"] = ""
+            server_banner.restore_lines(banner)
+            self.assertEqual(len(banner["lines"]), len(server_banner.DEFAULT_LINES))
             self.assertEqual(PILImage.open(io.BytesIO(sent[-1])).size, server_banner.SIZE)
             member = self.interaction(g, MEMBER)
             await cards.banner_step(member, card)
