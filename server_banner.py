@@ -162,10 +162,35 @@ def base_image(banner):
     return Image.new("RGBA", SIZE, CREAM + (255,))
 
 
-def render(banner, texts):
-    """texts — строки уже с подставленными значениями. -> PNG (bytes)."""
+def fit_picture(png):
+    """
+    Любая картинка (живая картинка любого формата) -> фон баннера 960×540:
+    сзади она же, растянутая и размытая, спереди — целиком, по центру, с тенью.
+    """
+    from PIL import ImageFilter
+    image = Image.open(io.BytesIO(png)).convert("RGBA")
+    width, height = SIZE
+    cover = image.copy()
+    scale = max(width / cover.width, height / cover.height)
+    cover = cover.resize((int(cover.width * scale) + 1, int(cover.height * scale) + 1), Image.LANCZOS)
+    left, top = (cover.width - width) // 2, (cover.height - height) // 2
+    back = cover.crop((left, top, left + width, top + height)).filter(ImageFilter.GaussianBlur(28))
+    back = Image.blend(back, Image.new("RGBA", SIZE, (0, 0, 0, 255)), 0.25)
+    margin = int(height * 0.07)
+    scale = min((width - 2 * margin) / image.width, (height - 2 * margin) / image.height)
+    front = image.resize((max(1, int(image.width * scale)), max(1, int(image.height * scale))), Image.LANCZOS)
+    x, y = (width - front.width) // 2, (height - front.height) // 2
+    shadow = Image.new("RGBA", SIZE, (0, 0, 0, 0))
+    shadow.paste(Image.new("RGBA", front.size, (0, 0, 0, 150)), (x + 6, y + 10))
+    back.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(14)))
+    back.alpha_composite(front, (x, y))
+    return back
+
+
+def render(banner, texts, picture=None):
+    """texts — строки уже с подставленными значениями; picture — готовый фон (живая картинка). -> PNG."""
     import banner_render
-    picture = base_image(banner)
+    picture = picture.copy() if picture is not None else base_image(banner)
     draw = ImageDraw.Draw(picture)
     width, height = picture.size
     margin = int(width * 0.06)
@@ -199,7 +224,14 @@ async def render_for(guild, banner):
     needed = {(m[1], m[2]) for line in banner["lines"] for m in VARIABLE.finditer(line["text"])}
     variables = await live.collect(guild, needed) if needed else {}
     texts = [substitute(line["text"], variables) for line in banner["lines"]]
-    return await asyncio.to_thread(render, banner, texts)
+    picture = None
+    if (banner.get("base") or "").startswith("card:"):
+        # баннер = живая картинка: перерисовываем её со свежими данными и вписываем в формат баннера
+        import cards
+        card = cards.get_card(int(banner["base"][5:] or 0))
+        if card is not None and card["guild_id"] == guild.id:
+            picture = await asyncio.to_thread(fit_picture, await cards.render_card(card, guild))
+    return await asyncio.to_thread(render, banner, texts, picture)
 
 
 # ============================================================
@@ -284,6 +316,10 @@ def line_label(line):
 
 def _background_name(banner):
     base = banner["base"] or ""
+    if base.startswith("card:"):
+        import cards
+        card = cards.get_card(int(base[5:] or 0))
+        return t("server_banner.base_card", name=card["title"] if card else "—")
     if base.startswith("style:"):
         import banner_styles
         return t("server_banner.base_style", name=banner_styles.STYLES.get(base[6:], ("—",))[0])

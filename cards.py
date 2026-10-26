@@ -278,17 +278,33 @@ async def render_card(card, guild=None):
         variables = await live.collect(guild, needed)
         title = substitute(title, variables)
         for key, _, kind in ct.spec(card["template"]).get("fields", []):
-            if kind == ct.T and isinstance(data.get(key), str):
+            if isinstance(data.get(key), str):  # текст — и число, ставшее живым «{online}»
                 data[key] = substitute(data[key], variables)
         for row in data.get("rows") or []:
             if isinstance(row, list):
                 row[:] = [substitute(cell, variables) if isinstance(cell, str) else cell for cell in row]
+    for key, _, kind in ct.spec(card["template"]).get("fields", []):
+        value = data.get(key)
+        if isinstance(value, str) and guild is not None and "<@" in value:
+            data[key] = mentions_to_names(guild, value)  # участник — на картинке его ник
+        elif kind == ct.N and isinstance(value, str) and ct.kind_of(data, key) != "text":
+            data[key] = ct.to_number(value)  # живое число после подстановки
     if card["template"] == "spotlight" and guild is not None:
         member = find_member(guild, data.get("who"))
         if member is not None:
             data["_name"] = member.display_name
             data["_avatar"] = await core.fetch_bytes(member.display_avatar.replace(size=256, format="png").url)
     return await asyncio.to_thread(ct.render, card, title, data, t("cards.rating.empty"))
+
+
+def mentions_to_names(guild, text):
+    """«<@123>» -> ник участника (на картинке упоминание не кликается — пишем имя)."""
+    import re as _re
+
+    def name(match):
+        member = guild.get_member(int(match.group(1)))
+        return getattr(member, "display_name", None) or getattr(member, "name", "—") if member else "—"
+    return _re.sub(r"<@!?(\d+)>", name, text)
 
 
 def find_member(guild, who):
@@ -365,6 +381,8 @@ def apply_counter(card, name, change):
         return row is not None and set_score(card, row["name"], change) is None
     fields = ct.spec(template).get("fields", [])
     for key, label, kind in fields:
+        if ct.kind_of(data, key) not in (None, "number"):
+            continue  # живое / текст / участник — кнопка счётчика их не меняет
         if kind == ct.N and (_same(label.split(" (")[0], name) or _same(key, name)):
             return ct.set_field(template, data, key, change) is None
     if ct.has_rows(template):
@@ -582,7 +600,10 @@ def summary(card):
     lines = []
     for key, label, kind in ct.spec(template).get("fields", []):
         value = data.get(key)
-        value = ct.number_text(value) if kind == ct.N else (str(value or "—")[:200])
+        if ct.kind_of(data, key) in ("variable", "counter", "mention"):
+            value = shows_text(card, key, kind)
+        else:
+            value = ct.number_text(value) if kind == ct.N else (str(value or "—")[:200])
         lines.append(f"**{label.split(' (')[0]}:** {value}")
     if ct.has_rows(template):
         columns = ct.columns_of(template, data)
@@ -596,7 +617,9 @@ def summary(card):
     return "\n".join(lines)[:3000]
 
 
-def editor_embed(interaction, card):
+def editor_embed(interaction, card, section="__last__"):
+    if section == "__last__":
+        section = _open_section.get(card["id"])
     editors = [f"<@{uid}>" for uid in card["editors"]] + [f"<@&{rid}>" for rid in card["editor_roles"]]
     command = t("cards.command.line", name=card["command"]) if card.get("command") else t("cards.command.none")
     embed = panel_embed(interaction, "cards.editor", hints=False,
@@ -604,10 +627,12 @@ def editor_embed(interaction, card):
                         rows=summary(card), max=MAX_ROWS, command=command,
                         editors=", ".join(editors) or t("cards.editor.only_owner"))
     lines = [t("hints.line", label=t(f"cards.editor.{name}"), hint=t(f"cards.editor.{name}.hint"))
-             for name in template_buttons(card["template"]) + COMMON_BUTTONS
+             for name in visible_buttons(card, section)
              if core.has_text(f"cards.editor.{name}.hint") and t(f"cards.editor.{name}.hint").strip()]
+    question = t(f"cards.editor.question.{section or 'main'}")
+    embed.description = f"{embed.description}\n\n**{question}**"
     if lines:
-        embed.description = f"{embed.description}\n\n{t('hints.header')}\n" + "\n".join(lines)
+        embed.description += "\n" + "\n".join(lines)
     return embed
 
 
@@ -620,25 +645,122 @@ async def apply_change(interaction, card, problem=None):
     await interaction.response.defer()
     published = await refresh_message(interaction.guild, card)
     # attachments=[] — если правили из галереи стилей, её коллаж убираем
-    await interaction.edit_original_response(embed=editor_embed(interaction, card), view=CardEditorView(card["id"]),
+    await interaction.edit_original_response(embed=editor_embed(interaction, card),
+                                             view=CardEditorView(card["id"], section=_open_section.get(card["id"])),
                                              attachments=[])
     if card["message_id"] and not published:
         await interaction.followup.send(t("cards.error.message_gone"), ephemeral=True)
 
 
+# Редактор картинки — по разделам: сначала один вопрос «что меняем?», потом
+# только кнопки этого раздела (а не всё сразу).
+SECTIONS = {
+    "data": ("set_score", "remove", "value", "fields", "row", "remove_row", "columns", "data_kinds"),
+    "look": ("look_style", "look_color", "rename", "bang"),
+    "where": ("publish", "unpublish", "to_banner", "command", "access", "save_to_library"),
+}
+SECTION_BUTTONS = ("open_data", "open_look", "open_where", "delete_card")
+_open_section = {}  # id картинки -> раздел, открытый последним (после правки возвращаемся туда же)
+
+
+def visible_buttons(card, section):
+    if section is None:
+        return SECTION_BUTTONS
+    keep = set(template_buttons(card["template"] if card else "rating")) | set(COMMON_BUTTONS) | \
+        {"data_kinds", "look_style", "look_color", "bang", "unpublish", "to_banner"}
+    if card and card["template"] == "rating":
+        keep -= {"data_kinds", "look_style", "look_color", "bang"}  # у рейтинга один вид
+    if card and not card.get("message_id"):
+        keep.discard("unpublish")
+    return tuple(name for name in SECTIONS[section] if name in keep)
+
+
 class CardEditorView(PanelView):
     texts = "cards.editor"
-    button_order = ("set_score", "value", "fields", "row", "remove", "remove_row", "columns", "theme",
-                    "rename", "publish", "command", "access", "save_to_library", "delete_card")
+    button_order = SECTION_BUTTONS + SECTIONS["data"] + SECTIONS["look"] + SECTIONS["where"]
 
-    def __init__(self, card_id, back_target=None):
+    def __init__(self, card_id, back_target=None, section=None):
+        if section is None and back_target is None:
+            section = _open_section.get(card_id)
+        self.section = section
         super().__init__(back_target=back_target, timeout=900)
         self.card_id = card_id
+        _open_section[card_id] = section
         card = get_card(card_id)
-        keep = set(template_buttons(card["template"] if card else "rating")) | set(COMMON_BUTTONS)
-        for name in ("set_score", "remove", "value", "fields", "row", "remove_row", "columns", "theme"):
-            if name not in keep:
+        keep = set(visible_buttons(card, section))
+        for name in SECTION_BUTTONS + sum(SECTIONS.values(), ()) + ("theme",):
+            if name not in keep and getattr(self, name, None) in self.children:
                 self.remove_item(getattr(self, name))
+        if section is not None:
+            back = self._nav(discord.ui.Button(label=t("cards.editor.to_sections")[:80], emoji="◀️",
+                                               style=discord.ButtonStyle.secondary, row=4))
+
+            async def to_sections(i):
+                _open_section[self.card_id] = None
+                fresh = get_card(self.card_id)
+                await i.response.edit_message(embed=editor_embed(i, fresh, None),
+                                              view=CardEditorView(self.card_id, back_target=self.back_target,
+                                                                  section=None), attachments=[])
+            back.callback = to_sections
+            self.add_item(back)
+
+    async def _section(self, interaction, section):
+        card = await self._card(interaction)
+        if card:
+            _open_section[self.card_id] = section
+            await interaction.response.edit_message(embed=editor_embed(interaction, card, section),
+                                                    view=CardEditorView(self.card_id, section=section))
+
+    @discord.ui.button(label="Данные", emoji="✏️", style=discord.ButtonStyle.primary)
+    async def open_data(self, interaction, button):
+        await self._section(interaction, "data")
+
+    @discord.ui.button(label="Внешний вид", emoji="🎨", style=discord.ButtonStyle.secondary)
+    async def open_look(self, interaction, button):
+        await self._section(interaction, "look")
+
+    @discord.ui.button(label="Где и кто", emoji="📤", style=discord.ButtonStyle.secondary)
+    async def open_where(self, interaction, button):
+        await self._section(interaction, "where")
+
+    @discord.ui.button(label="Что показывает", emoji="🔀", style=discord.ButtonStyle.secondary)
+    async def data_kinds(self, interaction, button):
+        card = await self._card(interaction)
+        if card:
+            await DataKindsView.open(interaction, card["id"], wizard=False)
+
+    @discord.ui.button(label="Стиль", emoji="🖼️", style=discord.ButtonStyle.primary)
+    async def look_style(self, interaction, button):
+        card = await self._card(interaction)
+        if card:
+            await style_step(interaction, card, wizard=False)
+
+    @discord.ui.button(label="Цвет", emoji="🎨", style=discord.ButtonStyle.primary)
+    async def look_color(self, interaction, button):
+        card = await self._card(interaction)
+        if card:
+            await color_step(interaction, card, wizard=False)
+
+    @discord.ui.button(label="«!» справа", emoji="❗", style=discord.ButtonStyle.secondary)
+    async def bang(self, interaction, button):
+        card = await self._card(interaction)
+        if card:
+            card["data"]["bang"] = not card["data"].get("bang", True)
+            await apply_change(interaction, card)
+
+    @discord.ui.button(label="Снять с публикации", emoji="📭", style=discord.ButtonStyle.secondary)
+    async def unpublish(self, interaction, button):
+        card = await self._card(interaction, manage=True)
+        if card:
+            await interaction.response.edit_message(
+                embed=panel_embed(interaction, "cards.unpublish", hints=False, channel=f"<#{card['channel_id']}>"),
+                view=UnpublishView(card["id"], back_target=(core.screen(interaction), self)))
+
+    @discord.ui.button(label="В баннер сервера", emoji="🏞️", style=discord.ButtonStyle.secondary)
+    async def to_banner(self, interaction, button):
+        card = await self._card(interaction, manage=True)
+        if card:
+            await banner_step(interaction, card, back_target=(core.screen(interaction), self))
 
     async def _card(self, interaction, manage=False):
         card = get_card(self.card_id)
@@ -825,12 +947,11 @@ class CardEditorView(PanelView):
         card = await self._card(interaction, manage=True)
         if not card:
             return
-        if card.get("command"):
-            import card_commands
-            await card_commands.unregister(interaction.client, card)
-        delete_card(card["id"])
-        core.audit(interaction, "card.deleted", "card", card["id"], card["title"])
-        await interaction.response.edit_message(embed=panel_embed(interaction, "cards.deleted"), view=None)
+        key = "cards.delete_ask.published" if card.get("message_id") else "cards.delete_ask.text"
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "cards.delete_ask", t(key, channel=f"<#{card['channel_id']}>"),
+                              hints=False, title=t("cards.delete_ask.title", name=card["title"] or "—")),
+            view=DeleteCardView(card["id"], bool(card.get("message_id")), back_target=(core.screen(interaction), self)))
 
 
 class ScoreModal(Modal, title="ОЧКИ"):
@@ -885,7 +1006,9 @@ class ValueModal(_CardModal):
         card = await self.fresh(interaction)
         if not card:
             return
-        if card["template"] == "progress":
+        if ct.kind_of(card["data"], "value") not in (None, "number"):
+            problem = ct.set_field(card["template"], card["data"], "value", self.number.value)
+        elif card["template"] == "progress":
             problem = ct.set_progress(card["data"], self.number.value)
         else:
             problem = ct.change_number(card["data"], "value", self.number.value)
@@ -919,7 +1042,7 @@ class FieldsModal(_CardModal):
         for key, item in self.inputs.items():
             kind = next(k for f, _, k in ct.spec(self.template)["fields"] if f == key)
             raw = item.value.strip()
-            if kind == ct.N and not raw:
+            if kind == ct.N and not raw and ct.kind_of(card["data"], key) in (None, "number"):
                 raw = "0"
             problem = ct.set_field(self.template, card["data"], key, raw) or problem
         await apply_change(interaction, card, problem)
@@ -1051,7 +1174,11 @@ class GalleryView(PanelView):
         return type(self)(page, back_target=self.back_target)
 
     async def turn(self, interaction, step):
-        await self.copy(self.page + step).show(interaction)
+        view = self.copy(self.page + step)
+        for item in self.children:  # «Оставить как есть» / «К правке» — и на другой странице
+            if getattr(item, "_carry", False):
+                view.add_item(item)
+        await view.show(interaction)
 
     def build(self):
         cache_key = (type(self).__name__, getattr(self, "template", None), tuple(self.keys))
@@ -1098,10 +1225,8 @@ class TypeGalleryView(GalleryView):
         return panel_embed(interaction, "cards.gallery_types", hints=False, page=self.page + 1, pages=self.pages)
 
     async def pick(self, interaction, key):
-        if key == "rating":  # у рейтинга пока один вид
-            await interaction.response.send_modal(TitleModal(None, template_name(key), create=True, template=key))
-            return
-        await StyleGalleryView(key, on_pick=None, back_page=self.page, back_target=self.back_target).show(interaction)
+        # шаг 2 — название: дальше все примеры рисуются с ним, как будет выглядеть именно твоя картинка
+        await interaction.response.send_modal(TitleModal(None, "", create=True, template=key))
 
 
 class StyleGalleryView(GalleryView):
@@ -1109,8 +1234,10 @@ class StyleGalleryView(GalleryView):
 
     filename = "styles.png"
 
-    def __init__(self, template, on_pick=None, page=0, back_page=None, back_target=None, theme="cream"):
+    def __init__(self, template, on_pick=None, page=0, back_page=None, back_target=None, theme="cream",
+                 card_id=None, step=None):
         self.template, self.on_pick, self.back_page, self.theme = template, on_pick, back_page, theme
+        self.card_id, self.step = card_id, step
         super().__init__(page, back_target=None if back_page is not None else back_target)
         self.outer_back = back_target
         if back_page is not None:  # к галерее типов (она тоже с картинкой — перерисовываем)
@@ -1124,8 +1251,8 @@ class StyleGalleryView(GalleryView):
             self.add_item(back)
 
     def copy(self, page):
-        view = StyleGalleryView(self.template, self.on_pick, page, self.back_page, self.outer_back, self.theme)
-        return view
+        return StyleGalleryView(self.template, self.on_pick, page, self.back_page, self.outer_back, self.theme,
+                                self.card_id, self.step)
 
     def items(self):
         import card_templates as ct
@@ -1133,18 +1260,22 @@ class StyleGalleryView(GalleryView):
 
     def tile(self, key):
         import card_templates as ct
-        return ct.sample(self.template, self.theme, key)
+        card = get_card(self.card_id) if self.card_id else None
+        return preview_png(card, style=key) if card else ct.sample(self.template, self.theme, key)
 
     def label(self, key):
         import card_templates as ct
         return ct.STYLES[key]
 
     def screen(self, interaction):
-        return panel_embed(interaction, "cards.gallery_styles", hints=False, kind=template_name(self.template),
+        context = "cards.wizard_style" if self.step else "cards.gallery_styles"
+        return panel_embed(interaction, context, hints=False, kind=template_name(self.template),
                            page=self.page + 1, pages=self.pages)
 
     def build(self):
-        cache_key = ("styles", self.template, self.theme, tuple(self.keys))
+        card = get_card(self.card_id) if self.card_id else None
+        cache_key = ("styles", self.template, self.theme, tuple(self.keys),
+                     card and (card["id"], card["title"], json.dumps(card["data"], sort_keys=True, default=str)))
         if cache_key not in _gallery_cache:
             if len(_gallery_cache) > 64:
                 _gallery_cache.clear()
@@ -1319,8 +1450,7 @@ class TitleModal(Modal, title="НАЗВАНИЕ"):
                 card["data"]["style"] = self.style
                 save_card(card)
             core.audit(interaction, "card.created", "card", card["id"], title)
-            await interaction.response.edit_message(embed=editor_embed(interaction, card),
-                                                    view=CardEditorView(card["id"]))
+            await style_step(interaction, card, wizard=True)
             return
         card = get_card(self.card_id)
         if not can_edit(interaction, card):
@@ -1328,6 +1458,686 @@ class TitleModal(Modal, title="НАЗВАНИЕ"):
             return
         card["title"] = title
         await apply_change(interaction, card)
+
+
+# ============================================================
+# МАСТЕР: тип → название → стиль → цвет → что показывает. Каждый шаг — один
+# вопрос и примеры ИМЕННО этой картинки (с её названием и данными).
+# ============================================================
+
+# Примерные значения переменных — только для превью (настоящие подставит сервер).
+PREVIEW_VALUES = {
+    "member_count": "1284", "online": "312", "voice": "17", "boosts": "14", "bots": "6", "messages": "2450",
+    "active_users": "86", "joined": "12", "newest_member": "Новенький", "server": "Твой сервер",
+    "boost_level": "2", "voice_busiest": "Болталка", "messages_leader": "Самый активный",
+    "hour_greeting": "Добрый вечер", "weekday": "пятница", "random_member": "Случайный ник", "counter": "42",
+    "date_text": "26 октября",
+}
+# Живые числа и тексты сервера для «Что показывает» (имя переменной, аргумент).
+LIVE_NUMBERS = (("member_count", ""), ("online", ""), ("voice", ""), ("boosts", ""), ("bots", ""),
+                ("messages", "сегодня"), ("active_users", "сегодня"), ("joined", "сегодня"))
+LIVE_TEXTS = (("newest_member", ""), ("random_member", ""), ("messages_leader", "сегодня"), ("voice_busiest", ""),
+              ("server", ""), ("date_text", ""), ("weekday", ""), ("hour_greeting", ""), ("boost_level", ""))
+
+
+def preview_png(card, style=None, theme=None, guild=None, override=None):
+    """
+    Как будет выглядеть ЭТА картинка (её название и данные) в стиле/цвете.
+    Пустые поля — из примера шаблона, переменные — примерными значениями. -> PNG.
+    """
+    import card_templates as ct
+    from actions import VARIABLE
+    if card["template"] == "rating":
+        rows = sorted_rows(card) or [{"name": "Аня", "score": 120}, {"name": "Кот", "score": 95}]
+        return render_rating(card["title"] or template_name("rating"), rows)
+    data = json.loads(json.dumps(card["data"]))
+    data.update(override or {})
+    sample_title, values = ct.SAMPLES.get(card["template"], ("", {}))
+    defaults = ct.default_data(card["template"])
+    if all(card["data"].get(key) == defaults.get(key) for key in values):  # ещё не заполнена — пример шаблона
+        for key, value in values.items():
+            if key not in (override or {}):
+                data[key] = value
+    if card["template"] == "countdown" and not data.get("when"):
+        data["when"] = (ct.now() + ct.timedelta(days=2, hours=5)).strftime("%d.%m.%Y %H:%M")
+    if card["template"] == "streak" and not data.get("since"):
+        data["since"] = (ct.now() - ct.timedelta(days=12)).strftime("%d.%m.%Y")
+    if style:
+        data["style"] = style
+    if theme:
+        data["theme"] = theme
+
+    def fill(text):
+        return VARIABLE.sub(lambda m: PREVIEW_VALUES.get(m[1], m[0]), text)
+
+    title = fill(card["title"] or sample_title)
+    for key, _, kind in ct.spec(card["template"]).get("fields", []):
+        value = data.get(key)
+        if isinstance(value, str):
+            value = fill(value)
+            if "<@" in value:
+                value = mentions_to_names(guild, value) if guild is not None else re.sub(r"<@!?\d+>", "@участник",
+                                                                                          value)
+            if kind == ct.N and ct.kind_of(data, key) != "text":
+                value = ct.to_number(value)
+            data[key] = value
+    for row in data.get("rows") or []:
+        if isinstance(row, list):
+            row[:] = [fill(cell) if isinstance(cell, str) else cell for cell in row]
+    return ct.render({"template": card["template"]}, title, data, t("cards.rating.empty"))
+
+
+async def show_png(interaction, embed, view, png, filename="preview.png"):
+    """Показать экран с картинкой-вложением (редактируем то же сообщение)."""
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    embed.set_image(url=f"attachment://{filename}")
+    await interaction.edit_original_response(embed=embed, view=view,
+                                             attachments=[discord.File(io.BytesIO(png), filename=filename)])
+
+
+async def open_editor(interaction, card_id):
+    """Конец мастера / «Готово» — панель правки картинки (без вложений)."""
+    card = get_card(card_id)
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    await interaction.edit_original_response(embed=editor_embed(interaction, card), view=CardEditorView(card_id),
+                                             attachments=[])
+
+
+def _skip_button(view, label_key, callback):
+    button = view._nav(discord.ui.Button(label=t(label_key)[:80], emoji="⏭️", style=discord.ButtonStyle.secondary,
+                                         row=4))
+    button.callback = callback
+    button._carry = True
+    view.add_item(button)
+
+
+async def style_step(interaction, card, wizard):
+    """Шаг 3: стиль — 4 стиля на коллаже, все с твоим названием и данными."""
+    if card["template"] == "rating":  # у рейтинга один вид — сразу к правке
+        await open_editor(interaction, card["id"])
+        return
+    card_id = card["id"]
+
+    async def chosen(i, key):
+        fresh = get_card(card_id)
+        if not can_edit(i, fresh):
+            await reply(i, "cards.denied")
+            return
+        fresh["data"]["style"] = key
+        if wizard:
+            save_card(fresh)
+            await color_step(i, fresh, wizard=True)
+        else:
+            await apply_change(i, fresh)
+
+    view = StyleGalleryView(card["template"], on_pick=chosen, theme=card["data"].get("theme") or "cream",
+                            card_id=card_id, step="wizard" if wizard else None)
+    if wizard:
+        async def keep(i):
+            await color_step(i, get_card(card_id), wizard=True)
+        _skip_button(view, "cards.wizard.keep_style", keep)
+    else:
+        _back_to_editor(view, card_id)
+    await view.show(interaction)
+
+
+async def color_step(interaction, card, wizard):
+    """Шаг 4: цвет — та же картинка во всех цветах."""
+    card_id = card["id"]
+    view = ThemeGalleryView(card_id, wizard=wizard)
+    if wizard:
+        async def keep(i):
+            await DataKindsView.open(i, card_id, wizard=True)
+        _skip_button(view, "cards.wizard.keep_color", keep)
+    else:
+        _back_to_editor(view, card_id)
+    await view.show(interaction)
+
+
+def _back_to_editor(view, card_id):
+    back = view._nav(discord.ui.Button(label=t("cards.wizard.to_editor")[:80], emoji="◀️",
+                                       style=discord.ButtonStyle.secondary, row=4))
+
+    async def go(i):
+        await open_editor(i, card_id)
+    back.callback = go
+    back._carry = True
+    view.add_item(back)
+
+
+class ThemeGalleryView(GalleryView):
+    """Цвет картинки — твоя картинка во всех цветах, 4 на странице."""
+
+    filename = "colors.png"
+
+    def __init__(self, card_id, page=0, wizard=False):
+        self.card_id, self.wizard = card_id, wizard
+        super().__init__(page)
+
+    def copy(self, page):
+        return ThemeGalleryView(self.card_id, page, self.wizard)
+
+    def items(self):
+        import card_templates as ct
+        return list(ct.THEME_NAMES)
+
+    def tile(self, key):
+        return preview_png(get_card(self.card_id), theme=key)
+
+    def label(self, key):
+        import card_templates as ct
+        return ct.THEME_NAMES[key]
+
+    def screen(self, interaction):
+        return panel_embed(interaction, "cards.wizard_color" if self.wizard else "cards.gallery_colors", hints=False,
+                           page=self.page + 1, pages=self.pages)
+
+    def build(self):
+        card = get_card(self.card_id)
+        cache_key = ("colors", card["id"], card["title"], json.dumps(card["data"], sort_keys=True, default=str),
+                     tuple(self.keys))
+        if cache_key not in _gallery_cache:
+            if len(_gallery_cache) > 64:
+                _gallery_cache.clear()
+            _gallery_cache[cache_key] = gallery_png([(self.label(key), self.tile(key)) for key in self.keys])
+        return _gallery_cache[cache_key]
+
+    async def pick(self, interaction, key):
+        card = get_card(self.card_id)
+        if not can_edit(interaction, card):
+            await reply(interaction, "cards.denied")
+            return
+        card["data"]["theme"] = key
+        if self.wizard:
+            save_card(card)
+            await DataKindsView.open(interaction, card["id"], wizard=True)
+        else:
+            await apply_change(interaction, card)
+
+
+# ---------- что показывает каждое поле ----------
+
+def kind_fields(card):
+    """Поля, у которых можно поменять «что показывает»: [(ключ, подпись, вид в шаблоне)]. Даты — нет."""
+    import card_templates as ct
+    if card["template"] == "rating":
+        return []
+    return [(key, label.split(" (")[0], kind) for key, label, kind in ct.spec(card["template"]).get("fields", [])
+            if kind != ct.D]
+
+
+def kinds_for(card, key, base_kind):
+    """Чем может быть поле: число — числом/живым числом/счётчиком (+ текстом, где число лишь надпись), текст —
+    текстом/участником/значением сервера."""
+    import card_templates as ct
+    if base_kind == ct.N:
+        kinds = ["number", "variable", "counter"]
+        if (card["template"], key) in ct.TEXT_INSTEAD_OF_NUMBER:
+            kinds.append("text")
+        return kinds
+    return ["text", "mention", "variable"]
+
+
+def current_kind(card, key, base_kind):
+    import card_templates as ct
+    kind = ct.kind_of(card["data"], key)
+    if kind:
+        return kind
+    return "number" if base_kind == ct.N else "text"
+
+
+def _var_title(name, arg=""):
+    import variable_catalog
+    item = variable_catalog.BY_NAME.get(name)
+    title = item.title if item else name
+    return f"{title} ({arg})" if arg else title
+
+
+def shows_text(card, key, base_kind):
+    """«что показывает» поле — по-русски, для списка полей."""
+    from actions import VARIABLE
+    kind = current_kind(card, key, base_kind)
+    value = card["data"].get(key)
+    match = VARIABLE.search(value) if isinstance(value, str) else None
+    if kind == "variable" and match:
+        return t("cards.kinds.shows.variable", name=_var_title(match[1], match[2] or ""))
+    if kind == "counter" and match:
+        return t("cards.kinds.shows.counter", name=match[2] or "—")
+    if kind == "mention" and isinstance(value, str) and value:
+        return t("cards.kinds.shows.mention", who=value)
+    return t(f"cards.kinds.shows.{kind}")
+
+
+def kinds_embed(interaction, card, ask):
+    lines = [t("cards.kinds.line", name=label, shows=shows_text(card, key, kind)) for key, label, kind in
+             kind_fields(card)]
+    context = "cards.kinds_ask" if ask else "cards.kinds"
+    return panel_embed(interaction, context, hints=False, fields="\n".join(lines) or "—")
+
+
+class DataKindsView(PanelView):
+    """
+    Шаг 5 (и кнопка «Что показывает»): поля картинки по-русски и что каждое
+    показывает. В мастере сначала вопрос «Поменять? Да / Нет».
+    """
+
+    def __init__(self, card_id, wizard=False, ask=False):
+        super().__init__(timeout=900)
+        self.card_id, self.wizard, self.ask = card_id, wizard, ask
+        card = get_card(card_id)
+        if ask:
+            yes = discord.ui.Button(label=t("cards.kinds_ask.yes")[:80], emoji="✅", style=discord.ButtonStyle.success)
+            no = discord.ui.Button(label=t("cards.kinds_ask.no")[:80], emoji="➡️", style=discord.ButtonStyle.primary)
+
+            async def on_yes(i):
+                await DataKindsView.open(i, self.card_id, wizard=self.wizard, ask=False)
+
+            async def on_no(i):
+                await open_editor(i, self.card_id)
+            yes.callback, no.callback = on_yes, on_no
+            self.add_item(yes)
+            self.add_item(no)
+            return
+        select = discord.ui.Select(placeholder=t("cards.kinds.pick")[:150], options=[
+            discord.SelectOption(label=label[:100], value=key,
+                                 description=shows_text(card, key, kind)[:100])
+            for key, label, kind in kind_fields(card)][:25])
+
+        async def picked(i):
+            await KindPickView.open(i, self.card_id, select.values[0], wizard=self.wizard)
+        select.callback = picked
+        self.add_item(select)
+        done = discord.ui.Button(label=t("cards.kinds.done")[:80], emoji="✅", style=discord.ButtonStyle.success)
+
+        async def finish(i):
+            await open_editor(i, self.card_id)
+        done.callback = finish
+        self.add_item(done)
+
+    @staticmethod
+    async def open(interaction, card_id, wizard=False, ask=None):
+        import asyncio
+        card = get_card(card_id)
+        if not kind_fields(card):  # менять нечего (рейтинг, таблица…) — к правке
+            await open_editor(interaction, card_id)
+            return
+        ask = wizard if ask is None else ask
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        png = await asyncio.to_thread(preview_png, card, None, None, interaction.guild)
+        await show_png(interaction, kinds_embed(interaction, card, ask), DataKindsView(card_id, wizard, ask), png)
+
+
+class KindPickView(GalleryView):
+    """Что показывает поле: твоя картинка с каждым вариантом — выбрать номером."""
+
+    filename = "kinds.png"
+    EXAMPLE = {"number": "128", "variable": "{online}", "counter": "{counter:пример}", "text": "Скоро!",
+               "mention": "<@0>"}
+    TEXT_EXAMPLE = {"text": "Твой текст", "mention": "<@0>", "variable": "{newest_member}"}
+
+    def __init__(self, card_id, key, wizard=False, page=0):
+        self.card_id, self.key, self.wizard = card_id, key, wizard
+        card = get_card(card_id)
+        self.label_text, self.base_kind = next((label, kind) for k, label, kind in kind_fields(card) if k == key)
+        super().__init__(page)
+        back = self._nav(discord.ui.Button(label=t("cards.kinds.to_fields")[:80], emoji="◀️",
+                                           style=discord.ButtonStyle.secondary, row=4))
+
+        async def go(i):
+            await DataKindsView.open(i, self.card_id, wizard=self.wizard, ask=False)
+        back.callback = go
+        self.add_item(back)
+
+    def copy(self, page):
+        return KindPickView(self.card_id, self.key, self.wizard, page)
+
+    def items(self):
+        return kinds_for(get_card(self.card_id), self.key, self.base_kind)
+
+    def tile(self, kind):
+        import card_templates as ct
+        card = get_card(self.card_id)
+        examples = self.EXAMPLE if self.base_kind == ct.N else self.TEXT_EXAMPLE
+        kinds = dict(card["data"].get("kinds") or {}, **{self.key: kind})
+        return preview_png(card, override={self.key: examples[kind], "kinds": kinds})
+
+    def label(self, kind):
+        return t(f"cards.kinds.kind.{kind}")
+
+    def line(self, kind):
+        return t("cards.kinds.kind_line", name=self.label(kind), about=t(f"cards.kinds.kind.{kind}.about"))
+
+    def screen(self, interaction):
+        card = get_card(self.card_id)
+        return panel_embed(interaction, "cards.kind_pick", hints=False, name=self.label_text,
+                           now=shows_text(card, self.key, self.base_kind))
+
+    def build(self):
+        card = get_card(self.card_id)
+        cache_key = ("kinds", card["id"], self.key, json.dumps(card["data"], sort_keys=True, default=str),
+                     card["title"])
+        if cache_key not in _gallery_cache:
+            if len(_gallery_cache) > 64:
+                _gallery_cache.clear()
+            _gallery_cache[cache_key] = gallery_png([(self.label(key), self.tile(key)) for key in self.keys])
+        return _gallery_cache[cache_key]
+
+    @staticmethod
+    async def open(interaction, card_id, key, wizard=False):
+        await KindPickView(card_id, key, wizard).show(interaction)
+
+    async def pick(self, interaction, kind):
+        card = get_card(self.card_id)
+        if not can_edit(interaction, card):
+            await reply(interaction, "cards.denied")
+            return
+        if kind in ("number", "text"):
+            await interaction.response.send_modal(KindValueModal(self.card_id, self.key, kind, self.label_text,
+                                                                 self.wizard))
+            return
+        if kind == "mention":
+            await interaction.response.edit_message(
+                embed=panel_embed(interaction, "cards.kind_mention", hints=False, name=self.label_text),
+                view=MentionPickView(self.card_id, self.key, self.wizard), attachments=[])
+            return
+        if kind == "counter":
+            await interaction.response.edit_message(
+                embed=panel_embed(interaction, "cards.kind_counter", hints=False, name=self.label_text),
+                view=CounterPickView(interaction.guild.id, self.card_id, self.key, self.wizard), attachments=[])
+            return
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "cards.kind_variable", hints=False, name=self.label_text),
+            view=VariablePickView(self.card_id, self.key, self.base_kind, self.wizard), attachments=[])
+
+
+async def set_kind(interaction, card_id, key, kind, value, wizard):
+    """Сохранить, что показывает поле, перерисовать в канале и вернуться к списку полей (с превью)."""
+    import card_templates as ct
+    card = get_card(card_id)
+    if not can_edit(interaction, card):
+        await reply(interaction, "cards.denied")
+        return
+    base_kind = next((kind for k, _, kind in kind_fields(card) if k == key), ct.T)
+    kinds = dict(card["data"].get("kinds") or {})
+    if kind == ("number" if base_kind == ct.N else "text"):
+        kinds.pop(key, None)  # как в шаблоне
+    else:
+        kinds[key] = kind
+    card["data"]["kinds"] = kinds
+    if kind == "number":
+        problem = ct.change_number(card["data"], key, value or "0")
+        if problem:
+            await reply(interaction, problem)
+            return
+    else:
+        card["data"][key] = (value or "").strip()[:ct.MAX_TEXT if key == "text" else 120]
+    save_card(card)
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    await refresh_message(interaction.guild, card)
+    await DataKindsView.open(interaction, card_id, wizard=wizard, ask=False)
+
+
+class KindValueModal(Modal, title="ЗНАЧЕНИЕ"):
+    def __init__(self, card_id, key, kind, label, wizard):
+        super().__init__(title=t(f"cards.kind_value.{kind}.title")[:45])
+        self.card_id, self.key, self.kind, self.wizard = card_id, key, kind, wizard
+        card = get_card(card_id)
+        current = card["data"].get(key)
+        self.value = discord.ui.TextInput(label=label[:45], max_length=120, required=kind == "number",
+                                          placeholder=t(f"cards.kind_value.{kind}.placeholder")[:100],
+                                          default=str(current) if isinstance(current, (str, int, float))
+                                          and str(current) and "{" not in str(current) else None)
+        self.add_item(self.value)
+
+    async def on_submit(self, interaction):
+        await set_kind(interaction, self.card_id, self.key, self.kind, self.value.value, self.wizard)
+
+
+class _KindSubView(PanelView):
+    def __init__(self, card_id, key, wizard):
+        super().__init__(timeout=900)
+        self.card_id, self.key, self.wizard = card_id, key, wizard
+        back = self._nav(discord.ui.Button(label=t("cards.kinds.to_kinds")[:80], emoji="◀️",
+                                           style=discord.ButtonStyle.secondary, row=4))
+
+        async def go(i):
+            await KindPickView.open(i, self.card_id, self.key, wizard=self.wizard)
+        back.callback = go
+        self.add_item(back)
+
+
+class MentionPickView(_KindSubView):
+    """Участник: на картинке будет его ник."""
+
+    def __init__(self, card_id, key, wizard):
+        super().__init__(card_id, key, wizard)
+        select = discord.ui.UserSelect(placeholder=t("cards.kind_mention.pick")[:150])
+
+        async def picked(i):
+            await set_kind(i, self.card_id, self.key, "mention", f"<@{select.values[0].id}>", self.wizard)
+        select.callback = picked
+        self.add_item(select)
+
+
+class VariablePickView(_KindSubView):
+    """Живое значение сервера — список по-русски (что это и пример)."""
+
+    def __init__(self, card_id, key, base_kind, wizard):
+        import card_templates as ct
+        import variable_catalog
+        super().__init__(card_id, key, wizard)
+        options = []
+        for name, arg in (LIVE_NUMBERS if base_kind == ct.N else LIVE_TEXTS):
+            item = variable_catalog.BY_NAME.get(name)
+            if item is None:
+                continue
+            value = "{" + name + (f":{arg}" if arg else "") + "}"
+            options.append(discord.SelectOption(label=_var_title(name, arg)[:100], value=value,
+                                                description=item.about[:100]))
+        select = discord.ui.Select(placeholder=t("cards.kind_variable.pick")[:150], options=options[:25])
+
+        async def picked(i):
+            await set_kind(i, self.card_id, self.key, "variable", select.values[0], self.wizard)
+        select.callback = picked
+        self.add_item(select)
+
+
+class CounterPickView(_KindSubView):
+    """Свой счётчик сервера ({counter:имя}) — из уже созданных или новый."""
+
+    def __init__(self, guild_id, card_id, key, wizard):
+        from database import get_counters
+        super().__init__(card_id, key, wizard)
+        counters = get_counters(guild_id)
+        if counters:
+            select = discord.ui.Select(placeholder=t("cards.kind_counter.pick")[:150], options=[
+                discord.SelectOption(label=name[:100], value=name[:100],
+                                     description=t("cards.kind_counter.now", value=value)[:100])
+                for name, value in list(counters.items())[:25]])
+
+            async def picked(i):
+                await set_kind(i, self.card_id, self.key, "counter", "{counter:" + select.values[0] + "}",
+                               self.wizard)
+            select.callback = picked
+            self.add_item(select)
+        new = discord.ui.Button(label=t("cards.kind_counter.new")[:80], emoji="➕", style=discord.ButtonStyle.success)
+
+        async def create(i):
+            await i.response.send_modal(CounterNameModal(self.card_id, self.key, self.wizard))
+        new.callback = create
+        self.add_item(new)
+
+
+class CounterNameModal(Modal, title="СЧЁТЧИК"):
+    texts = "cards.counter_modal"
+    name = discord.ui.TextInput(label="Имя счётчика", max_length=40)
+
+    def __init__(self, card_id, key, wizard):
+        super().__init__()
+        self.card_id, self.key, self.wizard = card_id, key, wizard
+
+    async def on_submit(self, interaction):
+        name = re.sub(r"[{}:\n]", "", self.name.value).strip()[:40] or "счётчик"
+        await set_kind(interaction, self.card_id, self.key, "counter", "{counter:" + name + "}", self.wizard)
+
+
+# ---------- снять с публикации / удалить / в баннер ----------
+
+async def _channel_message(guild, card):
+    channel = guild.get_channel_or_thread(card["channel_id"]) if card.get("channel_id") else None
+    if channel is None or not card.get("message_id"):
+        return None
+    try:
+        return await channel.fetch_message(card["message_id"])
+    except discord.HTTPException:
+        return None
+
+
+class UnpublishView(PanelView):
+    """«Снять с публикации»: сообщение в канале удаляется, сама картинка остаётся."""
+
+    def __init__(self, card_id, back_target=None):
+        super().__init__(back_target=back_target, timeout=600)
+        self.card_id = card_id
+
+    @discord.ui.button(label="Да, убрать из канала", emoji="📭", style=discord.ButtonStyle.danger)
+    async def yes(self, interaction, button):
+        card = get_card(self.card_id)
+        if card is None or not can_manage(interaction, card):
+            await reply(interaction, "cards.denied")
+            return
+        await interaction.response.defer()
+        message = await _channel_message(interaction.guild, card)
+        if message is not None:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+        card["message_id"] = None
+        save_card(card)
+        core.audit(interaction, "card.unpublished", "card", card["id"], card["title"])
+        await open_editor(interaction, card["id"])
+
+    @discord.ui.button(label="Нет, оставить", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def no(self, interaction, button):
+        await open_editor(interaction, self.card_id)
+
+
+class DeleteCardView(PanelView):
+    """Удалить картинку — один вопрос: с сообщением в канале или оставить его застывшим."""
+
+    def __init__(self, card_id, published, back_target=None):
+        super().__init__(back_target=back_target, timeout=600)
+        self.card_id = card_id
+        if not published:
+            self.remove_item(self.keep_message)
+
+    async def _delete(self, interaction, with_message):
+        card = get_card(self.card_id)
+        if card is None or not can_manage(interaction, card):
+            await reply(interaction, "cards.denied")
+            return
+        await interaction.response.defer()
+        if card.get("command"):
+            import card_commands
+            await card_commands.unregister(interaction.client, card)
+        message = await _channel_message(interaction.guild, card)
+        if message is not None:
+            try:
+                if with_message:
+                    await message.delete()
+                elif not _foreign_buttons(message):
+                    await message.edit(view=None)  # застыла: кнопки «Изменить» больше нет
+            except discord.HTTPException:
+                pass
+        banner = __import__("server_banner").get_banner(interaction.guild.id)
+        if banner and banner.get("base") == f"card:{card['id']}":
+            banner.update(base="", auto=0)  # баннер с этой картинкой остаётся как есть, но больше не обновляется
+            __import__("server_banner").save(banner)
+        delete_card(card["id"])
+        core.audit(interaction, "card.deleted", "card", card["id"], card["title"])
+        await interaction.edit_original_response(embed=panel_embed(interaction, "cards.deleted"), view=None,
+                                                 attachments=[])
+
+    @discord.ui.button(label="Да, удалить", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def delete_all(self, interaction, button):
+        await self._delete(interaction, with_message=True)
+
+    @discord.ui.button(label="Удалить, сообщение оставить", emoji="🧊", style=discord.ButtonStyle.secondary)
+    async def keep_message(self, interaction, button):
+        await self._delete(interaction, with_message=False)
+
+    @discord.ui.button(label="Нет, оставить", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def no(self, interaction, button):
+        await open_editor(interaction, self.card_id)
+
+
+async def banner_step(interaction, card, back_target=None):
+    """«В баннер сервера»: показать, как картинка ляжет в баннер, и спросить «Ставим? Да / Нет»."""
+    import asyncio
+    import server_banner
+    if not server_banner.can_manage(interaction):
+        await reply(interaction, "common.need_admin")
+        return
+    key = server_banner.problem(interaction.guild)
+    if key:
+        await reply(interaction, key)
+        return
+    await interaction.response.defer()
+    png = await render_card(card, interaction.guild)
+
+    def build():
+        output = io.BytesIO()
+        server_banner.fit_picture(png).convert("RGB").save(output, "PNG", optimize=True)
+        return output.getvalue()
+    banner_png = await asyncio.to_thread(build)
+    await show_png(interaction, panel_embed(interaction, "cards.to_banner", hints=False, name=card["title"] or "—"),
+                   BannerAskView(card["id"]), banner_png, "banner.png")
+
+
+class BannerAskView(PanelView):
+    """Два вопроса по очереди: «Ставим баннером?» → «Обновлять вместе с картинкой?»."""
+
+    def __init__(self, card_id, stage="put"):
+        super().__init__(timeout=600)
+        self.card_id, self.stage = card_id, stage
+        yes = discord.ui.Button(label=t(f"cards.to_banner.{stage}_yes")[:80], emoji="✅",
+                                style=discord.ButtonStyle.success)
+        no = discord.ui.Button(label=t(f"cards.to_banner.{stage}_no")[:80], emoji="↩️" if stage == "put" else "📌",
+                               style=discord.ButtonStyle.secondary)
+        yes.callback = lambda i: self.answer(i, True)
+        no.callback = lambda i: self.answer(i, False)
+        self.add_item(yes)
+        self.add_item(no)
+
+    async def answer(self, interaction, yes):
+        import server_banner
+        if not server_banner.can_manage(interaction):
+            await reply(interaction, "common.need_admin")
+            return
+        if self.stage == "put":
+            if not yes:
+                await open_editor(interaction, self.card_id)
+                return
+            await interaction.response.edit_message(
+                embed=panel_embed(interaction, "cards.to_banner_auto", hints=False),
+                view=BannerAskView(self.card_id, "auto"))
+            return
+        await interaction.response.defer()
+        banner = server_banner.get_or_create(interaction.guild.id, interaction.user.id)
+        banner.update(base=f"card:{self.card_id}", lines=[], auto=1 if yes else 0)
+        server_banner.save(banner)
+        done, key = await server_banner.apply(interaction.guild, banner, force=True)
+        core.audit(interaction, "server_banner.from_card", "card", self.card_id, "auto" if yes else "once")
+        card = get_card(self.card_id)
+        await interaction.edit_original_response(embed=editor_embed(interaction, card),
+                                                 view=CardEditorView(self.card_id), attachments=[])
+        await interaction.followup.send(t(key) if key else t("cards.to_banner.done_auto" if yes else
+                                                                  "cards.to_banner.done_once"), ephemeral=True)
 
 
 # ============================================================

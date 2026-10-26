@@ -4070,5 +4070,221 @@ class ViewSmokeTests(unittest.TestCase):
                                     "В цитаты дня", "Шепнуть"]))
 
 
+class LiveCardWizardTests(unittest.TestCase):
+    """Живые картинки: мастер по шагам на примере своей картинки, «что показывает», удалить / снять / в баннер."""
+
+    def interaction(self, guild, who=STAFF):
+        i = FakeInteraction(guild, guild.members[who])
+        i.edits = []
+
+        async def edit_original_response(**kwargs):
+            i.edits.append(kwargs)
+        i.edit_original_response = edit_original_response
+        return i
+
+    def test_preview_draws_own_card_in_every_style_and_colour(self):
+        import cards
+        import card_templates as ct
+        for template in ct.TEMPLATES:
+            card = cards.get_card(cards.create_card(GUILD, STAFF, "Моя картинка", template))
+            for style in list(ct.STYLES)[:2]:
+                png = cards.preview_png(card, style=style)
+                self.assertEqual(PILImage.open(io.BytesIO(png)).format, "PNG")
+            cards.preview_png(card, theme="night")
+
+    def test_wizard_goes_name_style_colour_kinds(self):
+        import cards
+        g = make_guild()
+
+        async def check():
+            i = self.interaction(g)
+            await cards.TypeGalleryView(0).pick(i, "counter")
+            modal = i.response.modals[-1]
+            self.assertTrue(modal.create)
+            modal.name._value = "Побед"
+            i = self.interaction(g)
+            await modal.on_submit(i)
+            card = [c for c in cards.get_cards(GUILD) if c["title"] == "Побед"][-1]
+            view = i.edits[-1]["view"]
+            self.assertIsInstance(view, cards.StyleGalleryView)
+            self.assertEqual(view.card_id, card["id"])
+            self.assertTrue(i.edits[-1]["attachments"])
+            style = view.keys[1]
+            i = self.interaction(g)
+            await view.on_pick(i, style)
+            self.assertEqual(cards.get_card(card["id"])["data"]["style"], style)
+            colours = i.edits[-1]["view"]
+            self.assertIsInstance(colours, cards.ThemeGalleryView)
+            i = self.interaction(g)
+            await colours.pick(i, "night")
+            self.assertEqual(cards.get_card(card["id"])["data"]["theme"], "night")
+            kinds = i.edits[-1]["view"]
+            self.assertIsInstance(kinds, cards.DataKindsView)
+            self.assertTrue(kinds.ask)  # сначала вопрос «Поменять? Да / Нет»
+            labels = [item.label for item in kinds.children]
+            self.assertEqual(labels, ["Да, поменять", "Нет, всё так"])
+            i = self.interaction(g)
+            await kinds.children[1].callback(i)
+            self.assertIsInstance(i.edits[-1]["view"], cards.CardEditorView)
+
+        run(check())
+
+    def test_wizard_pages_keep_skip_button(self):
+        import cards
+        g = make_guild()
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "Листаем", "progress"))
+
+        async def check():
+            i = self.interaction(g)
+            await cards.style_step(i, card, wizard=True)
+            view = i.edits[-1]["view"]
+            arrow = next(item for item in view.children if str(item.emoji) == "▶️")
+            i = self.interaction(g)
+            await arrow.callback(i)
+            labels = [getattr(item, "label", None) for item in i.edits[-1]["view"].children]
+            self.assertIn("Оставить этот стиль", labels)
+
+        run(check())
+
+    def test_field_kinds_variable_counter_mention_text(self):
+        import cards
+        import card_templates as ct
+        g = make_guild()
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "Онлайн", "counter"))
+
+        async def check():
+            i = self.interaction(g)
+            await cards.set_kind(i, card["id"], "value", "variable", "{online}", wizard=False)
+            fresh = cards.get_card(card["id"])
+            self.assertEqual(fresh["data"]["kinds"], {"value": "variable"})
+            self.assertEqual(fresh["data"]["value"], "{online}")
+            self.assertIn("Онлайн", cards.shows_text(fresh, "value", ct.N))
+            self.assertIsInstance(i.edits[-1]["view"], cards.DataKindsView)
+            await cards.set_kind(self.interaction(g), card["id"], "value", "counter", "{counter:победы}", False)
+            self.assertIn("победы", cards.summary(cards.get_card(card["id"])))
+            await cards.set_kind(self.interaction(g), card["id"], "value", "text", "Скоро!", False)
+            fresh = cards.get_card(card["id"])
+            self.assertEqual(fresh["data"]["value"], "Скоро!")
+            cards.preview_png(fresh)
+            await cards.set_kind(self.interaction(g), card["id"], "caption", "mention", f"<@{MEMBER}>", False)
+            await cards.set_kind(self.interaction(g), card["id"], "value", "number", "+7", False)
+            fresh = cards.get_card(card["id"])
+            self.assertEqual(fresh["data"]["value"], 7)
+            self.assertEqual(fresh["data"]["kinds"], {"caption": "mention"})
+
+        run(check())
+
+    def test_kind_choices_per_field(self):
+        import cards
+        import card_templates as ct
+        counter = cards.get_card(cards.create_card(GUILD, STAFF, "К", "counter"))
+        progress = cards.get_card(cards.create_card(GUILD, STAFF, "П", "progress"))
+        self.assertIn("text", cards.kinds_for(counter, "value", ct.N))
+        self.assertNotIn("text", cards.kinds_for(progress, "value", ct.N))
+        self.assertEqual(cards.kinds_for(progress, "note", ct.T), ["text", "mention", "variable"])
+        countdown = cards.get_card(cards.create_card(GUILD, STAFF, "Д", "countdown"))
+        self.assertNotIn("when", [key for key, _, _ in cards.kind_fields(countdown)])  # даты не меняем
+        view = cards.KindPickView(counter["id"], "value")
+        self.assertEqual(view.keys, ["number", "variable", "counter", "text"])
+        cards.gallery_png([(view.label(key), view.tile(key)) for key in view.keys])
+
+    def test_editor_sections_show_only_their_buttons(self):
+        import cards
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "Разделы", "progress"))
+
+        def labels(section):
+            view = cards.CardEditorView(card["id"], section=section)
+            return {item.label for item in view.children if isinstance(item, discord.ui.Button)}
+        self.assertEqual(labels(None), {"Данные", "Внешний вид", "Где и кто", "Удалить"})
+        self.assertIn("Что показывает", labels("data"))
+        self.assertIn("Цвет", labels("look"))
+        self.assertIn("В баннер сервера", labels("where"))
+        self.assertNotIn("Снять с публикации", labels("where"))  # ещё не опубликована
+        self.assertIn("К разделам", labels("data"))
+        for section in (None, "data", "look", "where"):
+            cards.CardEditorView(card["id"], section=section).to_components()
+
+    def test_delete_asks_and_can_keep_message(self):
+        import cards
+        g = make_guild()
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "Удаляем", "counter"))
+        card["channel_id"], card["message_id"] = 4242, 77
+        cards.save_card(card)
+        message = types.SimpleNamespace(components=[], edited=[], deleted=False)
+
+        async def edit(**kwargs):
+            message.edited.append(kwargs)
+
+        async def delete():
+            message.deleted = True
+        message.edit, message.delete = edit, delete
+
+        async def fetch_message(message_id):
+            return message
+        channel = FakeChannel(g, 4242)
+        channel.fetch_message = fetch_message
+
+        async def check():
+            i = self.interaction(g)
+            await cards.CardEditorView(card["id"]).delete_card.callback(i)
+            self.assertIsNotNone(cards.get_card(card["id"]))  # сначала только вопрос
+            view = cards.DeleteCardView(card["id"], True)
+            await view.keep_message.callback(self.interaction(g))
+            self.assertIsNone(cards.get_card(card["id"]))
+            self.assertFalse(message.deleted)
+            self.assertEqual(message.edited, [{"view": None}])  # застыла — без кнопки «Изменить»
+
+        run(check())
+
+    def test_unpublish_removes_message_keeps_card(self):
+        import cards
+        g = make_guild()
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "Снимаем", "counter"))
+        card["channel_id"], card["message_id"] = 4343, 78
+        cards.save_card(card)
+        deleted = []
+
+        async def delete():
+            deleted.append(True)
+
+        async def fetch_message(message_id):
+            return types.SimpleNamespace(delete=delete)
+        FakeChannel(g, 4343).fetch_message = fetch_message
+        run(cards.UnpublishView(card["id"]).yes.callback(self.interaction(g)))
+        self.assertEqual(deleted, [True])
+        self.assertIsNone(cards.get_card(card["id"])["message_id"])
+
+    def test_card_to_server_banner(self):
+        import cards
+        import server_banner
+        g = make_guild()
+        g.features = ["BANNER"]
+        g.me.guild_permissions = discord.Permissions(manage_guild=True)
+        sent = []
+
+        async def edit(banner=None, reason=None):
+            sent.append(banner)
+        g.edit = edit
+        card = cards.get_card(cards.create_card(GUILD, ADMIN, "Баннер", "counter"))
+
+        async def check():
+            i = self.interaction(g, ADMIN)
+            await cards.banner_step(i, card)
+            self.assertEqual(i.edits[-1]["attachments"][0].filename, "banner.png")
+            ask = i.edits[-1]["view"]
+            await ask.answer(self.interaction(g, ADMIN), True)
+            i = self.interaction(g, ADMIN)
+            await cards.BannerAskView(card["id"], "auto").answer(i, True)
+            banner = server_banner.get_banner(GUILD)
+            self.assertEqual(banner["base"], f"card:{card['id']}")
+            self.assertEqual(banner["auto"], 1)
+            self.assertEqual(PILImage.open(io.BytesIO(sent[-1])).size, server_banner.SIZE)
+            member = self.interaction(g, MEMBER)
+            await cards.banner_step(member, card)
+            self.assertFalse(member.edits)  # не админ — баннер не трогает
+
+        run(check())
+
+
 if __name__ == "__main__":
     unittest.main()

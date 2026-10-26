@@ -245,9 +245,26 @@ def change_number(data, key, raw):
     return None
 
 
+# Что показывает поле (выбирается при создании картинки, «Что показывает»):
+# number — число вручную, text — текст вместо числа, variable — живое значение
+# сервера ({online}, {member_count}…), counter — свой счётчик {counter:имя},
+# mention — участник (<@id>, на картинке — его ник).
+FIELD_KINDS = ("number", "text", "variable", "counter", "mention")
+TEXT_INSTEAD_OF_NUMBER = {("counter", "value")}  # где число — только надпись, его можно заменить текстом
+
+
+def kind_of(data, key):
+    """Переопределённый вид поля этой картинки или None (как в шаблоне)."""
+    kind = (data.get("kinds") or {}).get(key)
+    return kind if kind in FIELD_KINDS else None
+
+
 def set_field(template, data, key, raw):
     """Поле по ключу: число принимает +/-, остальное — текст. -> None или ключ ошибки."""
     kind = next((k for f, _, k in spec(template).get("fields", []) if f == key), T)
+    if kind_of(data, key) in ("text", "variable", "counter", "mention"):
+        data[key] = (raw or "").strip()[:120]  # живое значение / текст / участник — храним как есть
+        return None
     if kind == N:
         return change_number(data, key, raw)
     if kind == D and raw.strip() and parse_when(raw) is None:
@@ -838,7 +855,11 @@ def render_progress(title, data):
 
 def render_counter(title, data):
     cv = Canvas(title, data, 270)
-    number, fnt = fit(number_text(to_number(data.get("value"))), "title", 230, WIDTH - 2 * PAD, 60)
+    raw = data.get("value")
+    # текст вместо числа («скоро!», «∞») — как есть; иначе число с пробелами
+    shown = raw.strip() if isinstance(raw, str) and raw.strip() and parse_change(raw, 0) is None \
+        else number_text(to_number(raw))
+    number, fnt = fit(shown, "title", 230, WIDTH - 2 * PAD, 60)
     cv.draw.text((PAD - 6, HEAD + 190), number, font=fnt, fill=cv.theme["ink"], anchor="ls")
     cv.caption(data.get("caption"), HEAD + 260)
     return cv.png()
@@ -1390,8 +1411,8 @@ def texts_of(card):
     data = card["data"]
     found = [("title", card["title"])]
     for key, _, kind in spec(card["template"]).get("fields", []):
-        if kind == T and data.get(key):
-            found.append((key, data[key]))
+        if (kind == T or isinstance(data.get(key), str)) and data.get(key):
+            found.append((key, data[key]))  # и число, ставшее живым: «{online}»
     for r, row in enumerate(data.get("rows") or []):
         if isinstance(row, list):
             found += [(f"cell:{r}:{c}", cell) for c, cell in enumerate(row) if isinstance(cell, str)]
