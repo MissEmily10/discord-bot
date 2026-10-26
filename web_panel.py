@@ -394,6 +394,8 @@ def build_app():
     app.router.add_get("/art/{name}", get_art)
     import paste_page
     paste_page.add_routes(app)  # временные страницы для длинного текста (JSON, новости)
+    import post_builder
+    post_builder.add_routes(app)  # /post — конструктор постов на сайте
     return app
 
 

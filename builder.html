@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Конструктор постов — Purr</title>
+<style>
+:root {
+  --bg: #16141a; --panel: #1f1c24; --panel2: #27232e; --line: #383241; --text: #f2eef6; --muted: #a79fb2;
+  --lime: #c6f135; --pink: #f2a7c9; --bad: #ff8585; --ok: #8fe3a7;
+  --dc-bg: #313338; --dc-embed: #2b2d31; --dc-text: #dbdee1; --dc-muted: #949ba4; --dc-link: #00a8fc;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 "gg sans", "Noto Sans", system-ui, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; }
+header .guild { color: var(--muted); }
+header .spacer { flex: 1; }
+header select { width: auto; max-width: 280px; }
+main { display: grid; grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr); height: calc(100% - 52px); }
+#editor { overflow-y: auto; padding: 14px 16px 120px; border-right: 1px solid var(--line); }
+#preview-wrap { overflow-y: auto; background: var(--dc-bg); padding: 18px 16px 120px; }
+@media (max-width: 860px) {
+  main { grid-template-columns: 1fr; height: auto; }
+  #editor { border-right: 0; padding-bottom: 20px; }
+  #preview-wrap { padding-bottom: 140px; }
+}
+details.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin: 0 0 12px; }
+details.card > summary { cursor: pointer; padding: 10px 12px; font-weight: 700; display: flex; gap: 8px; align-items: center;
+  list-style: none; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary::before { content: "▸"; color: var(--muted); }
+details.card[open] > summary::before { content: "▾"; }
+details.card > summary .tools { margin-left: auto; display: flex; gap: 4px; }
+.body { padding: 4px 12px 12px; }
+.sub { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 3px; }
+label .count { float: right; }
+label .count.over { color: var(--bad); }
+input[type=text], input[type=url], textarea, select {
+  width: 100%; background: #141217; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; font: inherit; }
+textarea { min-height: 70px; resize: vertical; }
+textarea.big { min-height: 140px; }
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--pink); outline-offset: -1px; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row > * { flex: 1; }
+.row > .narrow { flex: 0 0 auto; }
+button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px;
+  font: inherit; cursor: pointer; }
+button:hover { border-color: var(--pink); }
+button.primary { background: var(--lime); color: #17200a; border-color: var(--lime); font-weight: 700; }
+button.pink { background: var(--pink); color: #2b1020; border-color: var(--pink); font-weight: 700; }
+button.icon { padding: 4px 8px; font-size: 13px; }
+button.danger:hover { border-color: var(--bad); color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+.check { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; margin-top: 8px; }
+.hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.add { width: 100%; border-style: dashed; margin-top: 6px; }
+#bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
+  padding: 10px 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; z-index: 6; }
+#bar select, #bar input { width: auto; min-width: 160px; flex: 1; }
+#status { flex-basis: 100%; font-size: 13px; min-height: 18px; white-space: pre-line; }
+#status.ok { color: var(--ok); } #status.bad { color: var(--bad); }
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; width: min(760px, 94vw); }
+dialog textarea { min-height: 50vh; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+dialog::backdrop { background: rgba(0,0,0,.6); }
+.color { width: 44px; height: 36px; padding: 2px; border-radius: 8px; border: 1px solid var(--line); background: #141217; }
+.upload { position: relative; overflow: hidden; }
+.upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+/* ---------- предпросмотр Discord ---------- */
+.msg { display: flex; gap: 14px; color: var(--dc-text); font-size: 15px; line-height: 1.375; }
+.msg .ava { width: 40px; height: 40px; border-radius: 50%; background: #5865f2 center/cover; flex: 0 0 40px; }
+.msg .main { min-width: 0; flex: 1; }
+.msg .head { display: flex; align-items: center; gap: 6px; }
+.msg .name { color: #f2f3f5; font-weight: 600; }
+.msg .tag { background: #5865f2; color: #fff; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; }
+.msg .time { color: var(--dc-muted); font-size: 12px; }
+.content { white-space: pre-wrap; word-wrap: break-word; }
+.embed { display: grid; grid-template-columns: auto; max-width: 520px; background: var(--dc-embed); border-radius: 4px;
+  border-left: 4px solid #1e1f22; padding: 8px 16px 16px 12px; margin-top: 6px; position: relative; }
+.embed.has-thumb { padding-right: 96px; }
+.embed .thumb { position: absolute; top: 12px; right: 16px; width: 80px; height: 80px; object-fit: contain; border-radius: 4px; }
+.embed .author { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 14px; font-weight: 600; color: #f2f3f5; }
+.embed .author img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
+.embed .title { margin-top: 8px; font-weight: 700; color: #f2f3f5; font-size: 16px; }
+.embed .title a { color: var(--dc-link); text-decoration: none; }
+.embed .desc { margin-top: 8px; font-size: 14px; white-space: pre-wrap; word-wrap: break-word; }
+.embed .fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.embed .field { grid-column: 1 / -1; font-size: 14px; min-width: 0; }
+.embed .field.inline { grid-column: auto; }
+.embed .field .fn { font-weight: 600; color: #f2f3f5; margin-bottom: 2px; }
+.embed .field .fv { white-space: pre-wrap; word-wrap: break-word; }
+.embed .image { margin-top: 16px; max-width: 100%; border-radius: 4px; display: block; }
+.embed .footer { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--dc-muted); }
+.embed .footer img { width: 20px; height: 20px; border-radius: 50%; }
+.buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.dbtn { border-radius: 8px; padding: 0 16px; height: 32px; display: inline-flex; align-items: center; gap: 6px; font-size: 14px;
+  font-weight: 500; color: #fff; border: 0; }
+.dbtn.blue { background: #5865f2; } .dbtn.grey { background: #4e5058; } .dbtn.green { background: #248046; }
+.dbtn.red { background: #da373c; } .dbtn.link { background: #4e5058; }
+.content strong, .desc strong, .fv strong { color: #f2f3f5; }
+.content code, .desc code, .fv code { background: #1e1f22; padding: 0 3px; border-radius: 3px; font-size: 85%; }
+pre.block { background: #1e1f22; border: 1px solid #1e1f22; border-radius: 4px; padding: 8px; white-space: pre-wrap; margin: 4px 0; font-size: 13px; }
+.spoiler { background: #1e1f22; color: transparent; border-radius: 3px; }
+.spoiler:hover { color: inherit; }
+blockquote { margin: 2px 0; padding-left: 10px; border-left: 4px solid #4e5058; }
+.md-h1 { font-size: 1.5em; font-weight: 700; } .md-h2 { font-size: 1.25em; font-weight: 700; } .md-h3 { font-size: 1.1em; font-weight: 700; }
+.md-sub { font-size: 12px; color: var(--dc-muted); }
+.mention { background: rgba(88,101,242,.3); color: #c9cdfb; border-radius: 3px; padding: 0 2px; }
+.cemoji { width: 1.375em; height: 1.375em; vertical-align: bottom; object-fit: contain; }
+a.dl { color: var(--dc-link); text-decoration: none; }
+.prev-note { color: var(--dc-muted); font-size: 12px; margin: 0 0 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>✨ Конструктор постов</h1><span class="guild" id="guild"></span>
+  <span class="spacer"></span>
+  <select id="load" title="Открыть сохранённое сообщение"><option value="">Открыть сохранённое…</option></select>
+  <button id="import">Импорт JSON</button>
+  <button id="export">Экспорт JSON</button>
+  <button id="reset" class="danger">Очистить</button>
+</header>
+<main>
+  <section id="editor"></section>
+  <section id="preview-wrap">
+    <p class="prev-note">Предпросмотр. Переменные вроде {user} бот подставит при отправке.</p>
+    <div id="preview"></div>
+  </section>
+</main>
+<div id="bar">
+  <select id="mode" title="От чьего имени"></select>
+  <select id="channel" title="Канал"></select>
+  <button id="send" class="primary">Отправить</button>
+  <input id="name" type="text" maxlength="100" placeholder="Название (для сохранения)">
+  <button id="save" class="pink">Сохранить</button>
+  <div id="status"></div>
+</div>
+<dialog id="jsonDialog">
+  <form method="dialog">
+    <h3 id="jsonTitle" style="margin-top:0">JSON</h3>
+    <p class="hint" id="jsonHint"></p>
+    <textarea id="jsonText" spellcheck="false"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button value="cancel" class="narrow">Закрыть</button>
+      <span></span>
+      <button id="jsonApply" value="default" class="primary narrow">Применить</button>
+    </div>
+  </form>
+</dialog>
+<script>
+"use strict";
+const base = location.pathname.replace(/\/$/, "");
+const STYLES = { blue: "Синяя", grey: "Серая", green: "Зелёная", red: "Красная", link: "Ссылка" };
+let info = null;
+let buildId = null;
+let state = blank();
+
+function blank() {
+  return { content: "", embeds: [newEmbed()], buttons: [], webhook: { name: "", avatar: "" } };
+}
+function newEmbed() {
+  return { title: "", description: "", url: "", color: 0xC6F135, author_name: "", author_url: "", author_icon: "",
+           thumbnail: "", image: "", footer_text: "", footer_icon: "", timestamp: false, fields: [] };
+}
+
+// ---------- сохранение черновика в браузере ----------
+function remember() { try { localStorage.setItem("purr-post-draft", JSON.stringify({ state, buildId })); } catch (e) {} }
+function restore() {
+  try {
+    const raw = localStorage.getItem("purr-post-draft");
+    if (raw) { const d = JSON.parse(raw); if (d && d.state) { state = normalize(d.state); buildId = d.buildId || null; } }
+  } catch (e) {}
+}
+
+function normalize(p) {
+  const s = blank();
+  s.content = String(p.content || "");
+  s.embeds = (Array.isArray(p.embeds) ? p.embeds : []).slice(0, 10).map(e => Object.assign(newEmbed(), e || {},
+    { fields: Array.isArray((e || {}).fields) ? e.fields.map(f => ({ name: f.name || "", value: f.value || "", inline: !!f.inline })) : [] }));
+  s.buttons = (Array.isArray(p.buttons) ? p.buttons : []).slice(0, 20).map(b => ({
+    label: b.label || "", emoji: b.emoji || "", style: STYLES[b.style] ? b.style : "blue",
+    action_key: b.action_key || null, value: b.value || "" }));
+  if (p.webhook) s.webhook = Object.assign({ name: "", avatar: "" }, p.webhook);
+  return s;
+}
+
+// ---------- API ----------
+async function call(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(base + "/api/" + path, opts);
+  let data = {};
+  try { data = await r.json(); } catch (e) { data = { ok: false, error: "Бот не ответил (" + r.status + ")." }; }
+  return data;
+}
+function status(text, kind) { const el = document.getElementById("status"); el.textContent = text || ""; el.className = kind || ""; }
+
+// ---------- редактор ----------
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (v !== undefined && v !== null && v !== false) el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined) el.append(c.nodeType ? c : document.createTextNode(c));
+  return el;
+}
+function field(label, value, onInput, opts = {}) {
+  const max = opts.max;
+  const count = max ? h("span", { class: "count" }) : null;
+  const update = v => { if (count) { count.textContent = v.length + "/" + max; count.classList.toggle("over", v.length > max); } };
+  const input = opts.area
+    ? h("textarea", { class: opts.big ? "big" : "", placeholder: opts.placeholder || "" })
+    : h("input", { type: opts.type || "text", placeholder: opts.placeholder || "" });
+  input.value = value || "";
+  update(input.value);
+  input.addEventListener("input", () => { onInput(input.value); update(input.value); changed(); });
+  return h("div", {}, h("label", {}, label, count), input);
+}
+function imageField(label, value, onInput) {
+  const wrap = field(label, value, onInput, { type: "url", placeholder: "https://… или загрузи файл" });
+  const input = wrap.querySelector("input");
+  const file = h("input", { type: "file", accept: "image/*" });
+  file.addEventListener("change", async () => {
+    const f = file.files[0]; if (!f) return;
+    if (f.size > 8 * 1024 * 1024) { status("Картинка больше 8 МБ.", "bad"); return; }
+    status("Загружаю картинку…");
+    const data = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); });
+    const answer = await call("upload", { data });
+    if (!answer.ok) { status(answer.error, "bad"); return; }
+    input.value = answer.url; onInput(answer.url); changed(); status("Картинка загружена.", "ok");
+  });
+  wrap.append(h("div", { class: "row", style: "margin-top:4px" }, h("span"), h("button", { class: "upload icon narrow", type: "button" }, "📎 Загрузить", file)));
+  return wrap;
+}
+function tools(list, index, rerender) {
+  const move = (d) => { const j = index + d; if (j < 0 || j >= list.length) return; [list[index], list[j]] = [list[j], list[index]]; rerender(); };
+  return h("span", { class: "tools" },
+    h("button", { class: "icon", type: "button", title: "Выше", onclick: e => { e.preventDefault(); move(-1); } }, "↑"),
+    h("button", { class: "icon", type: "button", title: "Ниже", onclick: e => { e.preventDefault(); move(1); } }, "↓"),
+    h("button", { class: "icon", type: "button", title: "Копия", onclick: e => { e.preventDefault(); list.splice(index + 1, 0, JSON.parse(JSON.stringify(list[index]))); rerender(); } }, "⧉"),
+    h("button", { class: "icon danger", type: "button", title: "Удалить", onclick: e => { e.preventDefault(); list.splice(index, 1); rerender(); } }, "✕"));
+}
+
+function renderEditor() {
+  const root = document.getElementById("editor");
+  const openState = [...root.querySelectorAll("details")].map(d => d.open);
+  root.innerHTML = "";
+  let n = 0;
+  const card = (title, body, extra, open) => {
+    const idx = n++;
+    const d = h("details", { class: "card" }, h("summary", {}, title, extra || null), h("div", { class: "body" }, body));
+    d.open = openState[idx] !== undefined ? openState[idx] : open;
+    return d;
+  };
+  if (info && info.can_webhook) {
+    root.append(card("🪝 От чьего имени (вебхук)", [
+      field("Имя", state.webhook.name, v => state.webhook.name = v, { placeholder: info.user.name }),
+      imageField("Аватарка", state.webhook.avatar, v => state.webhook.avatar = v),
+      h("p", { class: "hint" }, "Работает, если внизу выбрано «Через вебхук». Вебхук создаётся на одно сообщение и сразу удаляется."),
+    ], null, false));
+  }
+  root.append(card("💬 Текст сообщения", [field("Текст над embed'ами", state.content, v => state.content = v, { area: true, big: true, max: 2000 })], null, true));
+  state.embeds.forEach((e, i) => {
+    const fields = e.fields.map((f, j) => h("div", { class: "sub" },
+      h("div", { class: "row" }, h("strong", { class: "narrow" }, "Поле " + (j + 1)), h("span"), tools(e.fields, j, refresh)),
+      field("Название", f.name, v => f.name = v, { max: 256 }),
+      field("Значение", f.value, v => f.value = v, { area: true, max: 1024 }),
+      h("label", { class: "check" }, (() => { const c = h("input", { type: "checkbox" }); c.checked = f.inline; c.addEventListener("change", () => { f.inline = c.checked; changed(); }); return c; })(), "В строку (рядом с соседними)")));
+    const color = h("input", { type: "color", class: "color narrow" });
+    color.value = "#" + (e.color || 0).toString(16).padStart(6, "0");
+    color.addEventListener("input", () => { e.color = parseInt(color.value.slice(1), 16); changed(); });
+    root.append(card("🧩 Embed " + (i + 1) + (e.title ? " · " + e.title.slice(0, 30) : ""), [
+      h("div", { class: "row" }, h("label", { class: "narrow", style: "margin:0" }, "Цвет полоски"), color, h("span")),
+      h("div", { class: "sub" }, h("strong", {}, "Автор"),
+        field("Имя (строка сверху)", e.author_name, v => e.author_name = v, { max: 256 }),
+        h("div", { class: "row" }, imageField("Иконка", e.author_icon, v => e.author_icon = v), field("Ссылка", e.author_url, v => e.author_url = v, { type: "url" }))),
+      field("Заголовок", e.title, v => e.title = v, { max: 256 }),
+      field("Ссылка заголовка", e.url, v => e.url = v, { type: "url" }),
+      field("Описание", e.description, v => e.description = v, { area: true, big: true, max: 4096 }),
+      h("div", { class: "sub" }, h("strong", {}, "Поля"), fields,
+        h("button", { class: "add", type: "button", onclick: () => { if (e.fields.length >= 25) return status("В embed'е максимум 25 полей.", "bad"); e.fields.push({ name: "", value: "", inline: false }); refresh(); } }, "+ Поле")),
+      h("div", { class: "sub" }, h("strong", {}, "Картинки"),
+        imageField("Маленькая справа (thumbnail)", e.thumbnail, v => e.thumbnail = v),
+        imageField("Большая снизу", e.image, v => e.image = v)),
+      h("div", { class: "sub" }, h("strong", {}, "Подпись"),
+        field("Текст снизу", e.footer_text, v => e.footer_text = v, { max: 2048 }),
+        imageField("Иконка подписи", e.footer_icon, v => e.footer_icon = v),
+        h("label", { class: "check" }, (() => { const c = h("input", { type: "checkbox" }); c.checked = !!e.timestamp; c.addEventListener("change", () => { e.timestamp = c.checked; changed(); }); return c; })(), "Время отправки")),
+    ], tools(state.embeds, i, refresh), i === 0));
+  });
+  root.append(h("button", { class: "add", type: "button", onclick: () => { if (state.embeds.length >= 10) return status("В сообщении максимум 10 embed'ов.", "bad"); state.embeds.push(newEmbed()); refresh(); } }, "+ Embed"));
+  const buttons = state.buttons.map((b, i) => {
+    const style = h("select", {}, Object.entries(STYLES).map(([k, v]) => h("option", { value: k }, v)));
+    style.value = b.style;
+    style.addEventListener("change", () => { b.style = style.value; refresh(); });
+    return h("div", { class: "sub" },
+      h("div", { class: "row" }, h("strong", { class: "narrow" }, "Кнопка " + (i + 1)), h("span"), tools(state.buttons, i, refresh)),
+      h("div", { class: "row" }, field("Подпись", b.label, v => b.label = v, { max: 80 }), field("Эмодзи", b.emoji, v => b.emoji = v, { placeholder: "😀 или <:имя:id>" })),
+      h("div", {}, h("label", {}, "Цвет"), style),
+      b.style === "link" ? field("Ссылка", b.value, v => b.value = v, { type: "url" })
+        : h("p", { class: "hint" }, b.action_key ? "Действие: " + b.action_key + " (менять — в /embed)." : "Что делает кнопка — назначишь в /embed после сохранения (там пошагово)."));
+  });
+  root.append(card("🔘 Кнопки", [buttons, h("button", { class: "add", type: "button", onclick: () => { if (state.buttons.length >= 20) return status("Максимум 20 кнопок.", "bad"); state.buttons.push({ label: "", emoji: "", style: "link", action_key: null, value: "" }); refresh(); } }, "+ Кнопка")], null, false));
+}
+
+// ---------- предпросмотр: Markdown Discord ----------
+function safeUrl(u) { return /^https?:\/\//i.test(String(u || "")) ? u : ""; }
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function inline(s) {
+  return s
+    .replace(/&lt;(a?):(\w+):(\d+)&gt;/g, (m, a, n, id) => `<img class="cemoji" alt=":${n}:" src="https://cdn.discordapp.com/emojis/${id}.${a ? "gif" : "png"}?size=48">`)
+    .replace(/&lt;@!?(\d+)&gt;/g, '<span class="mention">@участник</span>')
+    .replace(/&lt;@&amp;(\d+)&gt;/g, '<span class="mention">@роль</span>')
+    .replace(/&lt;#(\d+)&gt;/g, '<span class="mention">#канал</span>')
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/__(.+?)__/g, "<u>$1</u>")
+    .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)/g, "$1<em>$2</em>")
+    .replace(/(^|[^_\w])_(?!\s)(.+?)_(?!\w)/g, "$1<em>$2</em>")
+    .replace(/~~(.+?)~~/g, "<s>$1</s>")
+    .replace(/\|\|(.+?)\|\|/g, '<span class="spoiler">$1</span>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a class="dl" href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a class="dl" href="$2" target="_blank" rel="noopener">$2</a>');
+}
+function md(text, headings = true) {
+  const parts = String(text || "").split(/```(?:\w+\n)?([\s\S]*?)```/);
+  return parts.map((part, i) => {
+    if (i % 2) return `<pre class="block">${esc(part)}</pre>`;
+    return esc(part).split("\n").map(line => {
+      let m;
+      if (headings && (m = line.match(/^(#{1,3}) (.+)/))) return `<div class="md-h${m[1].length}">${inline(m[2])}</div>`;
+      if ((m = line.match(/^-# (.+)/))) return `<div class="md-sub">${inline(m[1])}</div>`;
+      if ((m = line.match(/^&gt; ?(.*)/))) return `<blockquote>${inline(m[1])}</blockquote>`;
+      if ((m = line.match(/^(\s*)[-*] (.+)/))) return `<div style="padding-left:${m[1].length ? 36 : 18}px">${m[1].length ? "◦" : "•"} ${inline(m[2])}</div>`;
+      return inline(line) + "\n";
+    }).join("").replace(/\n$/, "");
+  }).join("");
+}
+
+function renderPreview() {
+  const root = document.getElementById("preview");
+  const hook = document.getElementById("mode").value === "webhook";
+  const name = hook ? (state.webhook.name || (info ? info.user.name : "Вебхук")) : (info ? info.bot.name : "Purr");
+  const avatar = hook ? (state.webhook.avatar || (info ? info.user.avatar : "")) : (info ? info.bot.avatar : "");
+  const now = new Date();
+  const time = now.getHours() + ":" + String(now.getMinutes()).padStart(2, "0");
+  let html = "";
+  if (state.content) html += `<div class="content">${md(state.content)}</div>`;
+  for (const e of state.embeds) {
+    const has = e.title || e.description || e.author_name || e.footer_text || e.image || e.thumbnail || e.fields.length;
+    if (!has) continue;
+    let inner = "";
+    if (e.author_name) inner += `<div class="author">${e.author_icon ? `<img src="${esc(e.author_icon)}">` : ""}${esc(e.author_name)}</div>`;
+    if (e.title) inner += `<div class="title">${safeUrl(e.url) ? `<a href="${esc(safeUrl(e.url))}" target="_blank" rel="noopener">${inline(esc(e.title))}</a>` : inline(esc(e.title))}</div>`;
+    if (e.description) inner += `<div class="desc">${md(e.description)}</div>`;
+    if (e.fields.length) inner += `<div class="fields">${e.fields.map(f => `<div class="field${f.inline ? " inline" : ""}"><div class="fn">${inline(esc(f.name || "​"))}</div><div class="fv">${md(f.value || "​", false)}</div></div>`).join("")}</div>`;
+    if (e.image) inner += `<img class="image" src="${esc(e.image)}">`;
+    if (e.footer_text || e.timestamp) inner += `<div class="footer">${e.footer_icon ? `<img src="${esc(e.footer_icon)}">` : ""}${esc(e.footer_text || "")}${e.footer_text && e.timestamp ? " • " : ""}${e.timestamp ? "Сегодня, в " + time : ""}</div>`;
+    const color = "#" + (e.color || 0).toString(16).padStart(6, "0");
+    html += `<div class="embed${e.thumbnail ? " has-thumb" : ""}" style="border-left-color:${color}">${e.thumbnail ? `<img class="thumb" src="${esc(e.thumbnail)}">` : ""}${inner}</div>`;
+  }
+  if (state.buttons.length) {
+    html += `<div class="buttons">${state.buttons.map(b => `<span class="dbtn ${esc(b.style)}">${b.emoji ? inline(esc(b.emoji)) : ""}${esc(b.label || "Кнопка")}${b.style === "link" ? " ↗" : ""}</span>`).join("")}</div>`;
+  }
+  root.innerHTML = `<div class="msg"><div class="ava" style="background-image:url('${esc(avatar)}')"></div><div class="main">
+    <div class="head"><span class="name">${esc(name)}</span><span class="tag">БОТ</span><span class="time">Сегодня, в ${time}</span></div>
+    ${html || '<div class="content" style="color:var(--dc-muted)">Пустое сообщение — начни с текста или embed\'а слева.</div>'}</div></div>`;
+}
+
+let timer = null;
+function changed() { clearTimeout(timer); timer = setTimeout(() => { renderPreview(); remember(); }, 120); }
+function refresh() { renderEditor(); renderPreview(); remember(); }
+
+function payload() {
+  return { content: state.content, embeds: state.embeds, buttons: state.buttons.map(b => Object.assign({}, b, { value: b.style === "link" ? b.value : b.value || null })) };
+}
+
+// ---------- JSON ----------
+function openJson(mode) {
+  const dialog = document.getElementById("jsonDialog");
+  const text = document.getElementById("jsonText");
+  document.getElementById("jsonTitle").textContent = mode === "export" ? "Экспорт JSON" : "Импорт JSON";
+  document.getElementById("jsonHint").textContent = mode === "export"
+    ? "Скопируй и сохрани. Вставить обратно можно здесь же («Импорт») или в /embed → JSON."
+    : "Вставь JSON из Discohook, webhook builder, Discord API или экспорта бота. Текущий пост заменится.";
+  text.value = mode === "export" ? JSON.stringify(payload(), null, 2) : "";
+  document.getElementById("jsonApply").style.display = mode === "export" ? "none" : "";
+  dialog.dataset.mode = mode;
+  dialog.showModal();
+}
+document.getElementById("jsonApply").addEventListener("click", async (ev) => {
+  ev.preventDefault();
+  const answer = await call("parse", { text: document.getElementById("jsonText").value });
+  if (!answer.ok) { status(answer.error, "bad"); return; }
+  const webhook = state.webhook;
+  state = normalize(answer.payload); state.webhook = webhook; buildId = null;
+  document.getElementById("jsonDialog").close();
+  refresh(); status("JSON применён.", "ok");
+});
+document.getElementById("import").onclick = () => openJson("import");
+document.getElementById("export").onclick = () => openJson("export");
+document.getElementById("reset").onclick = () => { if (confirm("Очистить пост?")) { state = blank(); buildId = null; document.getElementById("name").value = ""; refresh(); } };
+document.getElementById("mode").addEventListener("change", renderPreview);
+
+document.getElementById("load").addEventListener("change", async (ev) => {
+  const id = ev.target.value; ev.target.value = "";
+  if (!id) return;
+  const answer = await call("build/" + id);
+  if (!answer.ok) { status(answer.error, "bad"); return; }
+  const webhook = state.webhook;
+  state = normalize(answer.build); state.webhook = webhook; buildId = answer.build.id;
+  document.getElementById("name").value = answer.build.name || "";
+  refresh(); status("Открыто «" + (answer.build.name || "#" + id) + "». «Сохранить» обновит его.", "ok");
+});
+
+document.getElementById("save").onclick = async () => {
+  const name = document.getElementById("name").value.trim();
+  if (!name) { status("Впиши название — так пост будет виден в /embed → «Мои сохранённые».", "bad"); return; }
+  status("Сохраняю…");
+  const answer = await call("save", { payload: payload(), name, build_id: buildId });
+  if (!answer.ok) { status(answer.error, "bad"); return; }
+  buildId = answer.id; remember(); status(answer.message, "ok");
+};
+document.getElementById("send").onclick = async () => {
+  const channel = document.getElementById("channel").value;
+  if (!channel) { status("Выбери канал.", "bad"); return; }
+  const btn = document.getElementById("send"); btn.disabled = true; status("Отправляю…");
+  const mode = document.getElementById("mode").value;
+  const answer = await call("send", { payload: payload(), channel_id: channel, mode, build_id: buildId,
+    name: document.getElementById("name").value.trim(), webhook_name: state.webhook.name, webhook_avatar: state.webhook.avatar });
+  btn.disabled = false;
+  if (!answer.ok) { status(answer.error, "bad"); return; }
+  if (document.getElementById("name").value.trim()) buildId = answer.id;
+  remember(); status(answer.message, "ok");
+};
+
+// ---------- старт ----------
+(async () => {
+  restore();
+  const answer = await call("init");
+  if (!answer.ok) { status(answer.error, "bad"); document.getElementById("editor").textContent = answer.error; return; }
+  info = answer;
+  document.getElementById("guild").textContent = "· " + info.guild;
+  if (info.draft) { state = normalize(info.draft); buildId = null; }
+  const mode = document.getElementById("mode");
+  mode.append(h("option", { value: "bot" }, "От имени " + info.bot.name));
+  if (info.can_webhook) mode.append(h("option", { value: "webhook" }, "Через вебхук (своё имя)"));
+  const channel = document.getElementById("channel");
+  channel.append(h("option", { value: "" }, "Канал…"));
+  let group = null, last = null;
+  for (const c of info.channels) {
+    if (c.category !== last) { group = h("optgroup", { label: c.category || "Без категории" }); channel.append(group); last = c.category; }
+    group.append(h("option", { value: c.id }, (c.forum ? "🗂 " : "# ") + c.name));
+  }
+  const load = document.getElementById("load");
+  for (const b of info.builds) load.append(h("option", { value: b.id }, b.name + " · #" + b.id));
+  refresh();
+})();
+</script>
+</body>
+</html>

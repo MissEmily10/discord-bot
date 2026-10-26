@@ -3574,6 +3574,68 @@ class EcosystemAndClansTests(unittest.TestCase):
             os.environ.pop("CLAN_SOURCE_BOT_ID", None)
 
 
+class PostBuilderTests(unittest.TestCase):
+    def test_api_flow(self):
+        import post_builder as pb
+        import live
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+        g = make_guild()
+        channel = FakeChannel(g, 9800)
+        g.channels[9800] = channel
+        g.name = "Пробный"
+        member = g.members[STAFF]
+        member.display_name, g.me.display_name = "Стафф", "Purr"
+        g.get_member = lambda uid: g.members.get(uid)
+        old_bot, sent = pb._bot, []
+        pb._bot = types.SimpleNamespace(get_guild=lambda gid: g if gid == GUILD else None, user=g.me)
+        original_deliver, original_channels = live.deliver, pb.channels_for
+
+        async def fake_deliver(guild, author, build_id, target):
+            sent.append(build_id)
+            return types.SimpleNamespace(jump_url="https://discord.com/channels/1/2/3"), None
+        live.deliver = fake_deliver
+        pb.channels_for = lambda guild, who: [{"id": "9800", "name": "новости", "forum": False, "category": ""}]
+        os.environ["WEB_PANEL_PORT"], os.environ["WEB_PANEL_URL"] = "8080", "http://panel.test"
+
+        async def check():
+            app = web.Application()
+            pb.add_routes(app)
+            link = pb.open_link(GUILD, STAFF)
+            path = "/post/" + link.rsplit("/", 1)[1]
+            async with TestClient(TestServer(app)) as client:
+                self.assertEqual((await client.get(path)).status, 200)
+                init = await (await client.get(path + "/api/init")).json()
+                self.assertTrue(init["ok"])
+                self.assertEqual(init["channels"][0]["name"], "новости")
+                parsed = await (await client.post(path + "/api/parse", json={"text": JsonImportTests.DISCOHOOK})).json()
+                self.assertEqual(parsed["payload"]["embeds"][0]["author_name"], "Purr")
+                post = {"content": "Всем привет", "embeds": [{"title": "Кланы", "description": "текст", "fields": []}],
+                        "buttons": [{"label": "Сайт", "style": "link", "value": "https://example.com"}]}
+                saved = await (await client.post(path + "/api/save", json={"payload": post, "name": "Пост"})).json()
+                self.assertTrue(saved["ok"], saved)
+                loaded = await (await client.get(f"{path}/api/build/{saved['id']}")).json()
+                self.assertEqual(loaded["build"]["embeds"][0]["title"], "Кланы")
+                too_long = {"content": "x" * 2100, "embeds": []}
+                bad = await (await client.post(path + "/api/send", json={"payload": too_long, "channel_id": "9800"})).json()
+                self.assertFalse(bad["ok"])
+                done = await (await client.post(path + "/api/send", json={"payload": post, "channel_id": "9800",
+                                                                          "build_id": saved["id"]})).json()
+                self.assertTrue(done["ok"], done)
+                self.assertEqual(sent, [saved["id"]])
+                hook = await (await client.post(path + "/api/send", json={"payload": post, "channel_id": "9800",
+                                                                          "mode": "webhook"})).json()
+                self.assertFalse(hook["ok"])  # staff без «Управлять вебхуками» — нельзя от чужого имени
+                expired = await (await client.get("/post/nope/api/init")).json()
+                self.assertFalse(expired["ok"])
+        try:
+            run(check())
+        finally:
+            pb._bot, live.deliver, pb.channels_for = old_bot, original_deliver, original_channels
+            os.environ.pop("WEB_PANEL_PORT", None)
+            os.environ.pop("WEB_PANEL_URL", None)
+
+
 class ClanCategoryTests(unittest.TestCase):
     def channel(self, cls, name, channel_id):
         channel = object.__new__(cls)
@@ -3952,7 +4014,7 @@ class ViewSmokeTests(unittest.TestCase):
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
         self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
-                                        "emoji", "pictures", "whisper", "В референсы стиля",
+                                        "emoji", "pictures", "whisper", "post", "В референсы стиля",
                                     "В цитаты дня", "Шепнуть"]))
 
 

@@ -383,6 +383,8 @@ embed_module.register_embed(bot)
 register_extended(bot, require_command_access)
 logo_module.register_logo(bot)
 web_panel.register_panel(bot)
+import post_builder  # noqa: E402
+post_builder.register(bot)  # /post — конструктор постов на сайте бота
 # /library, /interactive, /forms, /eminemovna (docs/STRUCTURE.md)
 hubs.register_hubs(bot, make_button_sets=StandaloneButtonStartView)
 import emoji_cmd  # noqa: E402
