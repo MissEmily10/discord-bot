@@ -51,7 +51,7 @@ from database import (
 _log = logging.getLogger(__name__)
 
 ICON_SIZE = int(os.getenv("LOGO_ICON_SIZE") or 500)  # итоговая иконка: PNG 500×500 (для иконки роли ужимается до 256 КБ)
-SUBJECT_MARGIN = 0.06       # поля вокруг рисунка после обрезки пустого фона (доля стороны)
+SUBJECT_MARGIN = 0.02       # поля вокруг рисунка после обрезки пустого фона (доля стороны) — рисунок на всё полотно
 STYLE_TEXT_MAX = 1800       # описание стиля: длиннее модели генерации всё равно не читают
 ROLE_ICON_MAX_BYTES = 256 * 1024
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
@@ -125,16 +125,87 @@ def to_icon_png(image, size=ICON_SIZE):
     return buffer.getvalue()
 
 
+BG_TOLERANCE = 42      # насколько пиксель может отличаться от цвета фона (сглаживание, шум, шахматка)
+BG_BORDER_SHARE = 0.85  # фон есть, если 2–3 цвета занимают столько рамки (иначе это картинка «в край»)
+BG_WORK_SIZE = 512      # маску фона считаем на уменьшенной копии — заливка в Pillow небыстрая
+
+
+def has_transparency(image):
+    image = image.convert("RGBA")
+    return image.getchannel("A").getextrema()[0] < 250
+
+
+def strip_background(image):
+    """
+    Убрать сплошной фон за рисунком: белый, цветной или нарисованную «шахматку»
+    прозрачности (нейросети часто рисуют её вместо настоящей прозрачности).
+    Цвета фона — самые частые цвета рамки картинки; прозрачным становится всё
+    такого цвета, что связано с краем (внутри рисунка белое не трогаем — его
+    отделяет контур). -> RGBA или None, если фона нет (картинка «в край»).
+    """
+    from PIL import Image, ImageChops, ImageDraw, ImageFilter
+
+    image = image.convert("RGBA")
+    if has_transparency(image):
+        return image
+    small = image.convert("RGB")
+    scale = BG_WORK_SIZE / max(small.size)
+    if scale < 1:
+        small = small.resize((max(1, int(small.width * scale)), max(1, int(small.height * scale))), Image.BILINEAR)
+    w, h = small.size
+    # рамка в 2 px -> самые частые цвета
+    strip = Image.new("RGB", (2 * (w + h), 2))
+    strip.paste(small.crop((0, 0, w, 2)).resize((w, 2)), (0, 0))
+    strip.paste(small.crop((0, h - 2, w, h)).resize((w, 2)), (w, 0))
+    strip.paste(small.crop((0, 0, 2, h)).rotate(90, expand=True).resize((h, 2)), (2 * w, 0))
+    strip.paste(small.crop((w - 2, 0, w, h)).rotate(90, expand=True).resize((h, 2)), (2 * w + h, 0))
+    quantized = strip.quantize(colors=6, method=Image.MEDIANCUT)
+    palette = quantized.getpalette()
+    counts = sorted(quantized.getcolors(), reverse=True)
+    total = sum(count for count, _ in counts)
+    colors, covered = [], 0
+    for count, index in counts[:3]:
+        if count < total * 0.08:
+            break
+        colors.append(tuple(palette[index * 3:index * 3 + 3]))
+        covered += count
+    if not colors or covered < total * BG_BORDER_SHARE:
+        return None
+    # пиксели «как фон»: близко к одному из цветов рамки по каждому каналу
+    candidates = Image.new("L", (w, h), 0)
+    for color in colors:
+        diff = ImageChops.difference(small, Image.new("RGB", (w, h), color))
+        r, g, b = diff.split()
+        worst = ImageChops.lighter(ImageChops.lighter(r, g), b)
+        candidates = ImageChops.lighter(candidates, worst.point(lambda d: 255 if d <= BG_TOLERANCE else 0))
+    # фон = только то, что связано с краем
+    for x, y in [(x, y) for x in range(0, w, 2) for y in (0, h - 1)] + [(x, y) for y in range(0, h, 2) for x in (0, w - 1)]:
+        if candidates.getpixel((x, y)) == 255:
+            ImageDraw.floodfill(candidates, (x, y), 128)
+    background = candidates.point(lambda v: 255 if v == 128 else 0)
+    share = sum(background.histogram()[255:]) / (w * h)
+    if share < 0.02 or share > 0.97:  # фона почти нет — или «съели» всё: не трогаем
+        return None
+    # альфа: без фона, края на 1 px внутрь (убирает светлую кайму) и мягкие
+    alpha = ImageChops.invert(background).filter(ImageFilter.MinFilter(3)).resize(image.size, Image.LANCZOS)
+    alpha = alpha.filter(ImageFilter.GaussianBlur(0.6))
+    result = image.copy()
+    result.putalpha(alpha)
+    return result
+
+
 def fit_subject(image, size=ICON_SIZE, margin=SUBJECT_MARGIN):
     """
-    Рисунок на весь кадр: нейросети любят рисовать маленький значок посреди
-    большого фона, а на иконке роли (32 px) он превращается в точку. Находим
-    сам рисунок (по прозрачности или по отличию от цвета углов), обрезаем
-    пустые поля и растягиваем до size с небольшим запасом по краям.
+    Рисунок на всё полотно: нейросети любят рисовать маленький значок посреди
+    большого фона, а на иконке роли (32 px) он превращается в точку. Убираем
+    сплошной фон (strip_background), обрезаем пустые поля и растягиваем
+    рисунок до size (пропорции сохраняются, по краям — тонкий запас).
     """
     from PIL import Image, ImageChops
 
     image = image.convert("RGBA")
+    if not has_transparency(image):
+        image = strip_background(image) or image
     alpha = image.getchannel("A")
     if alpha.getextrema()[0] < 250:  # есть прозрачность — рисунок там, где не прозрачно
         box = alpha.point(lambda a: 255 if a > 24 else 0).getbbox()
@@ -146,13 +217,24 @@ def fit_subject(image, size=ICON_SIZE, margin=SUBJECT_MARGIN):
         box = diff.point(lambda d: 255 if d > 28 else 0).getbbox()
     if box:
         left, top, right, bottom = box
-        side = int(max(right - left, bottom - top) * (1 + 2 * margin))
+        side = max(1, int(max(right - left, bottom - top) * (1 + 2 * margin)))
         cx, cy = (left + right) / 2, (top + bottom) / 2
         square = Image.new("RGBA", (side, side), (0, 0, 0, 0) if alpha.getextrema()[0] < 250
                            else image.getpixel((0, 0)))
         square.paste(image, (int(side / 2 - cx), int(side / 2 - cy)))
         image = square
     return to_icon_png(image, size)
+
+
+def clean_icon(png_bytes):
+    """
+    Перед иконкой роли: если сзади остался сплошной фон (белый, шахматка) —
+    убрать и растянуть рисунок на всё полотно. Прозрачная картинка — как есть.
+    """
+    image = open_image(png_bytes).convert("RGBA")
+    if has_transparency(image) or strip_background(image) is None:
+        return png_bytes
+    return fit_subject(image)
 
 
 def role_icon_bytes(png_bytes):
@@ -361,6 +443,20 @@ async def remove_background(png_bytes):
     return fit_subject(image)
 
 
+async def clear_background(png_bytes):
+    """
+    Кнопка «Без фона»: сначала свой способ (цвет фона по рамке — чисто убирает
+    белый фон и шахматку, без нейросети и бесплатно), не вышло — модель RMBG.
+    """
+    image = open_image(png_bytes).convert("RGBA")
+    if has_transparency(image):
+        return fit_subject(image)
+    stripped = await asyncio.to_thread(strip_background, image)
+    if stripped is not None:
+        return await asyncio.to_thread(fit_subject, stripped)
+    return await remove_background(png_bytes)
+
+
 async def describe_style(style_row):
     """
     Очень подробное описание стиля по ВСЕМ референсам: vision-модель смотрит на
@@ -554,7 +650,7 @@ class LogoActionButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rb:
         style_row = get_logo_style(row[3]) if row[3] else None
         try:
             if self.act == "nobg":
-                png = await remove_background(data)
+                png = await clear_background(data)
                 mode = "nobg"
             else:
                 mode = row[4] if row[4] in ("generate", "stylize") else "generate"
@@ -601,7 +697,8 @@ async def apply_icon(interaction, generation_id, role):
     if problem:
         await say(interaction, problem)
         return
-    icon = role_icon_bytes(data)
+    # на иконке роли не должно быть белого фона/шахматки сзади — проверяем и убираем
+    icon = role_icon_bytes(await asyncio.to_thread(clean_icon, data))
     if icon is None:
         await say(interaction, "logo.apply.too_large")
         return

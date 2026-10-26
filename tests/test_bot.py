@@ -2861,6 +2861,35 @@ class LogoTests(unittest.TestCase):
         red = sum(1 for p in icon.convert("RGB").getdata() if p[0] > 200 and p[1] < 60)
         self.assertGreater(red / (500 * 500), 0.7)  # рисунок занимает почти весь кадр
 
+    def test_white_and_checker_backgrounds_are_removed(self):
+        import logo_module
+        from PIL import ImageDraw
+        checker = self.Image.new("RGB", (1024, 1024))
+        draw = ImageDraw.Draw(checker)
+        for y in range(0, 1024, 32):
+            for x in range(0, 1024, 32):
+                draw.rectangle((x, y, x + 31, y + 31), fill="white" if (x // 32 + y // 32) % 2 == 0 else (204, 204, 204))
+        for background in (self.Image.new("RGB", (1024, 1024), "white"), checker):
+            canvas = background.copy()
+            draw = ImageDraw.Draw(canvas)
+            # белый зверёк с тёмным контуром — его белое не должно стать прозрачным
+            draw.ellipse((380, 380, 640, 640), fill="white", outline=(30, 20, 20), width=12)
+            icon = self.Image.open(io.BytesIO(logo_module.fit_subject(canvas)))
+            alpha = icon.getchannel("A")
+            self.assertEqual(alpha.getpixel((2, 2)), 0)  # фон и шахматка прозрачные
+            self.assertEqual(alpha.getpixel((250, 250)), 255)  # белое внутри контура осталось
+            box = alpha.point(lambda a: 255 if a > 24 else 0).getbbox()
+            self.assertLessEqual(box[0], 15)  # рисунок растянут почти на всё полотно 500×500
+            self.assertGreaterEqual(box[2], 485)
+        # картинка «в край» (без сплошного фона) — не трогаем
+        noisy = self.Image.effect_noise((600, 600), 80).convert("RGB")
+        self.assertIsNone(logo_module.strip_background(noisy))
+        # иконка роли: белый фон, оставшийся в старой генерации, убирается перед установкой
+        buffer = io.BytesIO()
+        canvas.convert("RGB").save(buffer, format="PNG")
+        cleaned = self.Image.open(io.BytesIO(logo_module.clean_icon(buffer.getvalue())))
+        self.assertEqual(cleaned.getchannel("A").getpixel((2, 2)), 0)
+
     def test_generate_uses_reference_image(self):
         import logo_module
         calls = {}
