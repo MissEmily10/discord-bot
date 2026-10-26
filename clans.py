@@ -134,6 +134,29 @@ def register(scope_id, clan, guild_id=None, source_key=None, by_user=None):
     return ("updated" if exists else "created"), get_clan(scope_id, tag)
 
 
+# таблицы, где клан указан тегом (смена тега в магазине переносит всё)
+_TAG_TABLES = (("clans", "scope_id"), ("clan_members", "scope_id"), ("clan_requests", "scope_id"),
+               ("clan_seeded", "scope_id"), ("clan_treasury", "guild_id"), ("clan_ledger", "guild_id"),
+               ("clan_state", "scope_id"), ("clan_awards", "scope_id"), ("clan_quests", "scope_id"),
+               ("clan_activity", "scope_id"), ("clan_snapshots", "scope_id"), ("clan_purchases", "scope_id"))
+
+
+def rename_tag(scope_id, old, new):
+    """Сменить тег клана везде (казна, журнал, срок, квесты, биллборд, состав…)."""
+    old, new = old.upper(), new.upper()
+    connection = get_connection()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        for table, scope_column in _TAG_TABLES:
+            if table in existing:
+                connection.execute(f"UPDATE {table} SET tag = ? WHERE {scope_column} = ? AND tag = ?",
+                                   (new, scope_id, old))
+        connection.commit()
+    finally:
+        connection.close()
+
+
 # ============================================================
 # РАЗБОР
 # ============================================================

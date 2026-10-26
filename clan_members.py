@@ -96,6 +96,12 @@ def members(scope_id, tag):
                                            "tag = ? ORDER BY joined_at, user_id", (scope_id, tag.upper()))]
 
 
+def limit_for(scope_id, tag):
+    """Сколько человек может быть в клане: 50 + купленные места (магазин, до +10)."""
+    import clan_shop
+    return MAX_MEMBERS + clan_shop.extra_slots(scope_id, tag)
+
+
 def member_ids(scope_id, tag):
     return [user_id for user_id, _ in members(scope_id, tag)]
 
@@ -123,6 +129,7 @@ def clan_of(scope_id, user_id):
 def add_member(scope_id, tag, user_id, joined_at=None):
     """-> True, если добавлен (или уже в этом клане); False — он в другом клане или клан полон."""
     ensure_tables()
+    limit = limit_for(scope_id, tag)  # до транзакции: внутри неё вторая связь с базой ждала бы блокировку
     connection = get_connection()
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -133,7 +140,7 @@ def add_member(scope_id, tag, user_id, joined_at=None):
             return row[0] == tag.upper()
         count = connection.execute("SELECT COUNT(*) FROM clan_members WHERE scope_id = ? AND tag = ?",
                                    (scope_id, tag.upper())).fetchone()[0]
-        if count >= MAX_MEMBERS:
+        if count >= limit:
             connection.rollback()
             return False
         connection.execute("INSERT INTO clan_members (scope_id, user_id, tag, joined_at) VALUES (?, ?, ?, ?)",
@@ -362,10 +369,13 @@ def mention(user_id):
 
 async def join(guild, clan, user_id):
     """Принять в клан. -> None или ключ ошибки."""
+    import clan_life
+    if not clan_life.can_accept(clan["scope_id"], clan["tag"]):
+        return "clan.error.debt"
     if tag_of(clan["scope_id"], user_id) not in (None, clan["tag"]):
         return "clan.error.other_clan"
     if user_id not in member_ids(clan["scope_id"], clan["tag"]) and \
-            len(member_ids(clan["scope_id"], clan["tag"])) >= MAX_MEMBERS:
+            len(member_ids(clan["scope_id"], clan["tag"])) >= limit_for(clan["scope_id"], clan["tag"]):
         return "clan.error.full"
     if await fetch_member(guild, user_id) is None:
         return "clan.error.left_server"
@@ -511,11 +521,23 @@ async def answer_request(interaction, request_id, yes):
         if not can(clan, interaction.user.id, "accept", admin=admin):
             await reply(interaction, "clan.error.not_team")
             return
+    elif kind == "dissolve":  # роспуск, начатый главой, подтверждает зам
+        if rank_of(clan, interaction.user.id) != "deputy":
+            await reply(interaction, "clan.dissolve.only_deputy")
+            return
     elif interaction.user.id != user_id:  # приглашение и передачу главы решает тот, кого зовут
         await reply(interaction, "clan.error.not_you")
         return
     if not decide(request_id, "accepted" if yes else "declined", interaction.user.id):
         await reply(interaction, "clan.request.closed")
+        return
+    if kind == "dissolve":
+        if not yes:
+            await _close_message(interaction, t("clan.request.declined.dissolve", who=mention(interaction.user.id)))
+            return
+        import clan_life
+        await _close_message(interaction, t("clan.request.accepted.dissolve", who=mention(interaction.user.id)))
+        await clan_life.dissolve(guild, clan, "leader", request["by_user"])
         return
     if not yes:
         await _close_message(interaction, t(f"clan.request.declined.{kind}", who=mention(interaction.user.id)))
@@ -624,8 +646,10 @@ def home_embed(interaction, clan, rank):
         empty = not clans.get_clans(ecosystem.scope(interaction.guild.id))
         return panel_embed(interaction, "clan.join", t("clan.join.empty") if empty else None, hints=False)
     count = len(member_ids(clan["scope_id"], clan["tag"]))
+    import clan_life
     return panel_embed(interaction, "clan.home", hints=False, tag=clan["tag"], name=clan["name"] or "—",
-                       rank=t(f"clan.rank.{rank}"), count=count, max=MAX_MEMBERS,
+                       life=clan_life.status_line(clan["scope_id"], clan["tag"]),
+                       rank=t(f"clan.rank.{rank}"), count=count, max=limit_for(clan["scope_id"], clan["tag"]),
                        roster=roster_text(interaction.guild, clan))
 
 
@@ -637,7 +661,7 @@ async def open_home(interaction, edit=False):
         seed(clan_guild(interaction.client, clan, interaction.guild), clan)
     admin = is_admin(interaction.guild, interaction.user)
     rank = rank_of(clan, interaction.user.id)
-    view = MyClanView(clan, rank, admin) if clan else JoinView(clans.get_clans(scope_id))
+    view = MyClanView(clan, rank, admin) if clan else JoinView(clans.get_clans(scope_id), admin)
     embed = home_embed(interaction, clan, rank)
     if edit:
         await interaction.response.edit_message(embed=embed, view=view)
@@ -648,7 +672,7 @@ async def open_home(interaction, edit=False):
 def clan_card(interaction, clan):
     count = len(member_ids(clan["scope_id"], clan["tag"]))
     return panel_embed(interaction, "clan.card", hints=False, tag=clan["tag"], name=clan["name"] or "—",
-                       leader=mention(clan["leader_id"]), count=count, max=MAX_MEMBERS,
+                       leader=mention(clan["leader_id"]), count=count, max=limit_for(clan["scope_id"], clan["tag"]),
                        deputies=", ".join(mention(i) for i in clan["deputies"]) or "—",
                        reps=", ".join(mention(i) for i in clan["reps"]) or "—")
 
@@ -656,8 +680,18 @@ def clan_card(interaction, clan):
 class JoinView(PanelView):
     """Не в клане: выбрать клан → его карточка → «Подать заявку»."""
 
-    def __init__(self, clan_list):
+    def __init__(self, clan_list, admin=False):
         super().__init__(timeout=600)
+        if admin:  # админ без клана — сразу к управлению кланами
+            button = discord.ui.Button(label=t("clan.home.admin_panel")[:80], emoji="⚙️",
+                                       style=discord.ButtonStyle.secondary)
+
+            async def manage(i):
+                import clan_hub
+                await i.response.edit_message(embed=clan_hub.admin_embed(i),
+                                              view=clan_hub.AdminView(i, back_target=(core.screen(i), self)))
+            button.callback = manage
+            self.add_item(button)
         if not clan_list:
             return
         select = core.PagedSelect(placeholder=t("clan.join.pick")[:150], options=[
@@ -707,7 +741,7 @@ class ApplyModal(Modal, title="ЗАЯВКА В КЛАН"):
         if clan is None:
             await reply(interaction, "clan.error.no_clan")
             return
-        if len(member_ids(clan["scope_id"], clan["tag"])) >= MAX_MEMBERS:
+        if len(member_ids(clan["scope_id"], clan["tag"])) >= limit_for(clan["scope_id"], clan["tag"]):
             await reply(interaction, "clan.error.full")
             return
         problem = await send_application(interaction, clan, self.about.value.strip())
@@ -718,17 +752,22 @@ class MyClanView(PanelView):
     """Моя панель в клане: кнопки — только те, что можно по роли в клане."""
 
     texts = "clan.home"
-    button_order = ("invite", "kick", "team", "transfer", "leave")
+    button_order = ("card", "quests", "shop", "invite", "kick", "team", "transfer", "dissolve", "leave", "admin_panel")
 
     def __init__(self, clan, rank, admin=False):
         super().__init__(timeout=900)
         self.tag, self.scope_id = clan["tag"], clan["scope_id"]
         allowed = {
+            "card": True,
+            "quests": True,
+            "shop": rank in ("leader", "deputy") or admin,
             "invite": rank in ("leader", "deputy", "rep") or admin,
             "kick": rank in ("leader", "deputy") or admin,
             "team": rank == "leader" or admin,
             "transfer": rank == "leader" or admin,
+            "dissolve": rank == "leader",
             "leave": rank in ("deputy", "rep", "member"),
+            "admin_panel": admin,
         }
         for name, ok in allowed.items():
             if not ok:
@@ -740,6 +779,48 @@ class MyClanView(PanelView):
 
     def admin(self, interaction):
         return is_admin(interaction.guild, interaction.user)
+
+    @discord.ui.button(label="Карточка клана", emoji="🛡️", style=discord.ButtonStyle.primary)
+    async def card(self, interaction, button):
+        import clan_hub
+        await clan_hub.show_card(interaction, self.clan())
+
+    @discord.ui.button(label="Квесты", emoji="🎯", style=discord.ButtonStyle.primary)
+    async def quests(self, interaction, button):
+        import clan_life
+        import clan_quests
+        clan = self.clan()
+        term = clan_life.state_of(self.scope_id, self.tag)["term_no"]
+        can_submit = rank_of(clan, interaction.user.id) in ("leader", "deputy", "rep") or self.admin(interaction)
+        await interaction.response.edit_message(
+            embed=clan_quests.quests_embed(interaction, self.scope_id, self.tag, term),
+            view=clan_quests.QuestsView(self.scope_id, self.tag, term, can_submit,
+                                        back_target=(core.screen(interaction), self)))
+
+    @discord.ui.button(label="Магазин", emoji="🛒", style=discord.ButtonStyle.secondary)
+    async def shop(self, interaction, button):
+        import clan_shop
+        clan = self.clan()
+        await interaction.response.edit_message(embed=clan_shop.shop_embed(interaction, clan),
+                                                view=clan_shop.ShopView(clan, back_target=(core.screen(interaction), self)))
+
+    @discord.ui.button(label="Распустить клан", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def dissolve(self, interaction, button):
+        clan = self.clan()
+        if not clan["deputies"]:
+            await reply(interaction, "clan.dissolve.no_deputy")
+            return
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "clan.dissolve", hints=False, tag=self.tag),
+            view=YesNoView(self.scope_id, self.tag, "dissolve", interaction.user.id,
+                           back_target=(core.screen(interaction), self)))
+
+    @discord.ui.button(label="Управление кланами", emoji="⚙️", style=discord.ButtonStyle.secondary)
+    async def admin_panel(self, interaction, button):
+        import clan_hub
+        await interaction.response.edit_message(embed=clan_hub.admin_embed(interaction),
+                                                view=clan_hub.AdminView(interaction,
+                                                                        back_target=(core.screen(interaction), self)))
 
     @discord.ui.button(label="Пригласить", emoji="➕", style=discord.ButtonStyle.success)
     async def invite(self, interaction, button):
@@ -819,7 +900,7 @@ class YesNoView(PanelView):
         super().__init__(timeout=600)
         self.scope_id, self.tag, self.action, self.target, self.role = scope_id, tag, action, target, role
         yes = discord.ui.Button(label=t(f"clan.{action}.yes")[:80], emoji="✅",
-                                style=discord.ButtonStyle.danger if action in ("leave", "kick", "dismiss")
+                                style=discord.ButtonStyle.danger if action in ("leave", "kick", "dismiss", "dissolve")
                                 else discord.ButtonStyle.success)
         no = discord.ui.Button(label=t("clan.no")[:80], emoji="↩️", style=discord.ButtonStyle.secondary)
         yes.callback, no.callback = self.do, self.cancel
@@ -846,6 +927,36 @@ class YesNoView(PanelView):
             core.audit(interaction, "clan.left", "clan", clan["tag"], None)
             await tell_clan(guild, clan, t("clan.notice.left", tag=clan["tag"], who=mention(me)))
             await interaction.response.edit_message(embed=panel_embed(interaction, "clan.left", hints=False,
+                                                                      tag=clan["tag"]), view=None)
+            return
+        if self.action == "dissolve":
+            if clan["leader_id"] != me:
+                await reply(interaction, "clan.error.no_rights")
+                return
+            request, created = open_request(clan["scope_id"], clan["tag"], me, "dissolve", me)
+            if not created:
+                await reply(interaction, "clan.offer.already")
+                return
+            text = t("clan.dissolve.request", tag=clan["tag"], by=mention(me),
+                     deputies=" ".join(mention(i) for i in clan["deputies"]))
+            channel = clan_channel(guild, clan)
+            message = None
+            try:
+                if channel is not None:
+                    message = await channel.send(text[:2000], view=request_view(request["id"]),
+                                                 allowed_mentions=discord.AllowedMentions(users=True, roles=False))
+            except discord.HTTPException:
+                message = None
+            for deputy in clan["deputies"]:  # и в ЛС каждому заму
+                sent = await dm(await fetch_member(guild, deputy), text, request_view(request["id"]))
+                message = message or sent
+            if message is None:
+                decide(request["id"], "expired", me)
+                await reply(interaction, "clan.offer.nowhere")
+                return
+            place_request(request["id"], message.channel.id, message.id)
+            core.audit(interaction, "clan.dissolve_requested", "clan", clan["tag"], None)
+            await interaction.response.edit_message(embed=panel_embed(interaction, "clan.dissolve_sent", hints=False,
                                                                       tag=clan["tag"]), view=None)
             return
         if self.action == "kick":
@@ -917,7 +1028,7 @@ class InviteView(PanelView):
             if tag_of(self.scope_id, user.id) is not None:
                 await reply(i, "clan.invite.in_clan", who=user.mention)
                 return
-            if len(member_ids(self.scope_id, self.tag)) >= MAX_MEMBERS:
+            if len(member_ids(self.scope_id, self.tag)) >= limit_for(self.scope_id, self.tag):
                 await reply(i, "clan.error.full")
                 return
             problem = await send_offer(i, clan, user, "invite")

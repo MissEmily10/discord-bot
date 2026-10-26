@@ -82,7 +82,8 @@ async def setup_hook():
     bot.add_dynamic_items(*actions.DYNAMIC_ITEMS, *extended_modules.DYNAMIC_ITEMS, *logo_module.DYNAMIC_ITEMS,
                           *form_packs.DYNAMIC_ITEMS, *cards.DYNAMIC_ITEMS, *quotes.DYNAMIC_ITEMS,
                           *whispers.DYNAMIC_ITEMS, *clan_info.DYNAMIC_ITEMS,
-                          *clan_members.DYNAMIC_ITEMS)
+                          *clan_members.DYNAMIC_ITEMS, *clan_billboard.DYNAMIC_ITEMS, *clan_quests.DYNAMIC_ITEMS,
+                          *clan_shop.DYNAMIC_ITEMS, *clan_hub.DYNAMIC_ITEMS)
     await web_panel.start(bot)
     automation.setup(bot)  # расписание, триггеры, живое обновление
     await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)
@@ -94,6 +95,9 @@ async def setup_hook():
     # дудл-эмодзи (меню паков форм и кнопки панелей) — в фоне: первая заливка долгая
     asyncio.create_task(form_packs.load_doodles(bot))
     ui_emoji.start(bot)
+    clan_life.start(bot)  # сроки кланов: продление, долг, роспуск (включает админ)
+    clan_billboard.start(bot)  # биллборд: войс, сообщения, недели, итоги месяца
+    clan_hub.start(bot)  # «Всё о кланах», напоминания о проверках
 
 bot.setup_hook = setup_hook
 
@@ -405,6 +409,11 @@ import clans  # noqa: E402
 clans.register_listeners(bot)  # реестр кланов: клан создаёт бот сервера, дальше ведёт Purr
 import clan_members  # noqa: E402
 clan_members.register(bot)  # /clan: вступление, приглашения, исключение, команда, передача главы
+import clan_life  # noqa: E402
+import clan_billboard  # noqa: E402
+import clan_quests  # noqa: E402
+import clan_shop  # noqa: E402
+import clan_hub  # noqa: E402
 import clan_info  # noqa: E402
 clan_info.register(bot)  # «@Purr как работают кланы?» — рассказ о системе кланов
 

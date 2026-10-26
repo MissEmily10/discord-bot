@@ -4481,11 +4481,15 @@ class ClanMembershipTests(unittest.TestCase):
 
         def labels(rank, admin=False):
             return {item.label for item in cm.MyClanView(clan, rank, admin).children}
-        self.assertEqual(labels("member"), {"Выйти из клана"})
-        self.assertEqual(labels("rep"), {"Пригласить", "Выйти из клана"})
+        common = {"Карточка клана", "Квесты"}
+        self.assertEqual(labels("member"), common | {"Выйти из клана"})
+        self.assertEqual(labels("rep"), common | {"Пригласить", "Выйти из клана"})
         self.assertIn("Исключить", labels("deputy"))
+        self.assertIn("Магазин", labels("deputy"))
         self.assertNotIn("Команда", labels("deputy"))
-        self.assertEqual(labels("leader"), {"Пригласить", "Исключить", "Команда", "Передать главу"})
+        self.assertEqual(labels("leader"), common | {"Магазин", "Пригласить", "Исключить", "Команда", "Передать главу",
+                                                     "Распустить клан"})
+        self.assertIn("Управление кланами", labels("member", admin=True))
         self.assertIn("Пригласить", cm.roster_text(self.g, clan) + "Пригласить")
         self.assertIn("место представителя свободно", cm.roster_text(self.g, clan))
 
@@ -4648,6 +4652,218 @@ class SiteIconsTests(unittest.TestCase):
             self.assertEqual(site_icons.icon_map(), {})  # обычные эмодзи — и на сайте обычные
         finally:
             core.set_setting("ui_emoji_style", "doodle")
+
+
+class ClanLifeTests(unittest.TestCase):
+    """Кланы: срок, продление, долг, роспуск, биллборд, квесты, магазин, «Всё о кланах»."""
+
+    def setUp(self):
+        import clans
+        import clan_life
+        self.n = getattr(ClanLifeTests, "n", 0) + 1
+        ClanLifeTests.n = self.n
+        self.tag = f"L{self.n}"
+        self.g = make_guild()
+        self.g.name = "Кланы"
+        self.dms = []
+        for uid in (901, 902, 903):
+            member = FakeMember(uid)
+            member.display_name = member.name
+
+            async def send(content=None, uid=uid, **kwargs):
+                self.dms.append((uid, content))
+                return types.SimpleNamespace(id=1, channel=types.SimpleNamespace(id=uid))
+            member.send = send
+            self.g.members[uid] = member
+        clans.register(GUILD, {"tag": self.tag, "name": f"Тест {self.n}", "leader_id": 901, "deputies": [902],
+                               "reps": [903]}, guild_id=GUILD)
+        self.clan = clans.get_clan(GUILD, self.tag)
+        self.now = 1_800_000_000
+        self.state = clan_life.state_of(GUILD, self.tag, now=self.now)
+
+    def money(self, amount, key=None):
+        import clan_treasury
+        clan_treasury.record(GUILD, self.tag, "", amount, 0, "тест", source_key=key)
+
+    def test_renew_debt_autopay_from_original_date(self):
+        import clan_life
+        import clan_treasury
+        due = self.state["due_at"]
+        self.money(6000)
+        done = run(clan_life.process(self.g, self.clan, now=due - 2 * 86400))
+        self.assertIn("pre3:1", done)
+        self.assertEqual(run(clan_life.process(self.g, self.clan, now=due - 2 * 86400)), [])  # второй раз — тишина
+        self.assertIn("renewed", run(clan_life.process(self.g, self.clan, now=due + 1)))
+        state = clan_life.state_of(GUILD, self.tag)
+        self.assertEqual((state["term_no"], state["due_at"], state["reliable"]), (2, due + 30 * 86400, 1))
+        self.assertEqual(clan_treasury.balance(GUILD, self.tag)[0], 1000)
+        # не хватило — долг
+        due2 = state["due_at"]
+        self.assertIn("debt", run(clan_life.process(self.g, self.clan, now=due2 + 1)))
+        self.assertTrue(clan_life.in_debt(GUILD, self.tag))
+        self.assertFalse(clan_life.shop_open(GUILD, self.tag))
+        self.money(4500)
+        self.assertIn("debt_paid", run(clan_life.process(self.g, self.clan, now=due2 + 3 * 86400)))
+        state = clan_life.state_of(GUILD, self.tag)
+        self.assertEqual(state["due_at"], due2 + 30 * 86400)  # от прежней даты, не от погашения
+        self.assertEqual(clan_treasury.balance(GUILD, self.tag)[0], 500)
+        self.assertEqual(state["reliable"], 0)
+
+    def test_debt_ends_in_dissolution(self):
+        import clan_life
+        import clan_treasury
+        import clans
+        deleted = []
+
+        class Thing:
+            def __init__(self, name):
+                self.name = name
+
+            async def delete(self, reason=None):
+                deleted.append(self.name)
+        category = Thing("category")
+        category.channels = [Thing("text"), Thing("voice")]
+        self.g.channels[777001] = category
+        role = Thing("role")
+        role.id, role.members = 777002, []
+        self.g.roles_by_id[777002] = role
+        connection = database.get_connection()
+        connection.execute("UPDATE clans SET category_id = 777001, role_id = 777002 WHERE scope_id = ? AND tag = ?",
+                           (GUILD, self.tag))
+        connection.commit()
+        connection.close()
+        clan = clans.get_clan(GUILD, self.tag)
+        self.money(1200)
+        due = self.state["due_at"]
+        run(clan_life.process(self.g, clan, now=due + 1))
+        self.assertIn("dissolved", run(clan_life.process(self.g, clan, now=due + 8 * 86400)))
+        self.assertEqual(sorted(deleted), ["category", "role", "text", "voice"])
+        self.assertEqual(clans.get_clan(GUILD, self.tag)["status"], "dissolved")
+        self.assertEqual(clan_treasury.balance(GUILD, self.tag)[0], 0)  # казна аннулирована
+
+    def test_spend_never_negative(self):
+        import clan_treasury
+        self.money(5000)
+        first = clan_treasury.spend(GUILD, self.tag, 3000, "a", source_key=f"s1{self.tag}")
+        second = clan_treasury.spend(GUILD, self.tag, 3000, "b", source_key=f"s2{self.tag}")
+        self.assertEqual(first, (True, 2000))
+        self.assertEqual(second, (False, 2000))
+        self.assertEqual(clan_treasury.spend(GUILD, self.tag, 100, "a", source_key=f"s1{self.tag}"), (None, None))
+
+    def test_billboard_points_snapshots_fire_and_month_awards(self):
+        import clan_billboard as cb
+        import clan_life
+        import clan_treasury
+        moment = 1_800_000_000
+        week = cb.week_key(moment)
+        cb.add(GUILD, self.tag, voice_sec=7200, messages=1800, moment=moment)
+        start, end = cb.week_range(week)
+        self.assertTrue(start <= moment < end)
+        self.assertEqual(cb._msk(end).weekday(), 6)
+        self.assertEqual(cb._msk(end).hour, 20)
+        row = next(r for r in cb.standings(GUILD, week) if r[0] == self.tag)
+        self.assertEqual(row[1], 20.0)  # 2 ч войса (10) + 1800 сообщений (10)
+        for n in range(3):  # три недели подряд в топ-3
+            key = cb.week_key(moment - n * 7 * 86400)
+            cb.snapshot(GUILD, "week", key, [(self.tag, 10.0)])
+        self.assertGreaterEqual(cb.fire_streak(GUILD, self.tag), 3)
+        mult, weeks = clan_life.fire_multiplier(GUILD, self.tag)
+        self.assertEqual(mult, clan_life.FIRE.get(weeks, 1.5))
+        # месяц: лидер — награды
+        month = cb.month_key(moment)
+        clan_treasury.record(GUILD, self.tag, "", 0, 50, "тест", direction="dev")
+        run(cb.close_month(types.SimpleNamespace(get_channel=lambda i: None, get_guild=lambda i: None), GUILD, month))
+        connection = database.get_connection()
+        place = connection.execute("SELECT place FROM clan_awards WHERE scope_id = ? AND month = ? AND tag = ? AND "
+                                   "kind = 'place'", (GUILD, month[1:], self.tag)).fetchone()
+        connection.close()
+        self.assertIsNotNone(place)
+
+    def test_voice_needs_three_and_someone_unmuted(self):
+        import clan_billboard as cb
+
+        def member(muted):
+            return types.SimpleNamespace(bot=False, voice=types.SimpleNamespace(self_mute=muted, mute=False,
+                                                                               self_deaf=False, deaf=False))
+        self.assertFalse(cb.voice_ok(types.SimpleNamespace(members=[member(False), member(False)])))
+        self.assertFalse(cb.voice_ok(types.SimpleNamespace(members=[member(True)] * 3)))  # все замьючены — АФК
+        self.assertTrue(cb.voice_ok(types.SimpleNamespace(members=[member(True), member(True), member(False)])))
+
+    def test_quests_assign_accept_and_stipend(self):
+        import clan_life
+        import clan_quests
+        import clan_treasury
+        rows = clan_quests.assign(GUILD, self.tag, 1)
+        self.assertEqual(set(rows), {"easy", "medium", "hard"})
+        self.assertEqual(clan_quests.assign(GUILD, self.tag, 1), rows)  # тот же набор при повторе
+        old = rows["easy"]["quest_no"]
+        self.assertIsNotNone(clan_quests.swap(GUILD, self.tag, 1, "easy"))
+        self.assertIsNone(clan_quests.swap(GUILD, self.tag, 1, "easy"))  # раз за срок
+        self.assertNotEqual(clan_quests.get(GUILD, self.tag, 1, "easy")["quest_no"], old)
+        interaction = FakeInteraction(self.g, self.g.members[ADMIN])
+        interaction.client = types.SimpleNamespace(get_guild=lambda gid: self.g)
+        for level in ("easy", "hard"):
+            row = clan_quests.get(GUILD, self.tag, 1, level)
+            clan_quests._update(row, status="submitted")
+            run(clan_quests.decide(interaction, clan_quests.get(GUILD, self.tag, 1, level), True))
+        self.assertEqual(clan_quests.done_count(GUILD, self.tag, 1), 2)
+        self.assertEqual(clan_treasury.balance(GUILD, self.tag)[1], 11)  # респект 1 + 10
+        due = self.state["due_at"]
+        run(clan_life.process(self.g, self.clan, now=due - 3600))
+        self.assertEqual(clan_treasury.balance(GUILD, self.tag)[0], 2500)  # стипендия за 2 квеста
+        run(clan_life.process(self.g, self.clan, now=due - 1800))
+        self.assertEqual(clan_treasury.balance(GUILD, self.tag)[0], 2500)  # одна выплата на срок
+
+    def test_shop_auto_review_and_refund(self):
+        import clan_shop
+        import clan_treasury
+        import clans
+        edits = []
+
+        class Role:
+            id, name, members, hoist = 778001, f"[{self.tag}] Тест", [], False
+
+            async def edit(self, **kwargs):
+                edits.append(kwargs)
+        self.g.roles_by_id[778001] = Role()
+        connection = database.get_connection()
+        connection.execute("UPDATE clans SET role_id = 778001 WHERE scope_id = ? AND tag = ?", (GUILD, self.tag))
+        connection.commit()
+        connection.close()
+        clan = clans.get_clan(GUILD, self.tag)
+        interaction = FakeInteraction(self.g, self.g.members[901])
+        interaction.client = types.SimpleNamespace(get_guild=lambda gid: self.g, get_channel=lambda cid: None)
+        self.assertEqual(run(clan_shop.buy(interaction, clan, "color", {"color": "#C6F135"})), "clan_shop.error.money")
+        self.money(10000)
+        self.assertEqual(run(clan_shop.buy(interaction, clan, "color", {"color": "#C6F135"})), "clan_shop.delivered")
+        self.assertIn("colour", edits[-1])
+        self.assertEqual(clan_treasury.balance(GUILD, self.tag)[0], 8000)
+        self.assertEqual(run(clan_shop.buy(interaction, clan, "name", {"name": "Новые котики"})), "clan_shop.sent_review")
+        purchase = clan_shop.purchases(GUILD, self.tag)[0]
+        self.assertEqual(purchase["status"], "review")
+        self.assertIsNone(run(clan_shop.deliver(interaction.client, clan_shop.get_purchase(purchase["id"]), self.g)))
+        self.assertEqual(clans.get_clan(GUILD, self.tag)["name"], "Новые котики")
+        run(clan_shop.refund(clan_shop.get_purchase(purchase["id"]), "тест"))
+        self.assertEqual(clan_treasury.balance(GUILD, self.tag)[0], 8000)  # деньги вернулись
+        self.assertEqual(run(clan_shop.buy(interaction, clan, "tag", {"tag": "x"})), "clan_shop.error.tag_format")
+
+    def test_hub_card_and_visibility(self):
+        import clan_hub
+        import clan_life
+        interaction = FakeInteraction(self.g, self.g.members[901])
+        embed = clan_hub.card_embed(interaction, self.clan)
+        self.assertIn(self.tag, embed.title)
+        self.assertNotIn(self.tag, [c["tag"] for c in clan_hub.visible_clans(GUILD)])  # меньше месяца
+        clan_life.set_setting(GUILD, "hub_min_days", 0)
+        try:
+            self.assertIn(self.tag, [c["tag"] for c in clan_hub.visible_clans(GUILD)])
+            clan_hub.hub_embed(GUILD)
+            clan_hub.hub_view(GUILD)
+        finally:
+            clan_life.set_setting(GUILD, "hub_min_days", 30)
+        admin = FakeInteraction(self.g, self.g.members[ADMIN])
+        clan_hub.admin_embed(admin)
+        clan_hub.AdminView(admin).to_components()
 
 
 if __name__ == "__main__":

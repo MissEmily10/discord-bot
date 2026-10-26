@@ -56,8 +56,94 @@ def ensure_tables():
         source_key TEXT UNIQUE, member_id INTEGER, giver_id INTEGER, by_user INTEGER,
         gross INTEGER, created_at INTEGER NOT NULL
     )""")
+    if "direction" not in {row[1] for row in connection.execute("PRAGMA table_info(clan_ledger)")}:
+        # направление респекта (п. 11): help / events / art / dev / compete / community
+        connection.execute("ALTER TABLE clan_ledger ADD COLUMN direction TEXT")
     connection.commit()
     connection.close()
+
+
+DIRECTIONS = {"help": "🤝 Помощь", "events": "🎉 Ивенты", "art": "🎨 Творчество", "dev": "🛠 Развитие сервера",
+              "compete": "⚔️ Соревнования", "community": "👥 Сообщество"}
+
+
+def direction_of(text):
+    """«🎉 Ивенты» / «ивенты» / «events» -> ключ направления или None."""
+    low = str(text or "").lower()
+    for key, label in DIRECTIONS.items():
+        if key == low or label.lower() in low or label.split(" ", 1)[1].lower().split()[0] in low:
+            return key
+    return None
+
+
+def giver_direction(guild_id, giver_id):
+    """Направление респекта за .награду — по главе категории, который её выдал (задают админы)."""
+    import clan_life
+    mapping = clan_life.setting(guild_id, "giver_directions", {})
+    return mapping.get(str(giver_id)) or "community"
+
+
+def spend(guild_id, tag, amount, reason, source_key=None, by_user=None):
+    """
+    Списать из казны, только если хватает (п. 0): проверка и списание — одной
+    операцией в базе, два одновременных покупателя не уведут казну в минус.
+    -> (True, остаток) | (False, остаток) | (None, None), если ключ уже был.
+    """
+    ensure_tables()
+    tag = tag.upper()
+    connection = get_connection()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if source_key and connection.execute("SELECT 1 FROM clan_ledger WHERE source_key = ?",
+                                             (source_key,)).fetchone():
+            connection.rollback()
+            return None, None
+        cursor = connection.execute("UPDATE clan_treasury SET treasury = treasury - ? WHERE guild_id = ? AND tag = ? "
+                                    "AND treasury >= ?", (amount, guild_id, tag, amount))
+        if cursor.rowcount == 0:
+            row = connection.execute("SELECT treasury FROM clan_treasury WHERE guild_id = ? AND tag = ?",
+                                     (guild_id, tag)).fetchone()
+            connection.rollback()
+            return False, row[0] if row else 0
+        connection.execute(
+            "INSERT INTO clan_ledger (guild_id, tag, amount, respect, reason, source_key, by_user, created_at) "
+            "VALUES (?, ?, ?, 0, ?, ?, ?, ?)", (guild_id, tag, -amount, reason, source_key, by_user, int(time.time())))
+        left = connection.execute("SELECT treasury FROM clan_treasury WHERE guild_id = ? AND tag = ?",
+                                  (guild_id, tag)).fetchone()[0]
+        connection.commit()
+        return True, left
+    finally:
+        connection.close()
+
+
+def balance(guild_id, tag):
+    row = get_clan(guild_id, tag)
+    return (row[2], row[3]) if row else (0, 0.0)
+
+
+def respect_since(guild_id, since, until=None):
+    """{тег: респект} за период (для биллборда: 1 респект = 5 баллов)."""
+    ensure_tables()
+    connection = get_connection()
+    rows = connection.execute("SELECT tag, SUM(respect) FROM clan_ledger WHERE guild_id = ? AND created_at >= ? "
+                              "AND created_at < ? GROUP BY tag", (guild_id, int(since), int(until or 2 ** 40))).fetchall()
+    connection.close()
+    return {tag: float(total or 0) for tag, total in rows}
+
+
+def respect_by_direction(guild_id, tag=None, since=0, until=None):
+    """{(тег, направление): респект} — для «чем известен» и значков месяца."""
+    ensure_tables()
+    connection = get_connection()
+    sql = ("SELECT tag, COALESCE(direction, 'community'), SUM(respect) FROM clan_ledger WHERE guild_id = ? "
+           "AND respect != 0 AND created_at >= ? AND created_at < ?")
+    params = [guild_id, int(since), int(until or 2 ** 40)]
+    if tag:
+        sql += " AND tag = ?"
+        params.append(tag.upper())
+    rows = connection.execute(sql + " GROUP BY tag, COALESCE(direction, 'community')", params).fetchall()
+    connection.close()
+    return {(row[0], row[1]): float(row[2] or 0) for row in rows}
 
 
 def get_clan(guild_id, tag):
@@ -89,7 +175,7 @@ def ledger(guild_id, tag, limit=10):
 
 
 def record(guild_id, tag, name, amount, respect, reason, source_key=None, member_id=None, giver_id=None,
-           by_user=None, gross=None):
+           by_user=None, gross=None, direction=None):
     """
     Одна операция с казной: запись в журнал и изменение казны — в одной
     транзакции. Повтор с тем же source_key ничего не меняет.
@@ -113,9 +199,9 @@ def record(guild_id, tag, name, amount, respect, reason, source_key=None, member
                            "WHERE guild_id = ? AND tag = ?", (amount, respect, guild_id, tag))
         connection.execute(
             "INSERT INTO clan_ledger (guild_id, tag, amount, respect, reason, source_key, member_id, giver_id, "
-            "by_user, gross, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "by_user, gross, created_at, direction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (guild_id, tag, amount, respect, reason, source_key, member_id, giver_id, by_user, gross,
-             int(time.time())))
+             int(time.time()), direction))
         treasury, total_respect = connection.execute(
             "SELECT treasury, respect FROM clan_treasury WHERE guild_id = ? AND tag = ?", (guild_id, tag)).fetchone()
         connection.commit()
@@ -316,14 +402,19 @@ async def on_message(message):
     if problem:
         await _say(message, problem)
         return
+    area = ecosystem.scope(message.guild.id)
     done, treasury, respect = record(
-        ecosystem.scope(message.guild.id), card["tag"], card["name"], card["to_treasury"], card["respect"],
+        area, card["tag"], card["name"], card["to_treasury"], card["respect"],
         "награда в казну",
         source_key=key, member_id=card["member_id"], giver_id=card["giver_id"], by_user=message.author.id,
-        gross=card["gross"])
+        gross=card["gross"], direction=giver_direction(area, card["giver_id"]))
     if not done:
         await _say(message, "clan_treasury.already")
         return
+    import clan_life
+    bonus = clan_life.reward_bonus(area, card["tag"], card["gross"], key)  # топ-1 месяца: 85% вместо 75%
+    if bonus:
+        treasury += bonus
     core._log.info("clan treasury %s +%s (msg %s) by %s", card["tag"], card["to_treasury"], source.id,
                    message.author.id)
     await _say(message, "clan_treasury.fixed", tag=card["tag"], amount=card["to_treasury"],
