@@ -4066,7 +4066,7 @@ class ViewSmokeTests(unittest.TestCase):
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
         self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
-                                        "emoji", "pictures", "whisper", "post", "В референсы стиля",
+                                        "emoji", "pictures", "whisper", "post", "clan", "В референсы стиля",
                                     "В цитаты дня", "Шепнуть"]))
 
 
@@ -4284,6 +4284,170 @@ class LiveCardWizardTests(unittest.TestCase):
             self.assertFalse(member.edits)  # не админ — баннер не трогает
 
         run(check())
+
+
+class ClanMembershipTests(unittest.TestCase):
+    """/clan: заявка → «Принять», права по должностям, выход, исключение, передача главы, замена ушедшего главы."""
+
+    LEADER, DEP1, DEP2, REP, M1, M2, NEWBIE = 801, 802, 803, 804, 805, 806, 807
+
+    def setUp(self):
+        import clans
+        import clan_members as cm
+        self.tag = f"T{len(clans.get_clans(GUILD))}{int(time.time() * 1000) % 1000}"[:5]
+        cm.ensure_tables()
+        connection = database.get_connection()  # те же люди в каждом тесте — состав с чистого листа
+        connection.execute("DELETE FROM clan_members WHERE user_id BETWEEN 801 AND 807")
+        connection.execute("DELETE FROM clan_requests WHERE user_id BETWEEN 801 AND 807")
+        connection.execute("UPDATE clans SET status = 'dissolved' WHERE leader_id BETWEEN 801 AND 807")
+        connection.commit()
+        connection.close()
+        self.g = make_guild()
+        ClanMembershipTests.role_seq = getattr(ClanMembershipTests, "role_seq", 900) + 1
+        self.role = self.g.add_role(FakeRole(self.role_seq, 3, name=f"[{self.tag}] Котики"))
+        self.dms = []
+        for uid in (self.LEADER, self.DEP1, self.DEP2, self.REP, self.M1, self.M2, self.NEWBIE):
+            member = FakeMember(uid, [self.role] if uid != self.NEWBIE else [])
+            member.send = self._dm(uid)
+            self.g.members[uid] = member
+        self.role.members = [m for m in self.g.members.values() if self.role in m.roles]
+        clans.register(GUILD, {"tag": self.tag, "name": "Котики", "leader_id": self.LEADER,
+                               "deputies": [self.DEP1, self.DEP2], "reps": [self.REP], "role_id": self.role.id},
+                       guild_id=GUILD)
+        self.clan = clans.get_clan(GUILD, self.tag)
+        cm.add_member(GUILD, self.tag, self.DEP2, joined_at=100)  # зам с бо́льшим стажем
+        cm.add_member(GUILD, self.tag, self.DEP1, joined_at=200)
+        cm.seed(self.g, self.clan)
+
+    def _dm(self, uid):
+        async def send(content=None, **kwargs):
+            self.dms.append((uid, content, kwargs))
+            return types.SimpleNamespace(id=len(self.dms), channel=types.SimpleNamespace(id=uid))
+        return send
+
+    def clan_now(self):
+        import clans
+        return clans.get_clan(GUILD, self.tag)
+
+    def test_seed_and_rights(self):
+        import clan_members as cm
+        clan = self.clan_now()
+        self.assertEqual(len(cm.member_ids(GUILD, self.tag)), 6)
+        self.assertTrue(cm.can(clan, self.REP, "accept"))
+        self.assertFalse(cm.can(clan, self.M1, "accept"))
+        self.assertTrue(cm.can(clan, self.DEP1, "kick", self.M1))
+        self.assertFalse(cm.can(clan, self.DEP1, "kick", self.REP))  # зам — только рядовых
+        self.assertTrue(cm.can(clan, self.LEADER, "kick", self.DEP1))
+        self.assertFalse(cm.can(clan, self.LEADER, "kick", self.LEADER))
+        self.assertFalse(cm.can(clan, self.REP, "kick", self.M1))
+        self.assertFalse(cm.can(clan, self.LEADER, "leave"))  # сначала передать главу
+        self.assertTrue(cm.can(clan, self.M1, "leave"))
+        self.assertTrue(cm.can(clan, self.M1, "team", admin=True))
+        self.assertEqual(cm.successor(clan), self.DEP2)
+
+    def test_apply_accept_once(self):
+        import clan_members as cm
+
+        async def check():
+            i = FakeInteraction(self.g, self.g.members[self.NEWBIE])
+            problem = await cm.send_application(i, self.clan_now(), "люблю войс")
+            self.assertIsNone(problem)
+            self.assertEqual(await cm.send_application(i, self.clan_now(), "ещё раз"), "clan.apply.already")
+            leader_dm = [d for d in self.dms if d[0] == self.LEADER][-1]
+            button = leader_dm[2]["view"].children[0]
+            self.assertTrue(button.custom_id.startswith("rb:clr:"))
+            request_id = int(button.custom_id.split(":")[2])
+            stranger = FakeInteraction(self.g, self.g.members[self.M1])
+            await cm.answer_request(stranger, request_id, True)
+            self.assertIsNone(cm.tag_of(GUILD, self.NEWBIE))  # рядовой не решает
+            rep = FakeInteraction(self.g, self.g.members[self.REP])
+            await cm.answer_request(rep, request_id, True)
+            self.assertEqual(cm.tag_of(GUILD, self.NEWBIE), self.tag)
+            self.assertIn(self.role.id, self.g.members[self.NEWBIE].added)
+            self.assertTrue(any(d[0] == self.NEWBIE and "приняли" in (d[1] or "") for d in self.dms))
+            again = FakeInteraction(self.g, self.g.members[self.LEADER])
+            await cm.answer_request(again, request_id, False)
+            self.assertEqual(cm.tag_of(GUILD, self.NEWBIE), self.tag)  # второе нажатие ничего не меняет
+
+        run(check())
+
+    def test_leave_kick_and_team(self):
+        import clan_members as cm
+
+        async def check():
+            leader = FakeInteraction(self.g, self.g.members[self.LEADER])
+            await cm.YesNoView(GUILD, self.tag, "leave", self.LEADER).do(leader)
+            self.assertEqual(cm.tag_of(GUILD, self.LEADER), self.tag)
+            member = FakeInteraction(self.g, self.g.members[self.M1])
+            await cm.YesNoView(GUILD, self.tag, "leave", self.M1).do(member)
+            self.assertIsNone(cm.tag_of(GUILD, self.M1))
+            self.assertIn(self.role.id, self.g.members[self.M1].removed)
+            deputy = FakeInteraction(self.g, self.g.members[self.DEP1])
+            await cm.YesNoView(GUILD, self.tag, "kick", self.REP).do(deputy)
+            self.assertEqual(cm.tag_of(GUILD, self.REP), self.tag)  # представителя зам не исключает
+            await cm.YesNoView(GUILD, self.tag, "kick", self.DEP1).do(leader)
+            self.assertNotIn(self.DEP1, self.clan_now()["deputies"])
+            self.assertIsNone(cm.tag_of(GUILD, self.DEP1))
+            await cm.YesNoView(GUILD, self.tag, "appoint", self.M2, role="deputy").do(
+                FakeInteraction(self.g, self.g.members[self.LEADER]))
+            self.assertIn(self.M2, self.clan_now()["deputies"])
+            await cm.YesNoView(GUILD, self.tag, "dismiss", self.REP).do(
+                FakeInteraction(self.g, self.g.members[self.LEADER]))
+            self.assertEqual(self.clan_now()["reps"], [])
+            self.assertEqual(cm.tag_of(GUILD, self.REP), self.tag)  # снят с должности, но в клане
+
+        run(check())
+
+    def test_transfer_needs_confirmation(self):
+        import clan_members as cm
+
+        async def check():
+            leader = FakeInteraction(self.g, self.g.members[self.LEADER])
+            leader.channel = None
+            await cm.YesNoView(GUILD, self.tag, "transfer", self.M1).do(leader)
+            self.assertEqual(self.clan_now()["leader_id"], self.LEADER)  # ещё не подтвердил
+            offer = [d for d in self.dms if d[0] == self.M1][-1]
+            request_id = int(offer[2]["view"].children[0].custom_id.split(":")[2])
+            await cm.answer_request(FakeInteraction(self.g, self.g.members[self.M2]), request_id, True)
+            self.assertEqual(self.clan_now()["leader_id"], self.LEADER)  # решает только тот, кого зовут
+            await cm.answer_request(FakeInteraction(self.g, self.g.members[self.M1]), request_id, True)
+            clan = self.clan_now()
+            self.assertEqual(clan["leader_id"], self.M1)
+            self.assertEqual(cm.rank_of(clan, self.LEADER), "member")
+
+        run(check())
+
+    def test_leader_leaves_server_and_roles_follow(self):
+        import clan_members as cm
+
+        async def check():
+            await cm.on_member_remove(types.SimpleNamespace(id=self.LEADER, guild=self.g))
+            clan = self.clan_now()
+            self.assertEqual(clan["leader_id"], self.DEP2)  # зам с наибольшим стажем
+            self.assertNotIn(self.DEP2, clan["deputies"])
+            self.assertIsNone(cm.tag_of(GUILD, self.LEADER))
+            before = types.SimpleNamespace(roles=[self.role], id=self.M2, guild=self.g)
+            after = types.SimpleNamespace(roles=[], id=self.M2, guild=self.g)
+            await cm.on_member_update(before, after)  # роль сняли руками — из состава тоже
+            self.assertIsNone(cm.tag_of(GUILD, self.M2))
+            await cm.on_member_update(after, before)
+            self.assertEqual(cm.tag_of(GUILD, self.M2), self.tag)
+
+        run(check())
+
+    def test_home_panel_buttons_by_rank(self):
+        import clan_members as cm
+        clan = self.clan_now()
+
+        def labels(rank, admin=False):
+            return {item.label for item in cm.MyClanView(clan, rank, admin).children}
+        self.assertEqual(labels("member"), {"Выйти из клана"})
+        self.assertEqual(labels("rep"), {"Пригласить", "Выйти из клана"})
+        self.assertIn("Исключить", labels("deputy"))
+        self.assertNotIn("Команда", labels("deputy"))
+        self.assertEqual(labels("leader"), {"Пригласить", "Исключить", "Команда", "Передать главу"})
+        self.assertIn("Пригласить", cm.roster_text(self.g, clan) + "Пригласить")
+        self.assertIn("место представителя свободно", cm.roster_text(self.g, clan))
 
 
 if __name__ == "__main__":
