@@ -458,7 +458,7 @@ def resolve_thumbnail(interaction, context):
 # универсальный «доступ запрещён». На остальных экранах баннера нет.
 BANNER_SCREENS = (
     "embed.home", "library.home", "interactive.home", "forms.review_home",
-    "logo.home", "eminemovna.home", "webhooks.home", "access_denied",
+    "logo.home", "eminemovna.home", "webhooks.home", "access_denied", "pictures.home",
 )
 # Сообщения, которые бот шлёт сам, без панели: новая заявка, итог проверки
 # (карточка в канале и ЛС заявителю), опубликованные форма и меню ролей.

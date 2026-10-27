@@ -9,7 +9,7 @@ scripts/render_doodles3d.py.
 Рисует 256×256:
 - panel_art/emoji/doodle_clan_<имя>.png        — плоские;
 - panel_art/emoji/doodle3d/d3_clan_<имя>.png   — 3D;
-- panel_art/emoji/_clan_doodles.png            — лист для просмотра.
+- panel_art/purr/_clan_doodles.png            — лист для просмотра.
 """
 
 import math
@@ -199,7 +199,7 @@ def main():
         sheet.alpha_composite(flat.resize((150, 150), Image.LANCZOS), (x + 10, 10))
         sheet.alpha_composite(solid.resize((150, 150), Image.LANCZOS), (x + 10, cell + 10))
         d.text((x + cell / 2, 2 * cell + 30), TITLES[name], font=f, fill=MILK, anchor="mm")
-    sheet.save(FLAT_DIR / "_clan_doodles.png", optimize=True)
+    sheet.save(FLAT_DIR.parent / "purr" / "_clan_doodles.png", optimize=True)
     print(f"{len(DOODLES)} дудлов × 2 вида")
 
 

@@ -83,7 +83,8 @@ async def setup_hook():
                           *form_packs.DYNAMIC_ITEMS, *cards.DYNAMIC_ITEMS, *quotes.DYNAMIC_ITEMS,
                           *whispers.DYNAMIC_ITEMS, *clan_info.DYNAMIC_ITEMS,
                           *clan_members.DYNAMIC_ITEMS, *clan_billboard.DYNAMIC_ITEMS, *clan_quests.DYNAMIC_ITEMS,
-                          *clan_shop.DYNAMIC_ITEMS, *clan_hub.DYNAMIC_ITEMS, *clan_events.DYNAMIC_ITEMS)
+                          *clan_shop.DYNAMIC_ITEMS, *clan_hub.DYNAMIC_ITEMS, *clan_events.DYNAMIC_ITEMS,
+                          *clans.DYNAMIC_ITEMS, *clan_treasury.DYNAMIC_ITEMS)
     await web_panel.start(bot)
     automation.setup(bot)  # расписание, триггеры, живое обновление
     await media.load(bot)  # эмодзи в хранилище приложения (копии чужих эмодзи)

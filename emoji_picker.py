@@ -74,14 +74,12 @@ class EmojiPickerView(PanelView):
         super().__init__(back_target=back_target, timeout=900)
         self.on_pick = on_pick
         items = doodles()
-        for row, chunk in enumerate((items[:25], items[25:50])):
-            if not chunk:
-                continue
-            select = discord.ui.Select(
-                placeholder=t("emoji_picker.doodles", part=row + 1)[:150], row=row,
-                options=[_option(value, NAMES_RU.get(name.removeprefix("doodle_"), name)) for name, value in chunk],
+        if items:  # все дудлы одним списком с листанием (с клановыми их больше 50)
+            select = core.PagedSelect(
+                placeholder=t("emoji_picker.doodles", part="")[:150], row=0,
+                options=[_option(value, NAMES_RU.get(name.removeprefix("doodle_"), name)) for name, value in items],
             )
-            select.callback = self._picked(select)
+            select.on_pick = self._picked(select)
             self.add_item(select)
         guild_emojis = [emoji for emoji in getattr(interaction.guild, "emojis", []) if emoji.available]
         if guild_emojis:

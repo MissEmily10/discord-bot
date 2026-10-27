@@ -78,14 +78,81 @@ def badges(scope_id, tag):
     return found
 
 
+def badge_keys(scope_id, tag):
+    """Значки для картинки: place1…3, направления (help/events/art/dev/compete/community), reliable."""
+    import clan_life
+    clan_life.ensure_tables()
+    connection = get_connection()
+    rows = connection.execute("SELECT place, kind FROM clan_awards WHERE scope_id = ? AND tag = ? "
+                              "ORDER BY month DESC", (scope_id, tag.upper())).fetchall()
+    connection.close()
+    keys = []
+    for place, kind in rows:
+        key = f"place{place}" if kind == "place" else kind[4:] if kind.startswith("dir:") else None
+        if key and key not in keys:
+            keys.append(key)
+    if clan_life.reliable(scope_id, tag) and "reliable" not in keys:
+        keys.append("reliable")
+    return keys
+
+
+def card_style(scope_id, tag):
+    import clan_art
+    import clan_life
+    value = clan_life.setting(scope_id, f"card_style:{tag}")
+    try:
+        return int(value) if int(value) in clan_art.STYLES else clan_art.DEFAULT_STYLE
+    except (TypeError, ValueError):
+        return clan_art.DEFAULT_STYLE
+
+
+def card_data(guild, clan):
+    """Всё, что рисуется на карточке клана (clan_art.render_card)."""
+    import clan_life
+    import clan_members
+    import clan_treasury
+    scope_id, tag = clan["scope_id"], clan["tag"]
+    state = clan_life.state_of(scope_id, tag)
+    treasury, respect = clan_treasury.balance(scope_id, tag)
+    mult, weeks = clan_life.fire_multiplier(scope_id, tag)
+
+    def name(user_id):
+        member = guild.get_member(user_id) if guild is not None and user_id else None
+        return getattr(member, "display_name", None) or getattr(member, "name", None) or ("—" if not user_id else "ушёл")
+
+    return dict(name=clan["name"] or tag, tag=tag,
+                status=t("clan_hub.status.debt") if state["state"] == "debt" else t("clan_hub.status.active"),
+                known=known_for(scope_id, tag),
+                members=f"{len(clan_members.member_ids(scope_id, tag))} / {clan_members.limit_for(scope_id, tag)}",
+                treasury=treasury, respect=respect, streak=weeks, mult=mult, leader=name(clan["leader_id"]),
+                deputies=[name(i) for i in clan["deputies"]], reps=[name(i) for i in clan["reps"]],
+                badges=badge_keys(scope_id, tag), emblem=None)
+
+
+async def card_file(guild, clan, style=None):
+    """Картинка карточки клана (стиль клана или выбранный) -> discord.File «clan.png»."""
+    import clan_art
+    import clan_life
+    data = card_data(guild, clan)
+    emblem = clan_life.setting(clan["scope_id"], f"emblem:{clan['tag']}")
+    if emblem:
+        try:
+            raw = await core.fetch_bytes(emblem)
+            from PIL import Image
+            data["emblem"] = Image.open(io.BytesIO(raw)) if raw else None
+        except Exception:  # герб не скачался — рисуем тег
+            data["emblem"] = None
+    return await clan_art.file(clan_art.render_card, data, style or card_style(clan["scope_id"], clan["tag"]),
+                               filename="clan.png")
+
+
 def card_embed(interaction, clan):
+    """Текст под картинкой карточки: срок, квесты, значки словами; сама карточка — картинкой."""
     import clan_life
     import clan_members
     import clan_quests
     scope_id, tag = clan["scope_id"], clan["tag"]
     state = clan_life.state_of(scope_id, tag)
-    members = len(clan_members.member_ids(scope_id, tag))
-    status = t("clan_hub.status.debt") if state["state"] == "debt" else t("clan_hub.status.active")
     quests = []
     for level, row in sorted(clan_quests.assign(scope_id, tag, state["term_no"]).items(),
                              key=lambda kv: clan_quests.LEVELS.index(kv[0])):
@@ -96,36 +163,28 @@ def card_embed(interaction, clan):
                         leader=clan_members.mention(clan["leader_id"]),
                         deputies=", ".join(clan_members.mention(i) for i in clan["deputies"]) or "—",
                         reps=", ".join(clan_members.mention(i) for i in clan["reps"]) or "—",
-                        members=members, max=clan_members.limit_for(scope_id, tag), status=status,
-                        life=clan_life.status_line(scope_id, tag), known=known_for(scope_id, tag) or "—",
-                        badges="\n".join(found[:10]) or "—", quests="\n".join(quests) or "—")
-    emblem = clan_life.setting(scope_id, f"emblem:{tag}")
-    if emblem:
-        embed.set_thumbnail(url=emblem)
+                        life=clan_life.status_line(scope_id, tag), badges="\n".join(found[:10]) or "—",
+                        quests="\n".join(quests) or "—")
+    embed.set_image(url="attachment://clan.png")
     return embed
 
 
-class CardView(discord.ui.View):
-    """Под карточкой (видна только нажавшему): «Подать заявку» и «Респекты подробно»."""
+def can_style(clan, user_id, guild=None, member=None):
+    """Стиль карточки меняют глава и замы (и админы)."""
+    import clan_members
+    if user_id == clan["leader_id"] or user_id in clan["deputies"]:
+        return True
+    return member is not None and clan_members.is_admin(guild, member)
 
-    def __init__(self, tag, can_apply=True):
+
+class CardView(discord.ui.View):
+    """Под карточкой (видна только нажавшему): «Респекты подробно» и «Стиль карточки» (глава/замы)."""
+
+    def __init__(self, tag, can_apply=False, can_restyle=False):
         super().__init__(timeout=600)
         self.tag = tag
-        if not can_apply:
-            self.remove_item(self.apply)
-
-    @discord.ui.button(label="Подать заявку", emoji="📨", style=discord.ButtonStyle.success)
-    async def apply(self, interaction, button):
-        import clan_life
-        import clan_members
-        scope_id = ecosystem.scope(interaction.guild.id)
-        if clan_members.clan_of(scope_id, interaction.user.id) is not None:
-            await reply(interaction, "clan.error.other_clan")
-            return
-        if not clan_life.can_accept(scope_id, self.tag):
-            await reply(interaction, "clan_hub.no_accept_debt")
-            return
-        await interaction.response.send_modal(clan_members.ApplyModal(self.tag))
+        if not can_restyle:
+            self.remove_item(self.style)
 
     @discord.ui.button(label="Респекты подробно", emoji="🏅", style=discord.ButtonStyle.secondary)
     async def respect(self, interaction, button):
@@ -138,12 +197,58 @@ class CardView(discord.ui.View):
         await interaction.response.send_message(t("clan_hub.respect_detail", tag=self.tag,
                                                   lines="\n".join(lines) or "—"), ephemeral=True)
 
+    @discord.ui.button(label="Стиль карточки", emoji="🎨", style=discord.ButtonStyle.primary)
+    async def style(self, interaction, button):
+        import clan_art
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        sheet = await clan_art.file(clan_art.preview_sheet, filename="styles.png")
+        view = StyleView(self.tag)
+        await interaction.followup.send(t("clan_hub.style_pick"), file=sheet, view=view, ephemeral=True) \
+            if sheet else await interaction.followup.send(t("clan_hub.style_pick"), view=view, ephemeral=True)
 
-async def show_card(interaction, clan):
-    import clan_members
-    mine = clan_members.clan_of(clan["scope_id"], interaction.user.id)
-    await interaction.response.send_message(embed=card_embed(interaction, clan),
-                                            view=CardView(clan["tag"], can_apply=mine is None), ephemeral=True)
+
+class StyleView(discord.ui.View):
+    """10 стилей карточки из макетов; выбор сохраняется для клана."""
+
+    def __init__(self, tag):
+        super().__init__(timeout=600)
+        import clan_art
+        self.tag = tag
+        select = discord.ui.Select(placeholder=t("clan_hub.style_placeholder")[:150], options=[
+            discord.SelectOption(label=f"{number}. {title}"[:100], value=str(number))
+            for number, title in clan_art.style_names().items()])
+
+        async def picked(interaction):
+            import clan_life
+            import clans
+            scope_id = ecosystem.scope(interaction.guild.id)
+            clan = clans.get_clan(scope_id, self.tag)
+            if clan is None or not can_style(clan, interaction.user.id, interaction.guild, interaction.user):
+                await reply(interaction, "clan_hub.style_denied")
+                return
+            number = int(select.values[0])
+            clan_life.set_setting(scope_id, f"card_style:{self.tag}", number)
+            core.audit(interaction, "clan.card_style", "clan", self.tag, str(number))
+            await interaction.response.defer()
+            picture = await card_file(interaction.guild, clan, number)
+            kwargs = {"attachments": [picture]} if picture else {}
+            await interaction.edit_original_response(
+                content=t("clan_hub.style_saved", style=clan_art.style_names()[number]), view=None, **kwargs)
+        select.callback = picked
+        self.add_item(select)
+
+
+async def show_card(interaction, clan, edit=False):
+    """Карточка клана картинкой (стиль клана) + текст; видна только нажавшему."""
+    restyle = can_style(clan, interaction.user.id, interaction.guild, interaction.user)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    picture = await card_file(interaction.guild, clan)
+    embed = card_embed(interaction, clan)
+    if picture is None:
+        embed.set_image(url=None)
+    kwargs = {"file": picture} if picture else {}
+    await interaction.followup.send(embed=embed, view=CardView(clan["tag"], can_restyle=restyle), ephemeral=True,
+                                    **kwargs)
 
 
 # ============================================================
@@ -170,8 +275,19 @@ def hub_embed(scope_id):
         lines.append(t("clan_hub.hub_line", tag=clan["tag"], name=clan["name"] or "—",
                        members=len(clan_members.member_ids(scope_id, clan["tag"])), known=f" · {known}" if known else "",
                        marks=debt + reliable))
-    return discord.Embed(title=t("clan_hub.hub_title"), color=0x2B2D31,
-                         description=t("clan_hub.hub_text", lines="\n".join(lines) or t("clan_hub.hub_empty"))[:4096])
+    embed = discord.Embed(title=t("clan_hub.hub_title"), color=0x2B2D31,
+                          description=t("clan_hub.hub_text", lines="\n".join(lines) or t("clan_hub.hub_empty"))[:4096])
+    embed.set_image(url="attachment://clans.png")
+    return embed
+
+
+async def hub_file(scope_id):
+    """Картинка «Всё о кланах» (макет clans.directory) с живыми числами кланов и участников."""
+    import clan_art
+    import clan_members
+    shown = visible_clans(scope_id)
+    people = sum(len(clan_members.member_ids(scope_id, clan["tag"])) for clan in shown)
+    return await clan_art.file(clan_art.render_directory, len(shown), people, filename="clans.png")
 
 
 class HubSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"rb:clh:sel"):
@@ -204,7 +320,11 @@ def hub_view(scope_id):
 
 async def publish_hub(channel, scope_id):
     import clan_life
-    message = await channel.send(embed=hub_embed(scope_id), view=hub_view(scope_id))
+    picture = await hub_file(scope_id)
+    embed = hub_embed(scope_id)
+    if picture is None:
+        embed.set_image(url=None)
+    message = await channel.send(embed=embed, view=hub_view(scope_id), **({"file": picture} if picture else {}))
     clan_life.set_setting(scope_id, "hub_channel", channel.id)
     clan_life.set_setting(scope_id, "hub_message", message.id)
     return message
@@ -218,7 +338,11 @@ async def refresh_hub(bot, scope_id):
         return
     try:
         message = await channel.fetch_message(int(message_id))
-        await message.edit(embed=hub_embed(scope_id), view=hub_view(scope_id))
+        picture = await hub_file(scope_id)
+        embed = hub_embed(scope_id)
+        if picture is None:
+            embed.set_image(url=None)
+        await message.edit(embed=embed, view=hub_view(scope_id), attachments=[picture] if picture else [])
     except discord.HTTPException:
         pass
 
@@ -281,7 +405,11 @@ async def refresh_council(bot, scope_id, month, top_tags, dev_order=()):
         return None
     clan_life.set_setting(scope_id, "council_channel", channel.id)
     try:
-        await channel.send(t("clan_hub.council_welcome", clans=", ".join(f"[{tag}]" for tag in seats) or "—"))
+        import clan_art
+        banner = clan_art.art_bytes("clans.council.banner.png")
+        extra = {"file": discord.File(io.BytesIO(banner), filename="council.png")} if banner else {}
+        await channel.send(t("clan_hub.council_welcome", clans=", ".join(f"[{tag}]" for tag in seats) or "—"),
+                           **extra)
     except discord.HTTPException:
         pass
     return channel
@@ -410,7 +538,8 @@ class AdminView(PanelView):
     async def directions(self, interaction, button):
         if await self._ok(interaction):
             await interaction.response.edit_message(embed=directions_embed(interaction),
-                                                    view=DirectionsView(back_target=(core.screen(interaction), self)))
+                                                    view=DirectionsView(back_target=(core.screen(interaction), self),
+                                                                        scope_id=ecosystem.scope(interaction.guild.id)))
 
     @discord.ui.button(label="Новые кланы в списке", emoji="🗓️", style=discord.ButtonStyle.secondary)
     async def hub_days(self, interaction, button):
@@ -419,18 +548,28 @@ class AdminView(PanelView):
 
 
 def directions_embed(interaction):
-    """Кто из глав категорий даёт респект в каком направлении (за .награду в казну)."""
-    import clan_life
+    """Должности глав категорий: за что каждый даёт респект (за .награду в казну); можно несколько."""
     import clan_treasury
-    mapping = clan_life.setting(ecosystem.scope(interaction.guild.id), "giver_directions", {})
-    lines = [f"<@{giver}> → {clan_treasury.DIRECTIONS.get(direction, direction)}" for giver, direction in mapping.items()]
+    scope_id = ecosystem.scope(interaction.guild.id)
+    lines = []
+    for giver in positions_map(scope_id):
+        found = clan_treasury.giver_directions(scope_id, giver)
+        if found:
+            lines.append(f"<@{giver}> → " + ", ".join(clan_treasury.DIRECTIONS[d] for d in found))
     return panel_embed(interaction, "clan_hub.directions", hints=False, lines="\n".join(lines) or "—")
 
 
-class DirectionsView(PanelView):
-    """Сначала — направление, потом — кто (глава категории). Остальные — «👥 Сообщество»."""
+def positions_map(scope_id):
+    """{id главы: [направления]} — старое «одно направление строкой» читается как список."""
+    import clan_life
+    raw = clan_life.setting(scope_id, "giver_directions", {}) or {}
+    return {giver: ([value] if isinstance(value, str) else list(value or [])) for giver, value in raw.items()}
 
-    def __init__(self, back_target=None, direction=None):
+
+class DirectionsView(PanelView):
+    """Сначала — должность (направление), потом — кто её занимает. У человека может быть несколько должностей."""
+
+    def __init__(self, back_target=None, direction=None, scope_id=None):
         import clan_treasury
         super().__init__(back_target=back_target, timeout=600)
         self.direction = direction
@@ -439,7 +578,8 @@ class DirectionsView(PanelView):
             for key, label in clan_treasury.DIRECTIONS.items()])
 
         async def picked(i):
-            await i.response.edit_message(view=DirectionsView(self.back_target, select.values[0]))
+            await i.response.edit_message(view=DirectionsView(self.back_target, select.values[0],
+                                                              ecosystem.scope(i.guild.id)))
         select.callback = picked
         self.add_item(select)
         if direction:
@@ -451,15 +591,50 @@ class DirectionsView(PanelView):
                 if not clan_members.is_admin(i.guild, i.user):
                     await reply(i, "common.need_admin")
                     return
-                scope_id = ecosystem.scope(i.guild.id)
-                mapping = clan_life.setting(scope_id, "giver_directions", {})
+                scope = ecosystem.scope(i.guild.id)
+                mapping = positions_map(scope)
                 for user in users.values:
-                    mapping[str(user.id)] = self.direction
-                clan_life.set_setting(scope_id, "giver_directions", mapping)
-                core.audit(i, "clans.giver_directions", "guild", scope_id, self.direction)
-                await i.response.edit_message(embed=directions_embed(i), view=DirectionsView(self.back_target))
+                    held = mapping.setdefault(str(user.id), [])
+                    if self.direction not in held:
+                        held.append(self.direction)
+                clan_life.set_setting(scope, "giver_directions", mapping)
+                core.audit(i, "clans.giver_directions", "guild", scope, self.direction)
+                await i.response.edit_message(embed=directions_embed(i), view=DirectionsView(self.back_target,
+                                                                                             scope_id=scope))
             users.callback = chosen
             self.add_item(users)
+        held = [(giver, d) for giver, found in positions_map(scope_id).items() for d in found] if scope_id else []
+        if held:
+            remove = discord.ui.Select(placeholder=t("clan_hub.directions.remove")[:150], options=[
+                discord.SelectOption(label=t("clan_hub.directions.remove_line", direction=clan_treasury.DIRECTIONS.get(
+                    d, d), who=_user_label(giver))[:100], value=f"{giver}:{d}") for giver, d in held[:25]])
+
+            async def removed(i):
+                import clan_life
+                import clan_members
+                if not clan_members.is_admin(i.guild, i.user):
+                    await reply(i, "common.need_admin")
+                    return
+                scope = ecosystem.scope(i.guild.id)
+                giver, direction = remove.values[0].split(":", 1)
+                mapping = positions_map(scope)
+                mapping[giver] = [d for d in mapping.get(giver, []) if d != direction]
+                if not mapping[giver]:
+                    mapping.pop(giver)
+                clan_life.set_setting(scope, "giver_directions", mapping)
+                core.audit(i, "clans.giver_direction_removed", "guild", scope, f"{giver}:{direction}")
+                await i.response.edit_message(embed=directions_embed(i), view=DirectionsView(self.back_target,
+                                                                                             scope_id=scope))
+            remove.callback = removed
+            self.add_item(remove)
+
+
+_bot = None
+
+
+def _user_label(user_id):
+    user = _bot.get_user(int(user_id)) if _bot is not None else None
+    return getattr(user, "display_name", None) or getattr(user, "name", None) or str(user_id)
 
 
 class LifeConfirmView(PanelView):
@@ -575,6 +750,30 @@ class ClanAdminView(PanelView):
     async def term(self, interaction, button):
         await interaction.response.send_modal(AdjustModal(self.tag, "term"))
 
+    @discord.ui.button(label="Панель клана", emoji="🛡️", style=discord.ButtonStyle.secondary)
+    async def panel(self, interaction, button):
+        import clan_members
+        import clans
+        clan = clans.get_clan(ecosystem.scope(interaction.guild.id), self.tag)
+        if clan is None:
+            await reply(interaction, "clan.error.no_clan")
+            return
+        rank = clan_members.rank_of(clan, interaction.user.id)
+        await interaction.response.edit_message(
+            embed=clan_members.home_embed(interaction, clan, rank),
+            view=clan_members.MyClanView(clan, rank, admin=True, back_target=(core.screen(interaction), self)))
+
+    @discord.ui.button(label="Роль клана", emoji="🧭", style=discord.ButtonStyle.secondary)
+    async def role(self, interaction, button):
+        import clans
+        clan = clans.get_clan(ecosystem.scope(interaction.guild.id), self.tag)
+        if clan is None:
+            await reply(interaction, "clan.error.no_clan")
+            return
+        text, view = clans.role_question(interaction.guild, clan)
+        await interaction.response.send_message(text[:2000], view=view, ephemeral=True,
+                                                allowed_mentions=discord.AllowedMentions.none())
+
     @discord.ui.button(label="Распустить", emoji="🗑️", style=discord.ButtonStyle.danger)
     async def dissolve(self, interaction, button):
         await interaction.response.edit_message(
@@ -689,6 +888,8 @@ async def loop(bot):
 
 def start(bot):
     import asyncio
+    global _bot
+    _bot = bot
     return asyncio.create_task(loop(bot))
 
 

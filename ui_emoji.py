@@ -55,6 +55,18 @@ MAP = {
     "🌙": "d3_moon", "🔁": "ui_refresh", "🔗": "ui_web", "🔧": "d3_wrench", "👑": "d3_crown", "⏳": "d3_hourglass", "⏸": "ui_play", "🎉": "d3_balloon", "🔔": "d3_bell", "❤": "d3_heart", "🎮": "d3_gamepad", "🎵": "d3_music", "🎤": "d3_mic", "📷": "d3_camera", "🎁": "d3_gift",
 }
 
+# В панелях кланов — клановые дудлы создателя бота (doodle_clan_* / d3_clan_*):
+# сундук, герб, свиток квеста, факел, пьедестал… Остальные кнопки — общий набор.
+CLAN_MAP = {
+    "🛡": "d3_clan_crest", "🎯": "d3_clan_scroll", "🎉": "d3_clan_torch", "🛒": "d3_clan_chest",
+    "⚙": "d3_clan_castle", "🚪": "d3_clan_swords", "👑": "d3_clan_helmet", "🔁": "d3_clan_pennant",
+    "🏅": "d3_clan_respect", "🏆": "d3_clan_podium", "📊": "d3_clan_podium", "💰": "d3_clan_coins",
+    "🗓": "d3_clan_calendar", "⏳": "d3_clan_calendar", "📁": "d3_clan_ledger", "🧭": "d3_clan_tag",
+    "👥": "d3_clan_castle", "📨": "d3_clan_scroll", "📣": "d3_clan_pennant", "⭐": "d3_clan_respect",
+    "🎨": "d3_clan_crest",
+}
+CLAN_MODULES = ("clan_", "clans")
+
 _loaded = {}  # имя -> PartialEmoji из хранилища приложения
 # для «Бункер → Диагностика»: что получилось при загрузке (папка -> состояние)
 load_status = {}
@@ -167,39 +179,47 @@ def doodle(emoji):
     return found if isinstance(emoji, discord.PartialEmoji) else str(found)
 
 
-def swap(emoji):
-    """Обычное эмодзи -> своё (если загружено и включено), иначе как было."""
+def swap(emoji, clan=False):
+    """Обычное эмодзи -> своё (если загружено и включено), иначе как было. clan — панель кланов."""
     if not enabled() or emoji is None:
         return emoji
-    return _pick(MAP.get(_key(str(emoji)))) or emoji
+    key = _key(str(emoji))
+    found = _pick(CLAN_MAP.get(key)) if clan else None
+    return found or _pick(MAP.get(key)) or emoji
 
 
-def _swap_any(emoji):
+def _swap_any(emoji, clan=False):
     if emoji is None:
         return None
     if emoji.is_unicode_emoji():
-        return swap(emoji.name)
+        return swap(emoji.name, clan)
     return doodle(emoji)
+
+
+def is_clan_view(view):
+    return type(view).__module__.startswith(CLAN_MODULES)
 
 
 def apply(view):
     """Заменить эмодзи на кнопках и в меню панели. «Назад» и «◀️ Отмена» — эмодзи из подписи."""
     if not enabled():
         return
+    clan = is_clan_view(view)
     for child in view.children:
         if isinstance(child, discord.ui.Select):
             for option in getattr(child, "options", []):
                 if option.emoji is not None:
-                    option.emoji = _swap_any(option.emoji)
+                    option.emoji = _swap_any(option.emoji, clan)
             continue
         if not isinstance(child, discord.ui.Button):
             continue
         if child.emoji is not None:
-            child.emoji = _swap_any(child.emoji)
+            child.emoji = _swap_any(child.emoji, clan)
             continue
         label = child.label or ""
         head, _, rest = label.partition(" ")
-        name = "ui_back" if getattr(child, "_ui_back", False) and _key(head) in MAP else MAP.get(_key(head))
+        name = "ui_back" if getattr(child, "_ui_back", False) and _key(head) in MAP else (
+            (CLAN_MAP.get(_key(head)) if clan else None) or MAP.get(_key(head)))
         emoji = _pick(name)
         if emoji is not None and rest:
             child.emoji = emoji

@@ -459,11 +459,24 @@ def shop_embed(interaction, clan):
                           status=t(f"clan_shop.status.{p['status']}"), reason=p["reason"])
                         for p in purchases(clan["scope_id"], clan["tag"])) or "—"
     closed = "" if clan_life.shop_open(clan["scope_id"], clan["tag"]) else t("clan_shop.closed")
-    return panel_embed(interaction, "clan_shop.home", hints=False, tag=clan["tag"], treasury=treasury, items=items,
-                       history=history, closed=closed)
+    embed = panel_embed(interaction, "clan_shop.home", hints=False, tag=clan["tag"], treasury=treasury, items=items,
+                        history=history, closed=closed)
+    embed.set_image(url="attachment://shop.png")
+    return embed
+
+
+async def shop_file(clan):
+    """Картинка магазина (макет clans.shop): казна и все товары с ценами."""
+    import clan_art
+    import clan_treasury
+    treasury, _ = clan_treasury.balance(clan["scope_id"], clan["tag"])
+    items = [(t(f"clan_shop.item.{key}").lower(), price) for key, (price, _) in ITEMS.items()]
+    return await clan_art.file(clan_art.render_shop, items, treasury, filename="shop.png")
 
 
 class ShopView(PanelView):
+    clear_files_on_back = True
+
     def __init__(self, clan, back_target=None):
         super().__init__(back_target=back_target, timeout=900)
         self.scope_id, self.tag = clan["scope_id"], clan["tag"]

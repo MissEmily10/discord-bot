@@ -1987,12 +1987,12 @@ class EmojiPickerTests(unittest.TestCase):
             run(modal.on_submit(capture(FakeInteraction(g, g.members[STAFF]))))
             picker = shown[-1]["view"]
             selects = [c for c in picker.children if isinstance(c, discord.ui.Select)]
-            self.assertEqual([len(s.options) for s in selects], [25, 5])
-            selects[1]._values = [selects[1].options[0].value]
-            run(selects[1].callback(capture(FakeInteraction(g, g.members[STAFF]))))
+            self.assertEqual([len(s.options) for s in selects], [24])  # все дудлы одним списком: 23 + «Ещё ▶»
+            selects[0]._values = [selects[0].options[1].value]
+            run(selects[0].callback(capture(FakeInteraction(g, g.members[STAFF]))))
             color_view = shown[-1]["view"]
             self.assertIsInstance(color_view, em.ButtonColorView)
-            self.assertEqual(color_view.pending["emoji"], "<:doodle_25:200000000000000025>")
+            self.assertEqual(color_view.pending["emoji"], "<:doodle_01:200000000000000001>")
             self.assertEqual(color_view.pending["label"], "Правила")
         finally:
             form_packs._doodles.clear()
@@ -2424,9 +2424,9 @@ class EmojiExportTests(unittest.TestCase):
         self.assertEqual(replaced, 1)           # doodle_crown — хэша нет: считаем перерисованным
         self.assertEqual(deleted, ["doodle_crown"])
         self.assertEqual(added, 28)             # 30 мест минус два занятых
-        self.assertEqual(no_room, 20)
+        self.assertEqual(no_room, 36)  # 66 дудлов форм (50 + 16 клановых) минус 30 мест
         self.assertNotIn("doodle_star", created)
-        self.assertEqual(len(emoji_export.files_of("all")), 90)  # 50 дудлов форм + 40 иконок кнопок (с цифрами 1–4)
+        self.assertEqual(len(emoji_export.files_of("all")), 106)  # 66 дудлов форм (с клановыми) + 40 иконок кнопок (с цифрами 1–4)
         # повторный запуск ничего не меняет
         created.clear()
         added, skipped, no_room, errors, replaced = run(emoji_export.upload(guild, "forms"))
@@ -4066,7 +4066,7 @@ class ViewSmokeTests(unittest.TestCase):
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
         self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
-                                        "emoji", "pictures", "whisper", "post", "clan", "В референсы стиля",
+                                        "emoji", "pictures", "whisper", "post", "clan", "admin-clan", "В референсы стиля",
                                     "В цитаты дня", "Шепнуть"]))
 
 
@@ -4483,13 +4483,13 @@ class ClanMembershipTests(unittest.TestCase):
             return {item.label for item in cm.MyClanView(clan, rank, admin).children}
         common = {"Карточка клана", "Квесты", "Ивенты"}
         self.assertEqual(labels("member"), common | {"Выйти из клана"})
-        self.assertEqual(labels("rep"), common | {"Пригласить", "Выйти из клана"})
+        self.assertEqual(labels("rep"), common | {"Выйти из клана"})  # принимает бот сервера — без «Пригласить»
         self.assertIn("Исключить", labels("deputy"))
         self.assertIn("Магазин", labels("deputy"))
         self.assertNotIn("Команда", labels("deputy"))
-        self.assertEqual(labels("leader"), common | {"Магазин", "Пригласить", "Исключить", "Команда", "Передать главу",
+        self.assertEqual(labels("leader"), common | {"Магазин", "Исключить", "Команда", "Передать главу",
                                                      "Распустить клан"})
-        self.assertIn("Управление кланами", labels("member", admin=True))
+        self.assertNotIn("Управление кланами", labels("member", admin=True))  # оно в /admin-clan
         self.assertIn("Пригласить", cm.roster_text(self.g, clan) + "Пригласить")
         self.assertIn("место представителя свободно", cm.roster_text(self.g, clan))
 
@@ -4892,6 +4892,68 @@ class ClanLifeTests(unittest.TestCase):
         admin = FakeInteraction(self.g, self.g.members[ADMIN])
         clan_hub.admin_embed(admin)
         clan_hub.AdminView(admin).to_components()
+
+    def test_clan_pictures_from_figma_layouts(self):
+        """Картинки по макетам: карточка в 10 стилях, биллборд, магазин, лидеры, итоги, квесты, «Всё о кланах»."""
+        import io as _io
+
+        import clan_art
+        import clan_billboard
+        import clan_hub
+        from PIL import Image
+        data = clan_hub.card_data(self.g, self.clan)
+        self.assertEqual(data["tag"], self.tag)
+        self.assertTrue(data["members"].endswith("/ 50"))
+        for number in clan_art.STYLES:
+            png = clan_art.render_card(data, number)
+            self.assertEqual(Image.open(_io.BytesIO(png)).size, (1200, 675))
+        self.assertEqual(clan_hub.card_style(GUILD, self.tag), clan_art.DEFAULT_STYLE)
+        rows = clan_billboard.billboard_rows(GUILD)
+        self.assertIn(self.tag, [row["tag"] for row in rows])
+        for png in (clan_art.render_billboard(rows, "1–7 ноя", "2 дн 3 ч"), clan_art.render_billboard([], "w", "1 ч"),
+                    clan_art.render_shop([("смена тега", 1500)], 0),
+                    clan_art.render_leaders([("🤝 Помощь", self.tag, 2), ("Ивенты", "", 0)]),
+                    clan_art.render_month("октября", [("Тест", self.tag, 10)], [("help", self.tag)]),
+                    clan_art.render_quests("срок 1", [("лёгкий", "квест", "не сдан")]),
+                    clan_art.render_directory(3, 40)):
+            self.assertTrue(png.startswith(b"\x89PNG"))
+        self.assertEqual(clan_art.plain("🤝 Помощь"), "Помощь")
+        picture = run(clan_hub.card_file(self.g, self.clan))
+        self.assertEqual(picture.filename, "clan.png")
+        embed = clan_hub.card_embed(FakeInteraction(self.g, self.g.members[901]), self.clan)
+        self.assertEqual(embed.image.url, "attachment://clan.png")
+
+    def test_positions_several_spheres_and_choice(self):
+        """Должности за респект: у главы категории их может быть несколько — сферу он выбирает сам."""
+        import clan_life
+        import clan_treasury
+        clan_life.set_setting(GUILD, "giver_directions", {"777": "events", "778": ["help", "dev"]})
+        try:
+            self.assertEqual(clan_treasury.giver_directions(GUILD, 777), ["events"])  # старая запись строкой
+            self.assertEqual(clan_treasury.giver_direction(GUILD, 778), "help")
+            self.assertEqual(clan_treasury.giver_direction(GUILD, 1), "community")
+            key = f"msg:{self.n}9001"
+            clan_treasury.record(GUILD, self.tag, "", 100, 2, "награда", source_key=key, giver_id=778,
+                                 direction="help")
+            self.assertTrue(clan_treasury.set_direction(GUILD, key, "dev"))
+            self.assertEqual(clan_treasury.respect_by_direction(GUILD, self.tag).get((self.tag, "dev")), 2)
+            view = clan_treasury.sphere_view(GUILD, 778, 9001)
+            self.assertEqual([o.value for o in view.children[0].item.options], ["help", "dev"])
+        finally:
+            clan_life.set_setting(GUILD, "giver_directions", {})
+
+    def test_role_question_and_clan_doodles(self):
+        import clans
+        import ui_emoji
+        text, view = clans.role_question(self.g, self.clan)
+        self.assertIn(self.tag, text)
+        self.assertEqual(view.children[0].item.custom_id, f"rb:clrole:{self.tag}")
+        self.assertEqual(clans.set_clan_role(GUILD, self.tag, 4242)["role_id"], 4242)
+        for name in set(ui_emoji.CLAN_MAP.values()):  # клановые дудлы существуют
+            self.assertTrue(os.path.exists(os.path.join(ui_emoji.DOODLE3D_DIR, name + ".png")), name)
+            self.assertTrue(os.path.exists(os.path.join(ui_emoji.EMOJI_DIR, "doodle_" + name[3:] + ".png")), name)
+        import clan_members
+        self.assertTrue(ui_emoji.is_clan_view(clan_members.MyClanView(self.clan, "member")))
 
 
 if __name__ == "__main__":

@@ -659,14 +659,24 @@ async def open_home(interaction, edit=False):
     clan = clan_of(scope_id, interaction.user.id)
     if clan is not None:
         seed(clan_guild(interaction.client, clan, interaction.guild), clan)
-    admin = is_admin(interaction.guild, interaction.user)
     rank = rank_of(clan, interaction.user.id)
-    view = MyClanView(clan, rank, admin) if clan else JoinView(clans.get_clans(scope_id), admin)
+    # /clan — только для участников: права админа здесь не добавляют кнопок (они в /admin-clan)
+    view = MyClanView(clan, rank) if clan else JoinView(clans.get_clans(scope_id))
     embed = home_embed(interaction, clan, rank)
     if edit:
         await interaction.response.edit_message(embed=embed, view=view)
     else:
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+async def open_admin(interaction):
+    """/admin-clan — администрация и те, кто управляет кланами (уровень «админ» в Purr)."""
+    import clan_hub
+    if not is_admin(interaction.guild, interaction.user):
+        await reply(interaction, "common.need_admin")
+        return
+    await interaction.response.send_message(embed=clan_hub.admin_embed(interaction),
+                                            view=clan_hub.AdminView(interaction), ephemeral=True)
 
 
 def clan_card(interaction, clan):
@@ -678,20 +688,10 @@ def clan_card(interaction, clan):
 
 
 class JoinView(PanelView):
-    """Не в клане: выбрать клан → его карточка → «Подать заявку»."""
+    """Не в клане: список кланов → карточка клана картинкой. Принимает в клан бот сервера (выдаёт роль)."""
 
     def __init__(self, clan_list, admin=False):
         super().__init__(timeout=600)
-        if admin:  # админ без клана — сразу к управлению кланами
-            button = discord.ui.Button(label=t("clan.home.admin_panel")[:80], emoji="⚙️",
-                                       style=discord.ButtonStyle.secondary)
-
-            async def manage(i):
-                import clan_hub
-                await i.response.edit_message(embed=clan_hub.admin_embed(i),
-                                              view=clan_hub.AdminView(i, back_target=(core.screen(i), self)))
-            button.callback = manage
-            self.add_item(button)
         if not clan_list:
             return
         select = core.PagedSelect(placeholder=t("clan.join.pick")[:150], options=[
@@ -704,8 +704,8 @@ class JoinView(PanelView):
                 await reply(i, "clan.error.no_clan")
                 return
             seed(clan_guild(i.client, clan, i.guild), clan)
-            await i.response.edit_message(embed=clan_card(i, clan),
-                                          view=ApplyView(clan["tag"], back_target=(core.screen(i), self)))
+            import clan_hub
+            await clan_hub.show_card(i, clan)
         select.on_pick = picked
         self.add_item(select)
 
@@ -752,24 +752,24 @@ class MyClanView(PanelView):
     """Моя панель в клане: кнопки — только те, что можно по роли в клане."""
 
     texts = "clan.home"
-    button_order = ("card", "quests", "events", "shop", "invite", "kick", "team", "transfer", "dissolve", "leave",
-                    "admin_panel")
+    button_order = ("card", "quests", "events", "shop", "kick", "team", "transfer", "dissolve", "leave")
 
-    def __init__(self, clan, rank, admin=False):
-        super().__init__(timeout=900)
+    def __init__(self, clan, rank, admin=False, back_target=None):
+        super().__init__(timeout=900, back_target=back_target)
         self.tag, self.scope_id = clan["tag"], clan["scope_id"]
         allowed = {
             "card": True,
             "quests": True,
             "events": True,
             "shop": rank in ("leader", "deputy") or admin,
-            "invite": rank in ("leader", "deputy", "rep") or admin,
+            # в клан принимает бот сервера (выдаёт роль) — Purr только записывает; кнопки «Пригласить» нет
+            "invite": False,
             "kick": rank in ("leader", "deputy") or admin,
             "team": rank == "leader" or admin,
             "transfer": rank == "leader" or admin,
             "dissolve": rank == "leader",
             "leave": rank in ("deputy", "rep", "member"),
-            "admin_panel": admin,
+            "admin_panel": False,  # управление кланами — отдельная команда /admin-clan
         }
         for name, ok in allowed.items():
             if not ok:
@@ -794,10 +794,15 @@ class MyClanView(PanelView):
         clan = self.clan()
         term = clan_life.state_of(self.scope_id, self.tag)["term_no"]
         can_submit = rank_of(clan, interaction.user.id) in ("leader", "deputy", "rep") or self.admin(interaction)
-        await interaction.response.edit_message(
-            embed=clan_quests.quests_embed(interaction, self.scope_id, self.tag, term),
-            view=clan_quests.QuestsView(self.scope_id, self.tag, term, can_submit,
-                                        back_target=(core.screen(interaction), self)))
+        back = (core.screen(interaction), self)
+        await interaction.response.defer()
+        picture = await clan_quests.quests_file(self.scope_id, self.tag, term)
+        embed = clan_quests.quests_embed(interaction, self.scope_id, self.tag, term)
+        if picture is None:
+            embed.set_image(url=None)
+        await interaction.edit_original_response(
+            embed=embed, attachments=[picture] if picture else [],
+            view=clan_quests.QuestsView(self.scope_id, self.tag, term, can_submit, back_target=back))
 
     @discord.ui.button(label="Ивенты", emoji="🎉", style=discord.ButtonStyle.secondary)
     async def events(self, interaction, button):
@@ -812,8 +817,14 @@ class MyClanView(PanelView):
     async def shop(self, interaction, button):
         import clan_shop
         clan = self.clan()
-        await interaction.response.edit_message(embed=clan_shop.shop_embed(interaction, clan),
-                                                view=clan_shop.ShopView(clan, back_target=(core.screen(interaction), self)))
+        back = (core.screen(interaction), self)
+        await interaction.response.defer()
+        picture = await clan_shop.shop_file(clan)
+        embed = clan_shop.shop_embed(interaction, clan)
+        if picture is None:
+            embed.set_image(url=None)
+        await interaction.edit_original_response(embed=embed, attachments=[picture] if picture else [],
+                                                 view=clan_shop.ShopView(clan, back_target=back))
 
     @discord.ui.button(label="Распустить клан", emoji="🗑️", style=discord.ButtonStyle.danger)
     async def dissolve(self, interaction, button):
@@ -1121,7 +1132,12 @@ def register(bot):
     bot.add_listener(on_member_remove, "on_member_remove")
     bot.add_listener(on_member_update, "on_member_update")
 
-    @bot.tree.command(name="clan", description="Мой клан: вступить, состав, пригласить, выйти")
+    @bot.tree.command(name="clan", description="Мой клан: карточка, состав, квесты, ивенты, магазин")
     @discord.app_commands.guild_only()
     async def clan_command(interaction):
         await open_home(interaction)
+
+    @bot.tree.command(name="admin-clan", description="Управление кланами: настройки, каналы, казна, роли кланов")
+    @discord.app_commands.guild_only()
+    async def admin_clan_command(interaction):
+        await open_admin(interaction)

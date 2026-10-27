@@ -320,11 +320,19 @@ async def close_month(bot, scope_id, period, guild=None):
                    prize=t(f"clan_billboard.prize.{n}")) for n, row in enumerate(winners, 1)]
         dirs = [t("clan_billboard.dir_line", direction=clan_treasury.DIRECTIONS.get(d, d), tag=tag)
                 for d, (tag, _) in leaders.items()]
+        import clan_art
+        import clans
+        embed = discord.Embed(title=t("clan_billboard.month_title", month=month),
+                              description=t("clan_billboard.month_text", lines="\n".join(lines) or "—",
+                                            dirs="\n".join(dirs) or "—")[:4096], color=0x2B2D31)
+        top = [((clans.get_clan(scope_id, row[0]) or {}).get("name") or row[0], row[0], row[1]) for row in winners]
+        title = MONTHS_OF[int(month.split("-")[1]) - 1]
+        picture = await clan_art.file(clan_art.render_month, title, top,
+                                      [(d, tag) for d, (tag, _) in leaders.items()], filename="month.png")
+        if picture is not None:
+            embed.set_image(url="attachment://month.png")
         try:
-            await channel.send(embed=discord.Embed(
-                title=t("clan_billboard.month_title", month=month),
-                description=t("clan_billboard.month_text", lines="\n".join(lines) or "—",
-                              dirs="\n".join(dirs) or "—")[:4096], color=0x2B2D31))
+            await channel.send(embed=embed, **({"file": picture} if picture else {}))
         except discord.HTTPException:
             pass
     if not live:
@@ -413,7 +421,85 @@ def card_embed(scope_id):
     embed = discord.Embed(title=t("clan_billboard.title"), color=0x2B2D31,
                           description=t("clan_billboard.text", lines="\n".join(lines) or t("clan_billboard.empty"),
                                         end=f"<t:{end}:R>")[:4096])
+    embed.set_image(url="attachment://billboard.png")
     return embed
+
+
+MONTHS_SHORT = ("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+MONTHS_OF = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября",
+             "ноября", "декабря")
+
+
+def left_text(seconds):
+    """Сколько осталось: «2 дн 5 ч» / «3 ч 10 мин»."""
+    seconds = max(0, int(seconds))
+    days, hours, minutes = seconds // 86400, seconds % 86400 // 3600, seconds % 3600 // 60
+    if days:
+        return f"{days} дн {hours} ч"
+    return f"{hours} ч {minutes} мин" if hours else f"{minutes} мин"
+
+
+def billboard_rows(scope_id, period=None):
+    """Строки картинки биллборда: название, тег, активность, баллы и сдвиг места к прошлой неделе."""
+    import clans
+    rows = standings(scope_id, period or week_key())
+    last = next(iter(snapshots(scope_id, "week", limit=1).values()), {})
+    found = []
+    for place, (tag, points, voice, messages, respect) in enumerate(rows, 1):
+        clan = clans.get_clan(scope_id, tag) or {}
+        before = last.get(tag)
+        delta = "" if before is None else ("—" if before == place else
+                                           (f"▲{before - place}" if before > place else f"▼{place - before}"))
+        found.append(dict(name=clan.get("name") or tag, tag=tag, messages=messages, voice_min=round(voice * 60),
+                          respect=respect, points=points, delta=delta))
+    return found
+
+
+async def billboard_file(scope_id):
+    import clan_art
+    end = week_end()
+    start = end - timedelta(days=7)
+    if start.month == end.month:
+        week = f"{start.day}–{end.day} {MONTHS_SHORT[end.month - 1]}"
+    else:
+        week = f"{start.day} {MONTHS_SHORT[start.month - 1]} – {end.day} {MONTHS_SHORT[end.month - 1]}"
+    return await clan_art.file(clan_art.render_billboard, billboard_rows(scope_id), week,
+                               left_text(end.timestamp() - time.time()), filename="billboard.png")
+
+
+async def _card_kwargs(scope_id, edit=False):
+    picture = await billboard_file(scope_id)
+    embed = card_embed(scope_id)
+    if picture is None:
+        embed.set_image(url=None)
+    if edit:
+        return {"embed": embed, "view": card_view(), "attachments": [picture] if picture else []}
+    return {"embed": embed, "view": card_view(), **({"file": picture} if picture else {})}
+
+
+def month_leaders(scope_id, period):
+    """{направление: (тег, респект)} за месяц."""
+    import clan_treasury
+    start, end = month_range(period)
+    leaders = {}
+    for (tag, direction), amount in clan_treasury.respect_by_direction(scope_id, since=start, until=end).items():
+        if amount > 0 and amount > leaders.get(direction, ("", 0))[1]:
+            leaders[direction] = (tag, amount)
+    return leaders
+
+
+def leader_streak(scope_id, direction, tag):
+    """Сколько месяцев подряд (до текущего) клан лидирует в направлении — по значкам."""
+    connection = get_connection()
+    rows = connection.execute("SELECT month, tag FROM clan_awards WHERE scope_id = ? AND kind = ? ORDER BY month DESC",
+                              (scope_id, f"dir:{direction}")).fetchall()
+    connection.close()
+    streak = 1
+    for _, row_tag in rows:
+        if row_tag != tag:
+            break
+        streak += 1
+    return streak
 
 
 class LeadersButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rb:clb:lead"):
@@ -426,19 +512,24 @@ class LeadersButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rb:clb
         return cls(item=item)
 
     async def callback(self, interaction):
+        import clan_art
+        import clan_life
         import clan_treasury
         scope_id = ecosystem.scope(interaction.guild.id)
-        start, end = month_range(month_key())
-        by_direction = clan_treasury.respect_by_direction(scope_id, since=start, until=end)
-        leaders = {}
-        for (tag, direction), amount in by_direction.items():
-            if amount > leaders.get(direction, ("", 0))[1]:
-                leaders[direction] = (tag, amount)
+        clan_life.ensure_tables()
+        leaders = month_leaders(scope_id, month_key())
         lines = [t("clan_billboard.dir_line", direction=label, tag=leaders[key][0])
                  for key, label in clan_treasury.DIRECTIONS.items() if key in leaders]
-        await interaction.response.send_message(
-            embed=discord.Embed(title=t("clan_billboard.leaders_title"), color=0x2B2D31,
-                                description="\n".join(lines) or t("clan_billboard.no_leaders")), ephemeral=True)
+        embed = discord.Embed(title=t("clan_billboard.leaders_title"), color=0x2B2D31,
+                              description="\n".join(lines) or t("clan_billboard.no_leaders"))
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        tiles = [(label, leaders[key][0] if key in leaders else "",
+                  leader_streak(scope_id, key, leaders[key][0]) if key in leaders else 0)
+                 for key, label in clan_treasury.DIRECTIONS.items()]
+        picture = await clan_art.file(clan_art.render_leaders, tiles, filename="leaders.png")
+        if picture is not None:
+            embed.set_image(url="attachment://leaders.png")
+        await interaction.followup.send(embed=embed, ephemeral=True, **({"file": picture} if picture else {}))
 
 
 def card_view():
@@ -450,7 +541,7 @@ def card_view():
 async def publish(channel, scope_id):
     """Поставить живую карточку биллборда в канал (и запомнить, чтобы обновлять)."""
     import clan_life
-    message = await channel.send(embed=card_embed(scope_id), view=card_view())
+    message = await channel.send(**await _card_kwargs(scope_id))
     clan_life.set_setting(scope_id, "billboard_channel", channel.id)
     clan_life.set_setting(scope_id, "billboard_message", message.id)
     return message
@@ -464,7 +555,7 @@ async def refresh_card(bot, scope_id):
         return
     try:
         message = await channel.fetch_message(int(message_id))
-        await message.edit(embed=card_embed(scope_id), view=card_view())
+        await message.edit(**await _card_kwargs(scope_id, edit=True))
     except discord.HTTPException:
         pass
 

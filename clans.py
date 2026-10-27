@@ -391,6 +391,14 @@ async def on_message(message):
     if words.startswith(TRIGGERS_SYNC):
         found = await sync_categories(message.guild)
         await _say(message, "clans.synced", count=len(found), tags=", ".join(f"[{tag}]" for tag in found) or "—")
+        for tag in found:  # роль не нашлась сама — спросить
+            clan = get_clan(scope_id, tag)
+            if clan is not None and not clan.get("role_id") and not await ask_role(message.client, message.guild, clan):
+                text, view = role_question(message.guild, clan)
+                try:
+                    await message.channel.send(text[:2000], view=view, allowed_mentions=discord.AllowedMentions.none())
+                except discord.HTTPException:
+                    pass
         return
     if re.fullmatch(r"клан\s+\[?[^\s\[\]]{2,5}\]?", words):
         tag = words.split()[1].strip("[]")
@@ -440,6 +448,82 @@ async def save_category_clan(guild, clan):
     return register(ecosystem.scope(guild.id), clan, guild_id=guild.id, source_key=f"cat:{clan['category_id']}")
 
 
+# ============================================================
+# РОЛЬ КЛАНА: бот нашёл категорию — спрашивает роль
+# ============================================================
+# Роль клана называется как категория: «ТЕГ · Название». Её выдаёт другой
+# бот при приёме в клан, а Purr по выдаче/снятию роли ведёт состав.
+
+def set_clan_role(scope_id, tag, role_id):
+    ensure_tables()
+    connection = get_connection()
+    connection.execute("UPDATE clans SET role_id = ? WHERE scope_id = ? AND tag = ?", (role_id, scope_id, tag.upper()))
+    connection.commit()
+    connection.close()
+    return get_clan(scope_id, tag)
+
+
+class ClanRoleSelect(discord.ui.DynamicItem[discord.ui.RoleSelect], template=r"rb:clrole:(?P<tag>[^:]{2,5})"):
+    """Постоянное меню «какая роль у клана» — живёт и после перезапуска бота."""
+
+    def __init__(self, tag, role=None, *, item=None):
+        self.tag = tag
+        super().__init__(item or discord.ui.RoleSelect(
+            custom_id=f"rb:clrole:{tag}", placeholder=t("clans.role.pick")[:150], min_values=1, max_values=1,
+            default_values=[role] if role is not None else []))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["tag"], item=item)
+
+    async def callback(self, interaction):
+        import clan_members
+        if not can_manage(interaction.guild, interaction.user):
+            await interaction.response.send_message(t("clans.denied"), ephemeral=True)
+            return
+        scope_id = ecosystem.scope(interaction.guild.id)
+        clan = get_clan(scope_id, self.tag)
+        role = self.item.values[0] if self.item.values else None
+        if clan is None or role is None:
+            await interaction.response.send_message(t("clans.not_found", tag=self.tag), ephemeral=True)
+            return
+        if role.is_default() or role.managed or role.permissions.administrator:
+            await interaction.response.send_message(t("clans.role.bad"), ephemeral=True)
+            return
+        clan = set_clan_role(scope_id, self.tag, role.id)
+        clan_members.ensure_tables()
+        clan_members.seed(interaction.guild, clan)  # все, у кого уже есть роль, — в реестр
+        core.audit(interaction, "clan.role_set", "clan", self.tag, role.name)
+        await interaction.response.edit_message(
+            content=t("clans.role.saved", tag=self.tag, role=role.mention,
+                      count=len(clan_members.member_ids(scope_id, self.tag))), view=None)
+
+
+def role_question(guild, clan):
+    """Текст и меню вопроса «какая роль у клана [ТЕГ]»."""
+    role = guild.get_role(clan.get("role_id") or 0) if guild is not None else None
+    found = t("clans.role.found", role=role.mention) if role else t("clans.role.missing", tag=clan["tag"],
+                                                                     name=clan.get("name") or "")
+    view = discord.ui.View(timeout=None)
+    view.add_item(ClanRoleSelect(clan["tag"], role))
+    return t("clans.role.ask", tag=clan["tag"], name=clan.get("name") or "—", found=found), view
+
+
+async def ask_role(bot, guild, clan):
+    """Спросить роль клана в журнале кланов (канал из «Управление кланами»)."""
+    import clan_life
+    channel_id = clan_life.setting(ecosystem.scope(guild.id), "log_channel")
+    channel = bot.get_channel(int(channel_id)) if channel_id else None
+    if channel is None:
+        return False
+    text, view = role_question(guild, clan)
+    try:
+        await channel.send(text[:2000], view=view, allowed_mentions=discord.AllowedMentions.none())
+    except discord.HTTPException:
+        return False
+    return True
+
+
 async def sync_categories(guild):
     """Все категории по шаблону клана на сервере -> в реестр. -> теги новых/обновлённых."""
     found = []
@@ -461,10 +545,18 @@ async def on_category_create(channel):
     if clan is not None:
         result, saved = await save_category_clan(channel.guild, clan)
         core._log.info("clan %s %s from category %s", saved["tag"], result, channel.id)
+        if _bot is not None and result != "duplicate":
+            await ask_role(_bot, channel.guild, saved)
+
+
+_bot = None
 
 
 def register_listeners(bot):
+    global _bot
+    _bot = bot
     ensure_tables()
     bot.add_listener(on_message, "on_message")
     bot.add_listener(on_category_create, "on_guild_channel_create")
     bot.add_listener(on_message_edit, "on_message_edit")
+DYNAMIC_ITEMS = [ClanRoleSelect]

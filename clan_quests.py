@@ -317,6 +317,8 @@ class SubmitModal(Modal, title="СДАТЬ КВЕСТ"):
 class QuestsView(PanelView):
     """Квесты срока: три квеста и «Сдать» у каждого (глава, замы, представители)."""
 
+    clear_files_on_back = True
+
     def __init__(self, scope_id, tag, term_no, can_submit, back_target=None):
         super().__init__(back_target=back_target, timeout=900)
         rows = assign(scope_id, tag, term_no)
@@ -336,8 +338,22 @@ class QuestsView(PanelView):
 
 
 def quests_embed(interaction, scope_id, tag, term_no):
-    return panel_embed(interaction, "clan_quests.panel", hints=False, tag=tag, term=term_no,
-                       quests=quests_text(scope_id, tag, term_no)[:3500], done=done_count(scope_id, tag, term_no))
+    embed = panel_embed(interaction, "clan_quests.panel", hints=False, tag=tag, term=term_no,
+                        quests=quests_text(scope_id, tag, term_no)[:3500], done=done_count(scope_id, tag, term_no))
+    embed.set_image(url="attachment://quests.png")
+    return embed
+
+
+async def quests_file(scope_id, tag, term_no):
+    """Картинка квестов срока (макет clans.quests)."""
+    import re
+
+    import clan_art
+    rows = []
+    for level, row in sorted(assign(scope_id, tag, term_no).items(), key=lambda kv: LEVELS.index(kv[0])):
+        status = re.sub(r"^[^\w«]+", "", t(f"clan_quests.status.{row['status']}"))  # без эмодзи — их нет в шрифте
+        rows.append((t(f"clan_quests.level.{level}").lower(), quest_info(row)["title"], status))
+    return await clan_art.file(clan_art.render_quests, f"срок {term_no}", rows, filename="quests.png")
 
 
 async def remind_stale(bot):

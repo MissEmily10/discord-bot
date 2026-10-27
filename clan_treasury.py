@@ -76,11 +76,66 @@ def direction_of(text):
     return None
 
 
-def giver_direction(guild_id, giver_id):
-    """Направление респекта за .награду — по главе категории, который её выдал (задают админы)."""
+def giver_directions(guild_id, giver_id):
+    """Должности главы категории: за что он даёт респект (их может быть несколько). Задают админы."""
     import clan_life
-    mapping = clan_life.setting(guild_id, "giver_directions", {})
-    return mapping.get(str(giver_id)) or "community"
+    value = clan_life.setting(guild_id, "giver_directions", {}).get(str(giver_id))
+    found = [value] if isinstance(value, str) else list(value or [])
+    return [d for d in found if d in DIRECTIONS]
+
+
+def giver_direction(guild_id, giver_id):
+    """Направление респекта за .награду: первая должность выдавшего; нет должности — «Сообщество»."""
+    found = giver_directions(guild_id, giver_id)
+    return found[0] if found else "community"
+
+
+def set_direction(guild_id, source_key, direction):
+    """Отнести уже записанный респект к другой сфере (выдавший с несколькими должностями выбрал)."""
+    ensure_tables()
+    connection = get_connection()
+    cursor = connection.execute("UPDATE clan_ledger SET direction = ? WHERE guild_id = ? AND source_key = ?",
+                                (direction, guild_id, source_key))
+    connection.commit()
+    connection.close()
+    return cursor.rowcount > 0
+
+
+class SphereSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"rb:clsph:(?P<giver>\d+):(?P<mid>\d+)"):
+    """У выдавшего несколько должностей — он выбирает, к какой сфере относится респект."""
+
+    def __init__(self, giver_id, message_id, options=None, *, item=None):
+        self.giver_id, self.message_id = int(giver_id), int(message_id)
+        super().__init__(item or discord.ui.Select(
+            custom_id=f"rb:clsph:{giver_id}:{message_id}", placeholder=t("clan_treasury.sphere.pick")[:150],
+            options=options or [discord.SelectOption(label="—", value="community")]))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["giver"], match["mid"], item=item)
+
+    async def callback(self, interaction):
+        import clan_members
+        if interaction.user.id != self.giver_id and not clan_members.is_admin(interaction.guild, interaction.user):
+            await interaction.response.send_message(t("clan_treasury.sphere.not_yours", who=f"<@{self.giver_id}>"),
+                                                    ephemeral=True)
+            return
+        direction = self.item.values[0] if self.item.values else None
+        if direction not in DIRECTIONS:
+            await interaction.response.send_message(t("clan_treasury.sphere.not_yours", who=f"<@{self.giver_id}>"),
+                                                    ephemeral=True)
+            return
+        set_direction(ecosystem.scope(interaction.guild.id), f"msg:{self.message_id}", direction)
+        core.audit(interaction, "clan.respect_sphere", "message", self.message_id, direction)
+        await interaction.response.edit_message(content=t("clan_treasury.sphere.saved", sphere=DIRECTIONS[direction]),
+                                                view=None)
+
+
+def sphere_view(guild_id, giver_id, message_id):
+    options = [discord.SelectOption(label=DIRECTIONS[d][:100], value=d) for d in giver_directions(guild_id, giver_id)]
+    view = discord.ui.View(timeout=None)
+    view.add_item(SphereSelect(giver_id, message_id, options))
+    return view
 
 
 def spend(guild_id, tag, amount, reason, source_key=None, by_user=None):
@@ -419,6 +474,16 @@ async def on_message(message):
                    message.author.id)
     await _say(message, "clan_treasury.fixed", tag=card["tag"], amount=card["to_treasury"],
                respect=f"{card['respect']:g}", treasury=treasury, total=f"{respect:g}")
+    positions = giver_directions(area, card["giver_id"]) if card.get("giver_id") else []
+    if len(positions) > 1 and card["respect"]:
+        try:  # несколько должностей — пусть выдавший выберет сферу (пока не выбрал — первая)
+            await message.channel.send(
+                t("clan_treasury.sphere.ask", who=f"<@{card['giver_id']}>", tag=card["tag"],
+                  respect=f"{card['respect']:g}", first=DIRECTIONS[positions[0]]),
+                view=sphere_view(area, card["giver_id"], source.id),
+                allowed_mentions=discord.AllowedMentions(users=[discord.Object(card["giver_id"])]))
+        except discord.HTTPException:
+            pass
 
 
 async def undo(message, key):
@@ -438,3 +503,6 @@ async def undo(message, key):
 def register(bot):
     ensure_tables()
     bot.add_listener(on_message, "on_message")
+
+
+DYNAMIC_ITEMS = [SphereSelect]
