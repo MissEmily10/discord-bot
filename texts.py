@@ -969,6 +969,7 @@ CATALOG = {
     "clan_hub.channels.billboard_channel": "Канал биллборда и отчётов…",
     "clan_hub.channels.council_category": "Категория для канала Совета…",
     "clan_hub.channels.duty_role": "Роль дежурных админов…",
+    "clan_hub.channels.duty_button": "Роль дежурных",
     "clan_hub.channels.saved": "Сохранено.",
     "clan_hub.days_modal.title": "НОВЫЕ КЛАНЫ В СПИСКЕ",
     "clan_hub.days_modal.days": "Через сколько дней после создания",

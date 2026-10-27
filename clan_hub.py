@@ -500,12 +500,21 @@ class ChannelsView(PanelView):
                 await self.store(i, key, select.values[0].id)
             select.callback = picked
             self.add_item(select)
-        role = discord.ui.RoleSelect(placeholder=t("clan_hub.channels.duty_role")[:150])
+        # пять списков + «Назад» в одно сообщение не влезают — роль дежурных отдельным экраном
+        duty = discord.ui.Button(label=t("clan_hub.channels.duty_button")[:80], emoji="👥",
+                                 style=discord.ButtonStyle.secondary, row=4)
 
-        async def role_picked(i):
-            await self.store(i, "duty_role", role.values[0].id)
-        role.callback = role_picked
-        self.add_item(role)
+        async def open_duty(i):
+            view = PanelView(back_target=(core.screen(i), self), timeout=600)
+            role = discord.ui.RoleSelect(placeholder=t("clan_hub.channels.duty_role")[:150])
+
+            async def role_picked(ri):
+                await self.store(ri, "duty_role", role.values[0].id)
+            role.callback = role_picked
+            view.add_item(role)
+            await i.response.edit_message(view=view)
+        duty.callback = open_duty
+        self.add_item(duty)
 
     async def store(self, interaction, key, value):
         import clan_life

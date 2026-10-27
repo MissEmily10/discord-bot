@@ -305,13 +305,14 @@ async def close_month(bot, scope_id, period, guild=None):
                            "VALUES (?, ?, ?, 1, ?)", (scope_id, month, tag, f"dir:{direction}"))
     connection.commit()
     connection.close()
+    live = clan_life.enabled(scope_id)  # роли и канал Совета — только когда админ включил жизнь кланов
     for place, row in enumerate(winners, 1):
-        if place <= 2:
+        if place <= 2 and live:
             state = clan_life.state_of(scope_id, row[0])
             state["free_renewals"] += 1
             clan_life.save_state(state)
     guild = guild or bot.get_guild(scope_id)
-    if guild is not None:
+    if guild is not None and live:
         await apply_role_awards(guild, scope_id, [row[0] for row in winners])
     channel = _channel(bot, scope_id, "billboard_channel")
     if channel is not None:
@@ -326,6 +327,8 @@ async def close_month(bot, scope_id, period, guild=None):
                               dirs="\n".join(dirs) or "—")[:4096], color=0x2B2D31))
         except discord.HTTPException:
             pass
+    if not live:
+        return
     try:
         import clan_hub
         dev_order = [tag for (tag, direction), amount in sorted(by_direction.items(), key=lambda kv: -kv[1])
