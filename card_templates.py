@@ -1601,17 +1601,19 @@ def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=(
     cw = first.width
     placed, block = layout(round(WIDTH / ratio))
     content_h = height + (block + PAD // 2 if block else 0)
-    # размер баннера при отрисовке: данные целиком помещаются внутрь обводки,
-    # а обводка — в зону, которую видно и на телефоне (дальше — уменьшение до 960×540)
-    edge = OUTLINE_GAP + OUTLINE_WIDTH + OUTLINE_PAD
-    width = math.ceil(max(cw / (1 - 2 * edge), content_h / (1 / PHONE_RATIO - 2 * edge)))
+    # размер баннера при отрисовке — как можно крупнее: данные (без внутренних полей
+    # картинки — фон у неё тот же, что у баннера) влезают в зону, видную на телефоне,
+    # с отступом BANNER_MARGIN со всех сторон. Потом — уменьшение до 960×540.
+    inner_w, inner_h = cw - 2 * PAD, content_h - INNER_TOP - PAD
+    width = math.ceil(max(cw, inner_w / (1 - 2 * BANNER_MARGIN),
+                          inner_h / (1 / PHONE_RATIO - 2 * BANNER_MARGIN)))
     full_h = round(width / ratio)
-    dx, dy = (width - cw) // 2, (full_h - content_h) // 2
+    dx = (width - cw) // 2
+    dy = round((full_h - inner_h) / 2) - INNER_TOP
     corner = first.getpixel((4, 4))
     if plain:
         back = Image.new("RGB", (width, full_h), corner)
         picture = first
-        ink = INK if sum(corner) / 3 > 140 else CREAM
     else:  # фон картинки — на весь баннер, рамка за обводкой — тем же фоном, стык не виден
         holder = types.SimpleNamespace(st=st, theme=theme, image=Image.new("RGB", (width, full_h), theme["bg"]))
         holder.draw = ImageDraw.Draw(holder.image)
@@ -1619,7 +1621,6 @@ def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=(
         back = holder.image
         data["_backdrop"] = back.crop((dx, dy, dx + cw, dy + height))
         picture = Image.open(io.BytesIO(render(card, title, data, empty_text))).convert("RGB")
-        ink = theme["ink"]
     back.paste(picture, (dx, dy))
     draw = ImageDraw.Draw(back)
     y = dy + height - PAD // 2
@@ -1627,12 +1628,6 @@ def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=(
         x, anchor = {"l": (dx + PAD, "la"), "c": (dx + cw // 2, "ma"), "r": (dx + cw - PAD, "ra")}[align]
         draw.text((x, y), text, font=fnt, fill=color, anchor=anchor)
         y += int(fnt.size * 1.15)
-    # жирная обводка с одинаковыми отступами со всех сторон (в видимой на телефоне зоне);
-    # скруглён только верхний левый угол — как Discord скругляет сам баннер
-    gap, stroke = round(width * OUTLINE_GAP), max(2, round(width * OUTLINE_WIDTH))
-    top = (full_h - width / PHONE_RATIO) / 2
-    draw.rounded_rectangle((gap, top + gap, width - gap, full_h - top - gap), radius=round(width * OUTLINE_RADIUS),
-                           outline=ink, width=stroke, corners=(True, False, False, False))
     if not plain and st.get("fx") == "glitch":
         back = glitch(back, colors=theme["grad"])
     output = io.BytesIO()
@@ -1641,13 +1636,10 @@ def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=(
 
 
 # Discord на телефоне показывает баннер не целиком: срезает сверху и снизу (видно
-# примерно 2.6:1) и скругляет только верхний левый угол. Поэтому обводка стоит в
-# зоне, видной на телефоне: сверху, снизу и по бокам — одинаковые отступы.
+# примерно 2.6:1). Данные стоят в этой зоне с одинаковым отступом со всех сторон.
 PHONE_RATIO = 2.6
-OUTLINE_GAP = 0.03      # отступ обводки от края видимой зоны (доля ширины баннера)
-OUTLINE_WIDTH = 0.012   # толщина обводки
-OUTLINE_PAD = 0.02      # от обводки до данных
-OUTLINE_RADIUS = 0.035  # скругление верхнего левого угла
+BANNER_MARGIN = 0.04  # отступ от края видимой зоны (доля ширины баннера)
+INNER_TOP = 24        # над заголовком у картинки пусто — это тоже часть отступа
 
 
 def banner_from_png(png, lines=(), size=BANNER_SIZE):
