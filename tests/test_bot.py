@@ -2429,7 +2429,8 @@ class EmojiExportTests(unittest.TestCase):
         self.assertNotIn("doodle_star", created)
         self.assertEqual(len(emoji_export.files_of("clans")), 16)  # клановые дудлы — отдельным пакетом
         self.assertTrue(all(name.startswith("d3_clan_") for name, _ in emoji_export.files_of("clans")))  # 3D
-        self.assertEqual(len(emoji_export.files_of("all")), 106)  # 50 форм + 16 клановых + 40 иконок кнопок
+        self.assertEqual(len(emoji_export.files_of("smileys")), 25)  # фирменные смайлики бота
+        self.assertEqual(len(emoji_export.files_of("all")), 131)  # 50 форм + 16 клановых + 25 смайликов + 40 кнопок
         # повторный запуск ничего не меняет
         created.clear()
         added, skipped, no_room, errors, replaced = run(emoji_export.upload(guild, "forms"))
@@ -2458,7 +2459,7 @@ class EmojiExportTests(unittest.TestCase):
         import hubs
         self.assertIn("bot_emoji", hubs.EminemovnaHome.button_order)
         labels = {c.label for c in emoji_export.ExportView(1).children if isinstance(c, discord.ui.Button)}
-        self.assertTrue({"Все", "Дудлы форм", "Клановые 3D-дудлы", "Дудлы кнопок"} <= labels)
+        self.assertTrue({"Все", "Дудлы форм", "Клановые 3D-дудлы", "Смайлики", "Дудлы кнопок"} <= labels)
         self.assertNotIn("upload_ours", open(emoji_cmd.__file__, encoding="utf-8").read())
 
     def test_ping_by_user_role_or_empty_text(self):

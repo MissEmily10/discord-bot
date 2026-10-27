@@ -4,7 +4,7 @@ panel_art/emoji) на сервер.
 
 Владелец бота открывает /eminemovna → «Эмодзи бота» на нужном сервере — бот
 показывает, сколько там свободных мест, и даёт кнопки: залить все, только дудлы
-форм, только клановые или только дудлы кнопок. Эмодзи с тем же именем
+форм, только клановые, только фирменные смайлики или только дудлы кнопок. Эмодзи с тем же именем
 пропускаются, а если картинку перерисовали — заменяются новой (emoji_sync).
 Боту нужно право «Управлять выражениями» (Manage Expressions).
 """
@@ -24,6 +24,7 @@ EMOJI_DIR = os.path.join(ROOT, "panel_art", "emoji")
 SETS = {
     "forms": (EMOJI_DIR, lambda name: not name.startswith("doodle_clan_")),
     "clans": (os.path.join(EMOJI_DIR, "doodle3d"), lambda name: name.startswith("d3_clan_")),  # клановые — 3D
+    "smileys": (os.path.join(EMOJI_DIR, "smiley"), lambda name: name.startswith("smile_")),  # фирменные смайлики
     "buttons": (os.path.join(EMOJI_DIR, "ui"), lambda name: True),
 }
 
@@ -49,7 +50,8 @@ def free_slots(guild):
 def summary(guild):
     existing = {e.name for e in guild.emojis}
     return t("emoji_export.text", free=free_slots(guild), limit=guild.emoji_limit,
-             forms=len(files_of("forms")), clans=len(files_of("clans")), buttons=len(files_of("buttons")),
+             forms=len(files_of("forms")), clans=len(files_of("clans")), smileys=len(files_of("smileys")),
+             buttons=len(files_of("buttons")),
              already=len([n for n, _ in files_of("all") if n in existing]))
 
 
@@ -96,7 +98,7 @@ async def upload(guild, which, progress=None):
 
 
 class ExportView(PanelView):
-    button_order = ("all", "forms", "clans", "buttons")
+    button_order = ("all", "forms", "clans", "smileys", "buttons")
 
     def __init__(self, guild_id, back_target=None):
         super().__init__(timeout=900, back_target=back_target)
@@ -141,6 +143,10 @@ class ExportView(PanelView):
     @discord.ui.button(label="Клановые 3D-дудлы", emoji="🛡️", style=discord.ButtonStyle.secondary)
     async def clans(self, interaction, button):
         await self._run(interaction, "clans")
+
+    @discord.ui.button(label="Смайлики", emoji="😊", style=discord.ButtonStyle.secondary)
+    async def smileys(self, interaction, button):
+        await self._run(interaction, "smileys")
 
     @discord.ui.button(label="Дудлы кнопок", emoji="🔘", style=discord.ButtonStyle.secondary)
     async def buttons(self, interaction, button):
