@@ -1,11 +1,16 @@
 """
 clans_now.py
 ============
-/clans-now — готовый пост для участников: как кланы устроены сейчас, пока
-Purr нет на сервере (всё делает бот сервера). Десять карточек с баннерами
-создателя бота (panel_art/purr) одним сообщением: бот отправляет его в
-выбранный канал, а дальше его пересылают в информационный канал сервера
-(в Discord: … → «Переслать»).
+/clans-now — информационные посты для участников: как кланы устроены сейчас,
+пока Purr нет на сервере (всё делает бот сервера). Их пересылают в ветки
+информационного канала (в Discord: … → «Переслать»).
+
+- /clans-now тема:<о чём> — как /post новость, но информационный пост: нейросеть
+  подробно объясняет, как работает функция, по одним фактам из
+  docs/CLANS_NOW.md (без приветствий, планов и Purr); бот рисует баннер, пост
+  открывается в конструкторе на сайте — там правится и отправляется.
+- /clans-now без темы — общий обзор: десять карточек с баннерами создателя
+  бота (panel_art/purr) одним сообщением в выбранный канал.
 
 Только то, что уже работает в боте сервера (docs/CLANS_INFO_CHANNEL.md, п. 1–2):
 без Purr, без «скоро» и без открытых вопросов. Тексты меняются в веб-панели
@@ -95,10 +100,16 @@ class SendView(core.PanelView):
 
 
 def register(bot):
-    @bot.tree.command(name="clans-now", description="Пост для участников: как кланы устроены сейчас — переслать в инфо-канал")
+    @bot.tree.command(name="clans-now", description="Инфо-пост о том, как кланы работают сейчас (без Purr) — по теме или обзор")
     @discord.app_commands.guild_only()
-    async def clans_now_command(interaction):
+    @discord.app_commands.describe(topic="О чём пост — нейросеть подробно расскажет, как это работает сейчас")
+    @discord.app_commands.rename(topic="тема")
+    async def clans_now_command(interaction, topic: discord.app_commands.Range[str, 3, 1000] = None):
         if not await core.require_command_access(interaction, "clans-now"):
+            return
+        if topic:
+            import news_generator
+            await news_generator.run(interaction, topic, info=True)
             return
         await interaction.response.send_message(embed=core.panel_embed(interaction, "clans_now.home", hints=False),
                                                 view=SendView(), ephemeral=True)

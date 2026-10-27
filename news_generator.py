@@ -2,6 +2,8 @@
 news_generator.py
 =================
 Клановая новость по сути от создателя бота: «/post новость: <о чём>».
+И информационный пост «/clans-now тема: <о чём>» — только о том, что работает
+сейчас (docs/CLANS_NOW.md), без приветствий, планов и Purr.
 
 1. Нейросеть (clan_info.complete — те же ключи, что для вопросов о кланах)
    пишет новость по разделам и выбирает **самое подходящее** оформление:
@@ -60,6 +62,61 @@ PROMPT = """Ты — редактор новостей Discord-сервера. �
 ДОКУМЕНТЫ О КЛАНАХ:
 {docs}"""
 
+INFO_PROMPT = """Ты пишешь ИНФОРМАЦИОННЫЙ пост для Discord-сервера (не новость): создатель бота дал тему — подробно и
+понятно объясни участникам, как это работает СЕЙЧАС. Пост потом перешлют в ветку с правилами.
+Правила:
+- Только факты из документа «КАК КЛАНЫ РАБОТАЮТ СЕЙЧАС» ниже. Ничего не придумывай: ни чисел, ни правил, ни команд,
+  ни сроков, которых там нет. Чего в документе нет — не пиши вовсе.
+- Без приветствий, без вступлений («Привет!», «Друзья», «У нас новость»), без восклицаний про «новое» и «скоро»,
+  без планов и анонсов. Не упоминай бота Purr.
+- Пиши для участников («вы»), по делу: что это, как работает по шагам, цифры, кто что может, что важно не забыть
+  (⚠️ для предупреждений). Подробно, но без воды.
+- Внутреннюю кухню (доли владельцев, админские процедуры) не пиши, если о ней прямо не просили.
+
+Ответ — ТОЛЬКО JSON без пояснений:
+{{
+  "template": "<ключ шаблона баннера — самый подходящий по смыслу темы>",
+  "banner": {{<тексты для шаблона: те же поля, что в его примере; КОРОТКО — заголовок до 40 символов, текст до 100;
+             даты, «скоро», «новое» и т. п. не используй; плюс "word" — фирменная надпись: английское слово по теме
+             строчными с растянутой гласной, до 12 знаков (claaaans, treaaasury, queeests, shoooop, fiiire,
+             biiillboard, leaaader, reneeew)>}},
+  "content": "",
+  "sections": [
+    {{"heading": "<заголовок раздела, до 40 символов>",
+      "text": "<текст раздела в Markdown Discord: **жирное**, списки «- », подсписки «  - »; до 900 символов>",
+      "icon": "<имя дудла из списка — самый подходящий по смыслу раздела>"}}
+  ]
+}}
+Разделов 2–{max_sections}. Иконки разделов не повторяй, если есть подходящие разные.
+
+ШАБЛОНЫ БАННЕРА (ключ — название — поля с примером):
+{templates}
+
+ДУДЛЫ ДЛЯ РАЗДЕЛОВ (имя — что изображено):
+{icons}
+
+КАК КЛАНЫ РАБОТАЮТ СЕЙЧАС:
+{docs}"""
+NOW_DOC = ROOT / "docs" / "CLANS_NOW.md"
+# шаблоны без дат, «new!», команд Purr и анонсов; поля, которые нейросеть не заполнила, — отсюда, а не из примеров
+INFO_TEMPLATES = {
+    "rules": {"title": "Как это работает"},
+    "alert": {"title": "Важно знать"},
+    "split": {"tag": "#кланы", "word": "claaaans"},
+    "news": {"tag": "#кланы", "date": "как устроено", "word": "claaaans"},
+    "milestone": {},
+}
+
+
+def now_doc():
+    """Что работает сейчас (docs/CLANS_NOW.md) — без строк-пояснений для нас в начале."""
+    try:
+        text = NOW_DOC.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    return text[text.find("## "):] if "## " in text else text
+
+
 ICON_WORDS = {
     "balloon": "воздушный шарик, праздник", "bell": "колокольчик, уведомления", "bolt": "молния, быстро, энергия",
     "book": "книга, правила, история", "brush": "кисть, творчество", "cake": "торт, день рождения",
@@ -92,11 +149,11 @@ def _render_news():
     return render_news
 
 
-def templates_text():
+def templates_text(only=None):
     rn = _render_news()
     lines = []
     for key, (label, defaults, _) in rn.T.items():
-        if key in SKIP_TEMPLATES:
+        if key in SKIP_TEMPLATES or (only and key not in only):
             continue
         sample = json.dumps(defaults, ensure_ascii=False)
         lines.append(f"- {key} — {label} — {sample}")
@@ -148,7 +205,7 @@ def render_banner(key, texts):
     rn = _render_news()
     if key not in rn.T or key in SKIP_TEMPLATES:
         key = "alert"
-    allowed = set(rn.T[key][1])
+    allowed = set(rn.T[key][1]) | {"word"}  # фирменная надпись с растянутой буквой — у всех шаблонов
     texts = {k: str(v) for k, v in (texts or {}).items() if k in allowed and v not in (None, "")}
     for _ in range(5):
         try:
@@ -223,17 +280,50 @@ async def generate(brief, secretary=True):
     return await asyncio.to_thread(build_post, data, banner), None
 
 
-async def run(interaction, brief):
+async def generate_info(topic):
+    """Тема -> (payload информационного поста о том, что работает сейчас, None) или (None, ключ ошибки)."""
+    import clan_info
+    if clan_info.provider() is None:
+        return None, "news.no_ai"
+    docs = now_doc()
+    if not docs:
+        return None, "clans_now.no_doc"
+    system = INFO_PROMPT.format(templates=templates_text(INFO_TEMPLATES), icons=icons_text(),
+                                max_sections=MAX_SECTIONS - 2, docs=docs)
+    answer = await clan_info.complete(system, f"Тема поста от создателя бота:\n{topic}", max_tokens=4000)
+    data = parse_answer(answer)
+    if data is None:
+        _log.warning("info post: model answer is not JSON: %s", (answer or "")[:300])
+        return None, "news.bad_answer"
+    data["content"] = ""  # без строки-приветствия над постом
+    template = str(data.get("template") or "rules")
+    template = template if template in INFO_TEMPLATES else "rules"
+    texts = dict(INFO_TEMPLATES[template], title=topic[:40])
+    if template == "milestone" and not all(k in (data.get("banner") or {}) for k in ("number", "unit", "text")):
+        template, texts = "rules", dict(INFO_TEMPLATES["rules"], title=topic[:40])  # без числа — правила
+    texts.update({k: v for k, v in (data.get("banner") or {}).items() if v not in (None, "")})
+    rn = _render_news()
+    for key, value in rn.T[template][1].items():  # пример шаблона не должен попасть в пост
+        texts.setdefault(key, "" if key not in ("title", "text", "items") else value)
+    if template == "rules" and "items" not in (data.get("banner") or {}):
+        texts["items"] = "\n".join(str(s.get("heading") or "") for s in data["sections"][:4] if isinstance(s, dict))
+    if template in ("news", "split", "alert") and "text" not in (data.get("banner") or {}):
+        texts["text"] = str((data["sections"][0] or {}).get("heading") or topic)[:100]
+    banner = await asyncio.to_thread(render_banner, template, texts)
+    return await asyncio.to_thread(build_post, data, banner), None
+
+
+async def run(interaction, brief, info=False):
     """/post → «Новость» — сгенерировать и открыть в конструкторе (или в /embed)."""
     import post_builder
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
     secretary = core.level_value(core.get_user_level(interaction)) >= core.level_value("admin")
-    payload, error = await generate(brief, secretary=secretary)
+    payload, error = await (generate_info(brief) if info else generate(brief, secretary=secretary))
     if error:
         await interaction.followup.send(t(error), ephemeral=True)
         return
-    core.audit(interaction, "news.generated", "post", None, brief[:200])
+    core.audit(interaction, "clans_now.generated" if info else "news.generated", "post", None, brief[:200])
     link = post_builder.open_link(interaction.guild.id, interaction.user.id, draft=payload)
     if link is None:  # сайта нет — правим в /embed
         from build_tools import open_imported

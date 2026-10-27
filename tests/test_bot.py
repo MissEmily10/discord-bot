@@ -4510,6 +4510,47 @@ class ClanMembershipTests(unittest.TestCase):
 class ClansNowTests(unittest.TestCase):
     """/clans-now: пост «как кланы устроены сейчас» — 10 карточек с баннерами, без Purr и без «скоро»."""
 
+    def test_topic_info_post_uses_only_current_rules(self):
+        """«/clans-now тема:» — информационный пост по docs/CLANS_NOW.md: без приветствия, планов и Purr."""
+        import clan_info
+        import news_generator as ng
+        import tempfile
+        import web_panel
+        prompts = []
+        answer = json.dumps({"template": "update", "banner": {"title": "Казна клана"}, "content": "Привет всем!",
+                             "sections": [{"heading": "Откуда казна", "text": "- 75% награды", "icon": "gift"},
+                                          {"heading": "Важно", "text": "- личный баланс нельзя", "icon": "warn"}]},
+                            ensure_ascii=False)
+
+        async def fake_complete(system, prompt, max_tokens=3000):
+            prompts.append((system, prompt))
+            return answer
+        original, old_assets = clan_info.complete, web_panel.ASSETS_DIR
+        clan_info.complete = fake_complete
+        web_panel.ASSETS_DIR = pathlib.Path(tempfile.mkdtemp())
+        os.environ["OPENROUTER_API_KEY"], os.environ["WEB_PANEL_URL"] = "or", "http://panel.test"
+        rendered = []
+        real_render = ng.render_banner
+        ng.render_banner = lambda key, texts: rendered.append((key, texts)) or real_render(key, texts)
+        try:
+            payload, error = run(ng.generate_info("как работает казна"))
+        finally:
+            clan_info.complete, web_panel.ASSETS_DIR, ng.render_banner = original, old_assets, real_render
+            os.environ.pop("OPENROUTER_API_KEY", None)
+            os.environ.pop("WEB_PANEL_URL", None)
+        self.assertIsNone(error)
+        system, prompt = prompts[0]
+        self.assertIn("КАК КЛАНЫ РАБОТАЮТ СЕЙЧАС", system)
+        self.assertIn("Личный баланс перевести в казну", system)    # факты — из docs/CLANS_NOW.md
+        self.assertNotIn("Совет кланов", system)                     # планов там нет
+        self.assertNotIn("update —", system)                         # шаблоны с датами и «v2.4» не предлагаем
+        self.assertIn("как работает казна", prompt)
+        self.assertEqual(payload["content"], "")                     # без приветствия над постом
+        key, texts = rendered[0]
+        self.assertEqual(key, "rules")                               # неподходящий шаблон -> «правила»
+        self.assertNotIn("Уважай всех", texts["items"])              # пример шаблона не попал в пост
+        self.assertEqual([e.get("author_name") for e in payload["embeds"][1:]], ["Откуда казна", "Важно"])
+
     def test_post_fits_one_message_and_sends(self):
         import clans_now
         embeds, files = clans_now.build()
