@@ -2428,7 +2428,7 @@ class EmojiExportTests(unittest.TestCase):
         self.assertEqual(no_room, 20)           # 50 дудлов форм минус 30 мест
         self.assertNotIn("doodle_star", created)
         self.assertEqual(len(emoji_export.files_of("clans")), 16)  # клановые дудлы — отдельным пакетом
-        self.assertTrue(all(name.startswith("doodle_clan_") for name, _ in emoji_export.files_of("clans")))
+        self.assertTrue(all(name.startswith("d3_clan_") for name, _ in emoji_export.files_of("clans")))  # 3D
         self.assertEqual(len(emoji_export.files_of("all")), 106)  # 50 форм + 16 клановых + 40 иконок кнопок
         # повторный запуск ничего не меняет
         created.clear()
@@ -2458,7 +2458,7 @@ class EmojiExportTests(unittest.TestCase):
         import hubs
         self.assertIn("bot_emoji", hubs.EminemovnaHome.button_order)
         labels = {c.label for c in emoji_export.ExportView(1).children if isinstance(c, discord.ui.Button)}
-        self.assertTrue({"Все", "Дудлы форм", "Клановые дудлы", "Дудлы кнопок"} <= labels)
+        self.assertTrue({"Все", "Дудлы форм", "Клановые 3D-дудлы", "Дудлы кнопок"} <= labels)
         self.assertNotIn("upload_ours", open(emoji_cmd.__file__, encoding="utf-8").read())
 
     def test_ping_by_user_role_or_empty_text(self):
@@ -4994,6 +4994,11 @@ class ClanLifeTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(ui_emoji.EMOJI_DIR, "doodle_" + name[3:] + ".png")), name)
         import clan_members
         self.assertTrue(ui_emoji.is_clan_view(clan_members.MyClanView(self.clan, "member")))
+        ui_emoji._loaded["d3_clan_crest"] = discord.PartialEmoji(name="d3_clan_crest", id=4242)
+        try:  # клановые — объёмные и в наборе «дудлы» по умолчанию
+            self.assertEqual(ui_emoji.swap("🛡️", clan=True).name, "d3_clan_crest")
+        finally:
+            ui_emoji._loaded.pop("d3_clan_crest")
 
 
 if __name__ == "__main__":

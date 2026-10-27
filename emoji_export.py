@@ -23,7 +23,7 @@ EMOJI_DIR = os.path.join(ROOT, "panel_art", "emoji")
 # набор -> (папка, какие файлы берём)
 SETS = {
     "forms": (EMOJI_DIR, lambda name: not name.startswith("doodle_clan_")),
-    "clans": (EMOJI_DIR, lambda name: name.startswith("doodle_clan_")),
+    "clans": (os.path.join(EMOJI_DIR, "doodle3d"), lambda name: name.startswith("d3_clan_")),  # клановые — 3D
     "buttons": (os.path.join(EMOJI_DIR, "ui"), lambda name: True),
 }
 
@@ -138,7 +138,7 @@ class ExportView(PanelView):
     async def forms(self, interaction, button):
         await self._run(interaction, "forms")
 
-    @discord.ui.button(label="Клановые дудлы", emoji="🛡️", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Клановые 3D-дудлы", emoji="🛡️", style=discord.ButtonStyle.secondary)
     async def clans(self, interaction, button):
         await self._run(interaction, "clans")
 

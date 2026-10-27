@@ -55,7 +55,7 @@ MAP = {
     "🌙": "d3_moon", "🔁": "ui_refresh", "🔗": "ui_web", "🔧": "d3_wrench", "👑": "d3_crown", "⏳": "d3_hourglass", "⏸": "ui_play", "🎉": "d3_balloon", "🔔": "d3_bell", "❤": "d3_heart", "🎮": "d3_gamepad", "🎵": "d3_music", "🎤": "d3_mic", "📷": "d3_camera", "🎁": "d3_gift",
 }
 
-# В панелях кланов — клановые дудлы создателя бота (doodle_clan_* / d3_clan_*):
+# В панелях кланов — клановые 3D-дудлы (d3_clan_*, при любом наборе эмодзи):
 # сундук, герб, свиток квеста, факел, пьедестал… Остальные кнопки — общий набор.
 CLAN_MAP = {
     "🛡": "d3_clan_crest", "🎯": "d3_clan_scroll", "🎉": "d3_clan_torch", "🛒": "d3_clan_chest",
@@ -156,6 +156,8 @@ def _pick(name):
     """Эмодзи набора из настройки; не загрузилось — плоский с тем же именем."""
     if name is None:
         return None
+    if name.startswith("d3_clan_"):  # клановые дудлы — всегда объёмные
+        return _loaded.get(name) or _doodle("doodle_" + name[len("d3_"):])
     if name.startswith("d3_"):
         found = _loaded.get(name) if style() == "3d" else None
         return found or _doodle("doodle_" + name[len("d3_"):])

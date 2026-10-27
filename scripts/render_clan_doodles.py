@@ -55,12 +55,14 @@ def coin():
 
 def coins():
     parts, details = [], []
-    for i, y in enumerate((0.62, 0.48, 0.34)):
-        parts.append((union(ell(0.14, y, 0.8, y + 0.2), rr(0.14, y + 0.1, 0.8, y + 0.2, 0)), GOLD))
+    for i, y in enumerate((0.6, 0.46, 0.32)):
+        # монета сбоку: верхний овал, ребро и нижний овал — края круглые, без углов
+        parts.append((union(ell(0.14, y, 0.8, y + 0.2), rr(0.14, y + 0.1, 0.8, y + 0.2, 0),
+                            ell(0.14, y + 0.1, 0.8, y + 0.3)), GOLD))
         details.append((arc_line(0.47, y + 0.1, 0.33, 15, 165, 0.018, ry=0.1), dark(GOLD, 0.75)))
-    top = ell(0.14, 0.2, 0.8, 0.4)
+    top = ell(0.14, 0.18, 0.8, 0.38)
     parts.append((top, light(GOLD, 0.2)))
-    details.append((poly(star_pts(0.47, 0.3, 0.08), 0.003), MILK))
+    details.append((poly(star_pts(0.47, 0.28, 0.08), 0.003), MILK))
     return parts, details
 
 
