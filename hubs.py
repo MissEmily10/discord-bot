@@ -371,7 +371,7 @@ class SubmissionReviewView(PanelView):
 
 class EminemovnaHome(PanelView):
     texts = "eminemovna.home"
-    button_order = ("access", "design", "logo_styles", "web_panel", "bunker")
+    button_order = ("access", "design", "logo_styles", "web_panel", "bunker", "bot_emoji")
 
     def __init__(self, bot):
         super().__init__()
@@ -410,6 +410,14 @@ class EminemovnaHome(PanelView):
     async def web_panel(self, interaction, button):
         import web_panel
         await web_panel.send_panel_link(interaction)
+
+    @discord.ui.button(label="Эмодзи бота", emoji="📦", style=discord.ButtonStyle.secondary)
+    async def bot_emoji(self, interaction, button):
+        import emoji_export
+        if interaction.guild is None:
+            await say(interaction, "emoji_cmd.none")
+            return
+        await emoji_export.open_panel(interaction, back_target=self.back(interaction))
 
     @discord.ui.button(label="Бункер", emoji="⚙️", style=discord.ButtonStyle.secondary)
     async def bunker(self, interaction, button):

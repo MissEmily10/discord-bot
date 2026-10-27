@@ -399,8 +399,7 @@ import emoji_cmd  # noqa: E402
 emoji_cmd.register(bot)
 import reference_inbox  # noqa: E402
 reference_inbox.register(bot)
-import emoji_export  # noqa: E402
-emoji_export.register(bot)
+# эмодзи бота на сервер — /eminemovna → «Эмодзи бота» (раньше — по упоминанию бота)
 quotes.register(bot)
 whispers.register(bot)
 activity.register(bot)

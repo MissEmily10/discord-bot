@@ -93,22 +93,10 @@ def register(bot):
     @bot.tree.command(name="emoji", description="Скачать эмодзи файлом: анимированные — GIF, обычные — PNG")
     @app_commands.describe(emoji="Эмодзи (можно несколько подряд, с любого сервера)",
                            png="Всегда PNG (у анимированных — первый кадр)",
-                           all_server="Все эмодзи этого сервера одним архивом",
-                           upload_ours="Только владелец: залить эмодзи бота (дудлы) на этот сервер")
-    @app_commands.rename(png="только_png", all_server="все_эмодзи_сервера", upload_ours="залить_наши_сюда")
-    async def emoji_command(interaction, emoji: str = None, png: bool = False, all_server: bool = False,
-                            upload_ours: bool = False):
-        if upload_ours:
-            import emoji_export
-            if not core.is_owner_id(interaction.user.id):
-                await interaction.response.send_message(t("emoji_export.not_owner"), ephemeral=True)
-                return
-            if interaction.guild is None:
-                await interaction.response.send_message(t("emoji_cmd.none"), ephemeral=True)
-                return
-            await interaction.response.send_message(emoji_export.summary(interaction.guild),
-                                                    view=emoji_export.ExportView(interaction.guild.id), ephemeral=True)
-            return
+                           all_server="Все эмодзи этого сервера одним архивом")
+    @app_commands.rename(png="только_png", all_server="все_эмодзи_сервера")
+    async def emoji_command(interaction, emoji: str = None, png: bool = False, all_server: bool = False):
+        # залить эмодзи бота на сервер — теперь /eminemovna → «Эмодзи бота»
         if not await core.require_command_access(interaction, "emoji"):
             return
         if all_server:

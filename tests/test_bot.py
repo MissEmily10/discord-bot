@@ -1240,7 +1240,8 @@ class HubTests(unittest.TestCase):
             self.assertEqual(self.labels(hubs.InteractiveHome(lambda gid, uid: None))[:3],
                              ["Наборы кнопок", "Меню ролей", "Формы"])
             emin = self.labels(hubs.EminemovnaHome(bot=None))
-            self.assertEqual(emin, ["Доступ", "Оформление", "Стили иконок", "Веб-панель", "Бункер"])
+            self.assertEqual(emin[:5], ["Доступ", "Оформление", "Стили иконок", "Веб-панель", "Бункер"])
+            self.assertIn("стр. 1/2", emin)  # «Эмодзи бота» — на второй странице
             for context in ("library.home", "interactive.home", "eminemovna.home", "forms.review_home"):
                 self.assertTrue(core.panel_embed(i, context).title)
 
@@ -2424,9 +2425,11 @@ class EmojiExportTests(unittest.TestCase):
         self.assertEqual(replaced, 1)           # doodle_crown — хэша нет: считаем перерисованным
         self.assertEqual(deleted, ["doodle_crown"])
         self.assertEqual(added, 28)             # 30 мест минус два занятых
-        self.assertEqual(no_room, 36)  # 66 дудлов форм (50 + 16 клановых) минус 30 мест
+        self.assertEqual(no_room, 20)           # 50 дудлов форм минус 30 мест
         self.assertNotIn("doodle_star", created)
-        self.assertEqual(len(emoji_export.files_of("all")), 106)  # 66 дудлов форм (с клановыми) + 40 иконок кнопок (с цифрами 1–4)
+        self.assertEqual(len(emoji_export.files_of("clans")), 16)  # клановые дудлы — отдельным пакетом
+        self.assertTrue(all(name.startswith("doodle_clan_") for name, _ in emoji_export.files_of("clans")))
+        self.assertEqual(len(emoji_export.files_of("all")), 106)  # 50 форм + 16 клановых + 40 иконок кнопок
         # повторный запуск ничего не меняет
         created.clear()
         added, skipped, no_room, errors, replaced = run(emoji_export.upload(guild, "forms"))
@@ -2447,6 +2450,16 @@ class EmojiExportTests(unittest.TestCase):
         connection.commit()
         connection.close()
         self.assertEqual(value, '{"emoji": "<:doodle_cat:222>"}')
+
+    def test_bot_emoji_live_in_eminemovna(self):
+        """Заливка эмодзи бота — в /eminemovna → «Эмодзи бота»; клановые дудлы — своим пакетом."""
+        import emoji_cmd
+        import emoji_export
+        import hubs
+        self.assertIn("bot_emoji", hubs.EminemovnaHome.button_order)
+        labels = {c.label for c in emoji_export.ExportView(1).children if isinstance(c, discord.ui.Button)}
+        self.assertTrue({"Все", "Дудлы форм", "Клановые дудлы", "Дудлы кнопок"} <= labels)
+        self.assertNotIn("upload_ours", open(emoji_cmd.__file__, encoding="utf-8").read())
 
     def test_ping_by_user_role_or_empty_text(self):
         import emoji_export
@@ -3854,8 +3867,7 @@ class ClanInfoTests(unittest.TestCase):
         self.assertTrue(clan_treasury.wants(ping("казна ANH")))
         self.assertFalse(clan_info.wants(ping("казна ANH")))
         before = len(sent)
-        run(emoji_export.on_message(ping("что даёт огонёк у кланов?")))
-        self.assertEqual(len(sent), before)  # участнику не пишет «только владелец»
+        self.assertFalse(hasattr(emoji_export, "on_message"))  # эмодзи бота — только из /eminemovna
         run(clan_info.on_message(ping("привет")))
         self.assertEqual(len(sent), before)  # без слова «клан» молчит
         for key in ["overview"] + clan_info.TOPIC_KEYS:

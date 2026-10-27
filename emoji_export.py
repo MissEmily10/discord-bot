@@ -1,11 +1,11 @@
 """
-Перенести наши эмодзи (дудлы форм и кнопок, panel_art/emoji) на сервер.
+Перенести наши эмодзи (дудлы форм, клановые дудлы и дудлы кнопок,
+panel_art/emoji) на сервер.
 
-Владелец бота упоминает бота на нужном сервере (@бот, можно со словом
-«эмодзи») или пишет /emoji с галочкой «залить_наши_сюда» — бот отвечает, сколько
-там свободных мест, и даёт кнопки: залить все, только дудлы форм или только
-дудлы кнопок. Эмодзи с тем же именем пропускаются, а если картинку
-перерисовали — заменяются новой (emoji_sync).
+Владелец бота открывает /eminemovna → «Эмодзи бота» на нужном сервере — бот
+показывает, сколько там свободных мест, и даёт кнопки: залить все, только дудлы
+форм, только клановые или только дудлы кнопок. Эмодзи с тем же именем
+пропускаются, а если картинку перерисовали — заменяются новой (emoji_sync).
 Боту нужно право «Управлять выражениями» (Manage Expressions).
 """
 
@@ -19,20 +19,27 @@ import core
 from core import PanelView, t
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+EMOJI_DIR = os.path.join(ROOT, "panel_art", "emoji")
+# набор -> (папка, какие файлы берём)
 SETS = {
-    "forms": os.path.join(ROOT, "panel_art", "emoji"),
-    "buttons": os.path.join(ROOT, "panel_art", "emoji", "ui"),
+    "forms": (EMOJI_DIR, lambda name: not name.startswith("doodle_clan_")),
+    "clans": (EMOJI_DIR, lambda name: name.startswith("doodle_clan_")),
+    "buttons": (os.path.join(EMOJI_DIR, "ui"), lambda name: True),
 }
 
 
 def files_of(which):
-    folders = [SETS[which]] if which in SETS else list(SETS.values())
+    sets = [SETS[which]] if which in SETS else list(SETS.values())
     found = []
-    for folder in folders:
+    for folder, wanted in sets:
         if os.path.isdir(folder):
-            found += [(os.path.splitext(f)[0], os.path.join(folder, f))
-                      for f in sorted(os.listdir(folder)) if f.lower().endswith(".png")]
+            found += [(os.path.splitext(f)[0], os.path.join(folder, f)) for f in sorted(os.listdir(folder))
+                      if f.lower().endswith(".png") and wanted(os.path.splitext(f)[0])]
     return found
+
+
+def card(text):
+    return discord.Embed(description=text[:4096], color=core.embed_color())
 
 
 def free_slots(guild):
@@ -42,7 +49,7 @@ def free_slots(guild):
 def summary(guild):
     existing = {e.name for e in guild.emojis}
     return t("emoji_export.text", free=free_slots(guild), limit=guild.emoji_limit,
-             forms=len(files_of("forms")), buttons=len(files_of("buttons")),
+             forms=len(files_of("forms")), clans=len(files_of("clans")), buttons=len(files_of("buttons")),
              already=len([n for n, _ in files_of("all") if n in existing]))
 
 
@@ -89,8 +96,10 @@ async def upload(guild, which, progress=None):
 
 
 class ExportView(PanelView):
-    def __init__(self, guild_id):
-        super().__init__(timeout=900)
+    button_order = ("all", "forms", "clans", "buttons")
+
+    def __init__(self, guild_id, back_target=None):
+        super().__init__(timeout=900, back_target=back_target)
         self.guild_id = guild_id
 
     async def _run(self, interaction, which):
@@ -101,11 +110,11 @@ class ExportView(PanelView):
         if not guild.me.guild_permissions.manage_emojis_and_stickers:
             await interaction.response.send_message(t("emoji_export.no_rights"), ephemeral=True)
             return
-        await interaction.response.edit_message(content=t("emoji_export.working"), view=None)
+        await interaction.response.edit_message(embed=card(t("emoji_export.working")), view=None)
         # edit_original_response работает и для скрытых (ephemeral) сообщений
         async def progress(added):
             try:
-                await interaction.edit_original_response(content=t("emoji_export.progress", added=added))
+                await interaction.edit_original_response(embed=card(t("emoji_export.progress", added=added)))
             except discord.HTTPException:
                 pass
 
@@ -117,7 +126,7 @@ class ExportView(PanelView):
             text += "\n⚠️ " + "; ".join(errors[:3])[:500]
         core._log.info("emoji export to %s: +%s", guild.id, added)
         try:
-            await interaction.edit_original_response(content=text)
+            await interaction.edit_original_response(embed=card(text))
         except discord.HTTPException:
             await interaction.followup.send(text, ephemeral=True)
 
@@ -128,6 +137,10 @@ class ExportView(PanelView):
     @discord.ui.button(label="Дудлы форм", emoji="🌟", style=discord.ButtonStyle.secondary)
     async def forms(self, interaction, button):
         await self._run(interaction, "forms")
+
+    @discord.ui.button(label="Клановые дудлы", emoji="🛡️", style=discord.ButtonStyle.secondary)
+    async def clans(self, interaction, button):
+        await self._run(interaction, "clans")
 
     @discord.ui.button(label="Дудлы кнопок", emoji="🔘", style=discord.ButtonStyle.secondary)
     async def buttons(self, interaction, button):
@@ -148,43 +161,13 @@ def pinged(message):
     return f"<@{guild.me.id}>" in raw or f"<@!{guild.me.id}>" in raw
 
 
-async def offer(channel_or_message, guild):
-    """Сводка + кнопки переноса (ответом на сообщение или в канал)."""
-    send = channel_or_message.reply if isinstance(channel_or_message, discord.Message) else channel_or_message.send
-    kwargs = {"mention_author": False} if isinstance(channel_or_message, discord.Message) else {}
-    await send(summary(guild), view=ExportView(guild.id), **kwargs)
-
-
-async def on_message(message):
-    """Владелец упомянул бота — предложить перенос эмодзи на этот сервер.
-
-    Слово «эмодзи» не обязательно: без Message Content Intent Discord может
-    не отдать боту текст, и тогда бот молчал бы.
-    """
-    if message.author.bot or not pinged(message):
+async def open_panel(interaction, back_target=None):
+    """/eminemovna → «Эмодзи бота»: сводка по серверу и кнопки заливки (только владелец бота)."""
+    if not core.is_owner_id(interaction.user.id):
+        await interaction.response.send_message(t("emoji_export.not_owner"), ephemeral=True)
         return
-    import clan_info
-    import clan_treasury
-    import clans
-    if clan_treasury.wants(message) or clans.wants(message) or clan_info.wants(message):
-        return  # «@Purr зафиксируй / казна» или вопрос про кланы — не эмодзи
-    if not core.is_owner_id(message.author.id):
-        core._log.info("emoji export ping from non-owner %s (OWNER_ID=%s)", message.author.id, core.OWNER_ID)
-        try:
-            await message.reply(t("emoji_export.not_owner"), mention_author=False, delete_after=20)
-        except discord.HTTPException:
-            pass
-        return
-    text = (message.content or "").lower()
-    words = text.replace(f"<@{message.guild.me.id}>", "").replace(f"<@!{message.guild.me.id}>", "").strip()
-    if words and not any(k in words for k in ("эмодз", "emoji", "смайл", "<@&")):
-        return  # пинг по другому делу — не мешаем
-    core._log.info("emoji export offer in guild %s", message.guild.id)
-    try:
-        await offer(message, message.guild)
-    except discord.Forbidden:
-        core._log.warning("emoji export: no permission to reply in channel %s", message.channel.id)
-
-
-def register(bot):
-    bot.add_listener(on_message, "on_message")
+    view = ExportView(interaction.guild.id, back_target=back_target)
+    if back_target is not None:
+        await interaction.response.edit_message(embed=card(summary(interaction.guild)), view=view)
+    else:
+        await interaction.response.send_message(embed=card(summary(interaction.guild)), view=view, ephemeral=True)
