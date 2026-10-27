@@ -1620,16 +1620,15 @@ def render_banner(card, title, data, empty_text="—", size=BANNER_SIZE, lines=(
         y += int(fnt.size * 1.15)
     if not plain and st.get("fx") == "glitch":
         content = glitch(content, colors=theme["grad"])
-    corner = first.getpixel((4, 4))
-    frame = theme["head"] if not plain else (INK if sum(corner) / 3 > 140 else mix(corner, (255, 255, 255), 0.14))
-    return _framed(content, frame, size)
+    return _framed(content, DISCORD_UI, size)
 
 
 # Discord на телефоне показывает баннер не целиком: срезает ~16% сверху и снизу
 # (видно примерно 2.6:1) и скругляет только верхний левый угол. Поэтому картинка
 # лежит скруглённой карточкой в той зоне, что видна везде, а вокруг — рамка в
-# цвете темы: на компьютере видна вся рамка, на телефоне — бока, углы карточки
-# скруглены одинаково.
+# цвет интерфейса Discord (тёмная тема, взят со скриншота приложения): рамка
+# сливается со списком каналов, и кажется, что карточка лежит прямо на нём.
+DISCORD_UI = (31, 31, 40)
 BANNER_SAFE_Y = 0.19  # чуть больше обреза (~16%) — карточка не касается его края
 BANNER_SAFE_X = 0.035
 BANNER_RADIUS = 0.05  # доля высоты баннера
