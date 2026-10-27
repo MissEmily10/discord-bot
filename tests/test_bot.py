@@ -4585,6 +4585,34 @@ class SceneEditorTests(unittest.TestCase):
         banner = run(cards.render_banner(card, g))
         self.assertEqual(PILImage.open(io.BytesIO(banner)).size, (960, 540))
 
+    def test_card_split_into_separate_text_layers(self):
+        """Каждый текст живой картинки — отдельный слой; собранная из слоёв картинка — та же, значения живые."""
+        import cards
+        import scene
+        from PIL import ImageChops
+        g = self.guild()
+        card = cards.get_card(cards.create_card(GUILD, STAFF, "Слои", "progress"))
+        png, items = run(cards.render_card_parts(card, g))
+        self.assertGreaterEqual(len(items), 3)
+        size = PILImage.open(io.BytesIO(png)).size
+        start, error = scene.clean(scene.for_card(card, size, items), self_card=True)
+        self.assertIsNone(error)
+        texts = [layer for layer in start["layers"] if layer["type"] == "text"]
+        self.assertEqual(len(texts), len(items))
+        self.assertTrue(all(layer["live"] and layer["src"]["card"] == "self" for layer in texts))
+        self.assertEqual(start["layers"][0]["hide"], [item["i"] for item in items])
+        card["data"]["scene"] = start
+        layered = PILImage.open(io.BytesIO(run(cards.render_card(card, g)))).convert("RGB")
+        plain = PILImage.open(io.BytesIO(png)).convert("RGB")
+        diff = ImageChops.difference(plain, layered).convert("L")
+        self.assertLess(sum(1 for v in diff.getdata() if v > 60) / (plain.width * plain.height), 0.01)
+        # текст поменяли руками — он больше не живой
+        texts[0]["live"] = False
+        texts[0]["text"] = "свой заголовок"
+        ready, _, _ = run(scene.prepare(card["data"]["scene"], g, self_card=card))
+        self.assertEqual(ready["layers"][1]["text"], "свой заголовок")
+        self.assertEqual(ready["layers"][2]["text"], items[1]["text"])
+
     def test_api_rights_and_save(self):
         import cards
         import scene_editor as se

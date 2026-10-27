@@ -336,7 +336,7 @@ function layerEl(layer) {
       el.style.borderRadius = layer.shape === "ellipse" ? "50%" : (layer.radius || 0) + "px";
     } else {
       let src = "";
-      if (layer.type === "picture") src = `${API}/api/card/${layer.card}.png?t=${cardStamp}`;
+      if (layer.type === "picture") src = `${API}/api/card/${layer.card}.png?hide=${(layer.hide || []).join(",")}&t=${cardStamp}`;
       if (layer.type === "sticker") src = `${API}/sticker/${layer.set}/${layer.sticker}.png`;
       if (layer.type === "image") src = `/assets/${layer.asset}`;
       const img = h("img", { src, draggable: false });
@@ -549,6 +549,28 @@ async function addPicture(card) {
   const title = card === "self" ? "Эта картинка" : (INIT.cards.find(c => String(c.id) === String(card)) || {}).title;
   addLayer({ type: "picture", name: title || "Живая картинка", card, radius: 0, shadow: 0, w, h: hgt, ...centerAt(w, hgt) });
 }
+async function splitPicture(L) {
+  try {
+    const res = await call("/api/split", { card: L.card, x: L.x, y: L.y, w: L.w, h: L.h });
+    if (!res.ok) { toast(res.error || "Не получилось", "bad"); return; }
+    if (Math.abs(L.rot || 0) > 0.1) toast("Картинка повёрнута — тексты встали без поворота", "");
+    // старые живые тексты этой картинки убираем — встанут заново
+    scene.layers = scene.layers.filter(x => !(x.live && x.src && String(x.src.card) === String(L.card)));
+    L.hide = res.hide;
+    const at = scene.layers.indexOf(L) + 1;
+    const fresh = res.layers.map(x => ({ ...x, id: uid(), opacity: L.opacity ?? 1 }));
+    scene.layers.splice(at, 0, ...fresh);
+    cardStamp = Date.now();
+    commit(); renderAll();
+    toast(`Готово: ${fresh.length} отдельных слоёв`, "ok");
+  } catch (e) { toast("Не получилось разбить картинку", "bad"); }
+}
+function joinPicture(L) {
+  scene.layers = scene.layers.filter(x => !(x.live && x.src && String(x.src.card) === String(L.card)));
+  L.hide = [];
+  cardStamp = Date.now();
+  commit(); renderAll();
+}
 async function uploadFile(file, asBackground) {
   if (!file) return;
   if (file.size > 8 * 1024 * 1024) { toast("Файл больше 8 МБ", "bad"); return; }
@@ -683,8 +705,10 @@ function layerPanel(L) {
 
   if (L.type === "text") {
     const ta = h("textarea", { id: "textField", value: L.text });
-    ta.addEventListener("input", () => setProp(L, "text", ta.value.slice(0, 500), false));
+    ta.addEventListener("input", () => { if (L.live) { L.live = false; liveNote.remove(); } setProp(L, "text", ta.value.slice(0, 500), false); });
     ta.addEventListener("change", () => { commit(); refreshLive(); });
+    const liveNote = h("div", { class: "hint" }, "Живой текст картинки: значение обновляется само. Изменишь текст — станет обычным (можно с переменными).");
+    if (L.live) p.append(liveNote);
     p.append(ta);
     p.append(h("div", { class: "btns" },
       h("button", { class: "btn", onclick: () => openVars(ta, L) }, "{ } Вставить переменную"),
@@ -709,7 +733,11 @@ function layerPanel(L) {
     p.append(field("Картинка", sel));
     p.append(field("Скругление", ...slider(L.radius, 0, 200, 1, (v, d) => setProp(L, "radius", v, d))));
     p.append(field("Тень", ...slider(L.shadow, 0, 60, 1, (v, d) => setProp(L, "shadow", v, d))));
-    p.append(h("div", { class: "hint" }, "Значения в живой картинке меняются в Discord («Данные») — тут её место и размер."));
+    const split = scene.layers.some(x => x.live && x.src && String(x.src.card) === String(L.card));
+    p.append(h("div", { class: "btns" },
+      h("button", { class: "btn", onclick: () => splitPicture(L) }, "✂️ Разбить на слои"),
+      (L.hide || []).length || split ? h("button", { class: "btn", onclick: () => joinPicture(L) }, "↩️ Собрать тексты обратно") : null));
+    p.append(h("div", { class: "hint" }, "«Разбить на слои» — каждый текст картинки станет отдельным слоем: двигай, меняй шрифт, цвет и размер по одному. Значения остаются живыми. Сами данные меняются в Discord («Данные»)."));
   }
   if (L.type === "sticker") {
     p.append(h("div", { class: "btns" }, h("button", { class: "btn", onclick: () => openDrawer("sticker", L) }, "Заменить стикер")));

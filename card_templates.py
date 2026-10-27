@@ -1524,6 +1524,78 @@ def texts_of(card):
     return found
 
 
+# ============================================================
+# ТЕКСТЫ КАРТИНКИ ОТДЕЛЬНЫМИ СЛОЯМИ (редактор на сайте)
+# ============================================================
+# При отрисовке можно записать каждый текст главной картинки (позиция, шрифт,
+# цвет) и не рисовать выбранные: редактор ставит их отдельными слоями, которые
+# двигаются и меняются по одному, а значения остаются живыми.
+
+import threading  # noqa: E402
+
+_recording = threading.local()
+_draw_text = ImageDraw.ImageDraw.text
+
+
+class TextRecord:
+    def __init__(self, skip=()):
+        self.skip = {int(i) for i in skip}
+        self.items = []
+        self.target = None  # главная картинка — та, на которой нарисован первый текст (заголовок)
+
+
+def _recording_text(self, xy, text, fill=None, font=None, anchor=None, *args, **kwargs):
+    record = getattr(_recording, "record", None)
+    if record is None or not isinstance(text, str) or not text.strip() or "\n" in text:
+        # многострочный текст PIL рисует построчно — строки и запишутся по одной
+        return _draw_text(self, xy, text, fill, font, anchor, *args, **kwargs)
+    if record.target is None:
+        record.target = self._image
+    if self._image is not record.target:
+        return _draw_text(self, xy, text, fill, font, anchor, *args, **kwargs)
+    index = len(record.items)
+    box = self.textbbox(xy, text, font=font, anchor=anchor)
+    ascent, descent = font.getmetrics() if hasattr(font, "getmetrics") else (0, 0)
+    vertical = (anchor or "la")[1]
+    middle = xy[1] + {"a": (ascent + descent) / 2, "t": (ascent + descent) / 2, "s": (descent - ascent) / 2,
+                      "d": -(ascent + descent) / 2, "b": -(ascent + descent) / 2}.get(vertical, 0)
+    record.items.append({"i": index, "text": text, "box": [round(v) for v in box],
+                         "size": int(getattr(font, "size", 24) or 24), "font": os.path.basename(getattr(font, "path", "")),
+                         "color": _hex_of(fill),
+                         "anchor": anchor or "la", "x": round(xy[0]), "middle": round(middle)})
+    if index in record.skip:
+        return None
+    return _draw_text(self, xy, text, fill, font, anchor, *args, **kwargs)
+
+
+ImageDraw.ImageDraw.text = _recording_text
+
+
+def _hex_of(fill):
+    if isinstance(fill, str):
+        from PIL import ImageColor
+        try:
+            fill = ImageColor.getrgb(fill)
+        except ValueError:
+            fill = None
+    if isinstance(fill, (tuple, list)) and len(fill) >= 3:
+        return "#%02X%02X%02X" % tuple(int(v) for v in fill[:3])
+    if isinstance(fill, int):
+        return "#%02X%02X%02X" % (fill, fill, fill)
+    return "#201C1E"
+
+
+def render_parts(card, title, data, empty_text="—", skip=()):
+    """Картинка без выбранных текстов + все её тексты: (PNG, [{i, text, box, size, font, color, anchor}])."""
+    record = TextRecord(skip)
+    _recording.record = record
+    try:
+        png = render(card, title, data, empty_text)
+    finally:
+        _recording.record = None
+    return png, record.items
+
+
 def is_dynamic(template):
     return bool(spec(template).get("dynamic"))
 

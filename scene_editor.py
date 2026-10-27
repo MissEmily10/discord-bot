@@ -122,22 +122,29 @@ def _clean(raw, guild, card):
     return scene.clean(raw, card_ids={c["id"] for c in _guild_cards(guild)}, self_card=card is not None)
 
 
-async def _card_png(guild, card, ref):
-    """Живая картинка без своего холста (то, что лежит слоем) — с кэшем на минуту."""
+async def _card_parts(guild, card, ref, hide=()):
+    """Живая картинка без своего холста (то, что лежит слоем) и её тексты — с кэшем на минуту.
+    hide — номера текстов, вынесенных отдельными слоями (их картинка не рисует). -> (PNG, тексты) или None."""
     import cards
     target = card if ref == "self" else cards.get_card(int(ref))
     if target is None or target["guild_id"] != guild.id:
         return None
     data = {k: v for k, v in target["data"].items() if k != "scene"}
-    key = (target["id"], target["title"], json.dumps(data, sort_keys=True, default=str))
+    hide = tuple(sorted(set(hide)))
+    key = (target["id"], target["title"], json.dumps(data, sort_keys=True, default=str), hide)
     cached = _card_cache.get(key)
     if cached and time.time() - cached[0] < 60:
         return cached[1]
-    png = await cards.render_card(dict(target, data=data), guild)
+    parts = await cards.render_card_parts(dict(target, data=data), guild, skip=hide)
     if len(_card_cache) > 64:
         _card_cache.clear()
-    _card_cache[key] = (time.time(), png)
-    return png
+    _card_cache[key] = (time.time(), parts)
+    return parts
+
+
+async def _card_png(guild, card, ref, hide=()):
+    parts = await _card_parts(guild, card, ref, hide)
+    return parts[0] if parts else None
 
 
 # ============================================================
@@ -164,12 +171,12 @@ async def api_init(request, entry, guild, member, card):
     if card is not None:
         current = card["data"].get("scene")
         saved = bool(current)
-        png = await _card_png(guild, card, "self")
+        png, items = await _card_parts(guild, card, "self")
         size = Image.open(io.BytesIO(png)).size
         title = card["title"] or "Живая картинка"
         presets = scene.size_presets(size)
-        if not current:
-            current = scene.for_card(card, size)
+        if not current:  # каждый текст картинки — отдельным слоем
+            current = scene.for_card(card, size, items)
     else:
         banner = server_banner.get_or_create(guild.id, member.id)
         saved = bool(banner.get("scene"))
@@ -211,10 +218,35 @@ async def api_card(request, entry, guild, member, card):
         raise web.HTTPNotFound()
     if ref == "self" and card is None:
         raise web.HTTPNotFound()
-    png = await _card_png(guild, card, ref)
+    hide = [int(v) for v in (request.query.get("hide") or "").split(",") if v.isdigit() and int(v) < 1000][:300]
+    png = await _card_png(guild, card, ref, hide)
     if png is None:
         raise web.HTTPNotFound()
     return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@api
+async def api_split(request, entry, guild, member, card):
+    """Слой живой картинки -> её тексты отдельными слоями (картинка их больше не рисует)."""
+    import io
+    import scene
+    from PIL import Image
+    data = await _body(request)
+    ref = data.get("card")
+    if ref != "self" and not str(ref or "").isdigit():
+        return web.json_response({"ok": False, "error": "Нет такой картинки."})
+    if ref == "self" and card is None:
+        return web.json_response({"ok": False, "error": "Нет такой картинки."})
+    ref = ref if ref == "self" else int(ref)
+    parts = await _card_parts(guild, card, ref)
+    if parts is None:
+        return web.json_response({"ok": False, "error": "Нет такой картинки."})
+    png, items = parts
+    box = {k: scene._num(data.get(k), -scene.MAX_SIDE, 2 * scene.MAX_SIDE, 0) for k in ("x", "y", "w", "h")}
+    if box["w"] < 4 or box["h"] < 4:
+        return web.json_response({"ok": False, "error": "Слой картинки слишком маленький."})
+    hide, layers = scene.split_layers(ref, items, box, Image.open(io.BytesIO(png)).size)
+    return web.json_response({"ok": True, "hide": hide, "layers": layers})
 
 
 async def sticker(request):
@@ -350,6 +382,7 @@ def add_routes(app):
     app.router.add_get("/scene/{token}/api/init", api_init)
     app.router.add_post("/scene/{token}/api/values", api_values)
     app.router.add_get("/scene/{token}/api/card/{ref}.png", api_card)
+    app.router.add_post("/scene/{token}/api/split", api_split)
     app.router.add_get("/scene/{token}/api/bg.png", api_background)
     app.router.add_get("/scene/{token}/sticker/{set}/{name}.png", sticker)
     app.router.add_post("/scene/{token}/api/upload", api_upload)

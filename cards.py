@@ -276,6 +276,14 @@ async def render_card(card, guild=None):
     return await asyncio.to_thread(ct.render, card, title, data, t("cards.rating.empty"))
 
 
+async def render_card_parts(card, guild=None, skip=()):
+    """Картинка без текстов skip + все её тексты отдельно (для слоёв редактора) -> (PNG, [тексты])."""
+    import asyncio
+    import card_templates as ct
+    title, data = await _live_data(card, guild)
+    return await asyncio.to_thread(ct.render_parts, card, title, data, t("cards.rating.empty"), skip)
+
+
 async def render_banner(card, guild=None, lines=()):
     """
     Та же картинка в формате баннера сервера 960×540 (дорисована своим фоном, не в рамке);

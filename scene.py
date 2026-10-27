@@ -10,8 +10,11 @@ scene.py
 image (своя картинка из /assets), card (фон стиля живой картинки по её id).
 Слой: общие поля id, type, name, x, y, w, h, rot (градусы по часовой),
 opacity (0–1), hidden, locked; по типу:
-- picture — живая картинка: card ("self" — эта же картинка, иначе id), radius, shadow;
+- picture — живая картинка: card ("self" — эта же картинка, иначе id), radius, shadow,
+  hide (номера её текстов, которые вынесены отдельными слоями и в картинке не рисуются);
 - text — text (с переменными {online}…), font, size, color, align, lh, stroke, stroke_color;
+  src {card, i} + live — текст №i живой картинки отдельным слоем: значение берётся свежее
+  из картинки, пока live (изменишь текст в редакторе — станет обычным текстом);
 - sticker — set + name (дудлы бота), shadow;
 - image — asset (имя файла в /assets), radius, shadow;
 - shape — shape (rect / ellipse), fill, stroke, stroke_color, radius.
@@ -47,7 +50,7 @@ FONTS = {
 }
 FONT_DIR = ROOT / "fonts"
 LAYER_TYPES = ("picture", "text", "sticker", "image", "shape")
-MAX_LAYERS = 40
+MAX_LAYERS = 150  # картинка, разбитая на слои: каждый текст — свой слой
 MAX_SIDE, MIN_SIDE = 2400, 64
 BANNER = (960, 540)
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -145,6 +148,8 @@ def clean(raw, card_ids=(), self_card=False):
                 continue
             layer["radius"] = _num(item.get("radius"), 0, 400, 0)
             layer["shadow"] = _num(item.get("shadow"), 0, 80, 0)
+            hide = item.get("hide") if isinstance(item.get("hide"), list) else []
+            layer["hide"] = sorted({int(i) for i in hide if isinstance(i, int) and 0 <= i < 1000})[:300]
         elif kind == "text":
             layer.update(text=str(item.get("text") or "")[:500],
                          font=item.get("font") if item.get("font") in FONTS else "coolvetica",
@@ -152,6 +157,15 @@ def clean(raw, card_ids=(), self_card=False):
                          align=item.get("align") if item.get("align") in ("left", "center", "right") else "left",
                          lh=_num(item.get("lh"), 0.7, 3, 1.15), stroke=_num(item.get("stroke"), 0, 40, 0),
                          stroke_color=_color(item.get("stroke_color"), "#FFFFFF"))
+            src = item.get("src") if isinstance(item.get("src"), dict) else None
+            if src is not None and isinstance(src.get("i"), int) and 0 <= src["i"] < 1000:
+                ref = src.get("card")
+                if ref == "self" and self_card:
+                    layer["src"] = {"card": "self", "i": src["i"]}
+                elif str(ref or "").isdigit() and int(ref) in card_ids:
+                    layer["src"] = {"card": int(ref), "i": src["i"]}
+                if "src" in layer:
+                    layer["live"] = bool(item.get("live"))
         elif kind == "sticker":
             if sticker_path(item.get("set"), item.get("sticker")) is None:
                 continue
@@ -179,6 +193,7 @@ def texts(scene):
 def card_refs(scene):
     """Какие живые картинки нужны холсту: {"self" | id}."""
     refs = {layer["card"] for layer in (scene or {}).get("layers", []) if layer.get("type") == "picture"}
+    refs |= {layer["src"]["card"] for layer in (scene or {}).get("layers", []) if layer.get("live") and layer.get("src")}
     if (scene or {}).get("bg", {}).get("card") is not None:
         refs.add(scene["bg"]["card"])
     return refs
@@ -197,16 +212,28 @@ async def prepare(scene, guild, self_card=None):
     if needed and guild is not None:
         import live
         variables = await live.collect(guild, needed)
-    ready = dict(scene, layers=[dict(layer, text=substitute(layer["text"], variables))
-                                if layer.get("type") == "text" else layer for layer in scene["layers"]])
-    pictures, looks = {}, {}
+    pictures, looks, parts = {}, {}, {}
+    hides = {}
+    for layer in scene["layers"]:
+        if layer.get("type") == "picture" and layer.get("hide"):
+            hides.setdefault(layer["card"], set()).add(tuple(layer["hide"]))
     for ref in card_refs(scene):
         card = self_card if ref == "self" else cards.get_card(ref)
         if card is None or (guild is not None and card["guild_id"] != guild.id):
             continue
         plain = dict(card, data={k: v for k, v in card["data"].items() if k != "scene"})  # без своего холста
-        pictures[ref] = await cards.render_card(plain, guild)
+        pictures[ref], parts[ref] = await cards.render_card_parts(plain, guild)
+        for hide in hides.get(ref, ()):  # та же картинка без вынесенных в слои текстов
+            pictures[(ref, hide)], _ = await cards.render_card_parts(plain, guild, skip=hide)
         looks[ref] = plain["data"]
+
+    def text_of(layer):
+        if layer.get("live") and layer.get("src"):  # живой текст картинки — свежее значение
+            found = parts.get(layer["src"]["card"]) or []
+            return found[layer["src"]["i"]]["text"] if layer["src"]["i"] < len(found) else ""
+        return substitute(layer["text"], variables)
+    ready = dict(scene, layers=[dict(layer, text=text_of(layer)) if layer.get("type") == "text" else layer
+                                for layer in scene["layers"]])
     return ready, pictures, looks
 
 
@@ -272,7 +299,7 @@ def _layer_image(layer, pictures, scale):
     w, h = max(1, int(round(layer["w"] * scale))), max(1, int(round(layer["h"] * scale)))
     kind = layer["type"]
     if kind == "picture":
-        png = pictures.get(layer["card"])
+        png = pictures.get((layer["card"], tuple(layer["hide"])) if layer.get("hide") else layer["card"])
         if png is None:
             return None
         image = Image.open(io.BytesIO(png)).convert("RGBA").resize((w, h), Image.LANCZOS)
@@ -443,13 +470,48 @@ def from_banner(banner):
         layer["card"] for layer in layers if layer["type"] == "picture"})[0]
 
 
-def for_card(card, png_size):
-    """Холст живой картинки: её же картинка слоем на весь холст и её фон — дальше добавляй стикеры, тексты."""
+def for_card(card, png_size, items=None):
+    """
+    Холст живой картинки: её же картинка слоем на весь холст и её фон; items
+    (тексты картинки из card_templates.render_parts) — каждый текст отдельным
+    слоем, его можно двигать и менять по одному.
+    """
     w, h = png_size
-    return {"w": w, "h": h, "bg": {"color": "#F1EEEC", "card": "self"},
-            "layers": [{"id": "self", "type": "picture", "name": card["title"] or "Живая картинка", "card": "self",
-                        "x": 0, "y": 0, "w": w, "h": h, "rot": 0, "opacity": 1, "hidden": False, "locked": False,
-                        "radius": 0, "shadow": 0}]}
+    picture = {"id": "self", "type": "picture", "name": "Фон и оформление", "card": "self",
+               "x": 0, "y": 0, "w": w, "h": h, "rot": 0, "opacity": 1, "hidden": False, "locked": False,
+               "radius": 0, "shadow": 0, "hide": []}
+    layers = [picture]
+    if items:
+        picture["hide"], texts_ = split_layers("self", items, picture, png_size)
+        layers += texts_
+    return {"w": w, "h": h, "bg": {"color": "#F1EEEC", "card": "self"}, "layers": layers}
+
+
+FONT_KEYS = {"Coolvetica-Regular.otf": "coolvetica", "Inter-Bold.otf": "inter_bold", "Inter-SemiBold.otf": "inter_semi",
+             "Inter-Regular.otf": "inter", "DunkinSans-Bold.otf": "dunkin_bold", "DunkinSans-Regular.otf": "dunkin",
+             "DrunkFonts-Regular.otf": "drunk"}
+
+
+def split_layers(ref, items, box, card_size):
+    """
+    Тексты живой картинки -> (номера, которые картинка больше не рисует, [текстовые слои]).
+    box — место картинки на холсте (x, y, w, h слоя), card_size — её размер в пикселях.
+    """
+    sx, sy = box["w"] / max(1, card_size[0]), box["h"] / max(1, card_size[1])
+    layers = []
+    for item in items:
+        size = round(item["size"] * sx, 1)
+        width = min(max((item["box"][2] - item["box"][0]) * sx * 1.5 + 30, 60), box["w"])  # место, чтобы значение росло
+        align = {"l": "left", "m": "center", "r": "right"}.get(item["anchor"][0], "left")
+        anchor_x = box["x"] + item["x"] * sx
+        x = anchor_x if align == "left" else anchor_x - width / 2 if align == "center" else anchor_x - width
+        middle = box["y"] + item["middle"] * sy
+        layers.append({"id": f"t{ref}{item['i']}"[:24], "type": "text", "name": item["text"][:30], "text": item["text"],
+                       "font": FONT_KEYS.get(item["font"], "inter_bold"), "size": size, "color": item["color"],
+                       "align": align, "lh": 1.0, "x": round(x, 1), "y": round(middle - size / 2, 1),
+                       "w": round(width, 1), "h": size, "rot": 0, "opacity": 1, "hidden": False, "locked": False,
+                       "stroke": 0, "stroke_color": "#FFFFFF", "src": {"card": ref, "i": item["i"]}, "live": True})
+    return [item["i"] for item in items], layers
 
 
 def size_presets(card_size=None):
