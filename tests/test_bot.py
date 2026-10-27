@@ -4079,7 +4079,7 @@ class ViewSmokeTests(unittest.TestCase):
         names = sorted(c.name for c in bot.bot.tree.get_commands())
         # docs/STRUCTURE.md: 6 команд вместо 12
         self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
-                                        "emoji", "pictures", "whisper", "post", "clan", "admin-clan", "В референсы стиля",
+                                        "emoji", "pictures", "whisper", "post", "clan", "admin-clan", "clans-now", "В референсы стиля",
                                     "В цитаты дня", "Шепнуть"]))
 
 
@@ -4505,6 +4505,52 @@ class ClanMembershipTests(unittest.TestCase):
         self.assertNotIn("Управление кланами", labels("member", admin=True))  # оно в /admin-clan
         self.assertIn("Пригласить", cm.roster_text(self.g, clan) + "Пригласить")
         self.assertIn("место представителя свободно", cm.roster_text(self.g, clan))
+
+
+class ClansNowTests(unittest.TestCase):
+    """/clans-now: пост «как кланы устроены сейчас» — 10 карточек с баннерами, без Purr и без «скоро»."""
+
+    def test_post_fits_one_message_and_sends(self):
+        import clans_now
+        embeds, files = clans_now.build()
+        self.assertEqual(len(embeds), 10)                       # лимит Discord — 10 карточек
+        self.assertLessEqual(clans_now.total_length(embeds), 6000)
+        self.assertEqual(len(files), 9)
+        for file in files:
+            file.close()
+        text = " ".join((e.title or "") + (e.description or "") for e in embeds)
+        self.assertNotIn("Purr", text)
+        self.assertNotIn("clans_now.", text)
+        g = make_guild()
+        sent = []
+
+        class Channel:
+            id = 77
+            mention = "#инфо"
+
+            def permissions_for(self, member):
+                return discord.Permissions(send_messages=True, embed_links=True, attach_files=True)
+
+            async def send(self, **kwargs):
+                sent.append(kwargs)
+                return types.SimpleNamespace(jump_url="https://discord.com/channels/1/77/1")
+        channel = Channel()
+        i = FakeInteraction(g, g.members[STAFF])
+        i.channel = channel
+        replies = []
+
+        async def followup_send(content=None, **kwargs):
+            replies.append(content)
+        i.followup = types.SimpleNamespace(send=followup_send)
+
+        async def defer(**kwargs):
+            i.response.done = True
+        i.response.defer = defer
+        from unittest import mock
+        with mock.patch.object(core, "can_post_in", return_value=True):
+            run(clans_now.SendView().send.callback(i))
+        self.assertEqual(len(sent[0]["embeds"]), 10)
+        self.assertIn("Переслать", replies[-1])
 
 
 class SceneEditorTests(unittest.TestCase):
