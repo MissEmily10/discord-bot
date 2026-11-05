@@ -17,13 +17,16 @@ containers.py
 текст — до 4000 символов; content и embed'ы в таком сообщении не бывают.
 Сообщение, раз отправленное контейнерами, обратно в embed'ы не переводится.
 
-Как у нас. Build остаётся тем же (embed'ы в редакторе /embed и на сайте), а вид
-«Контейнеры» (layout = "container") при отправке собирает из каждого embed'а
-карточку: автор → мелкий текст, заголовок → ## (со ссылкой), описание,
-миниатюра — справа от текста, поля — блоком, картинка + галерея, подпись и
-время — мелким текстом под разделителем; кнопки и меню — внутри последней
-карточки. У embed'а есть настройки контейнера: галерея (ещё картинки),
-спойлер, разделители (кнопка «Контейнер» в редакторе).
+Как у нас. В /embed в начале выбирают «Обычный embed» или «Контейнер».
+Контейнер собирается из блоков (container_editor.py): build с layout =
+"container", каждый элемент embeds — карточка {color, spoiler, blocks}, а блок —
+- {"type": "text", "title", "text"} — текст, заголовок крупно (##);
+- {"type": "section", "title", "text", "thumbnail"} — текст и картинка справа;
+- {"type": "gallery", "images": [...]} — галерея до 10 картинок;
+- {"type": "separator", "line": bool, "big": bool} — линия или пустой отступ.
+Кнопки и меню сообщения встают внутрь последней карточки. Старые build'ы
+с layout = "container" без блоков собираются из полей embed'а (автор → мелкий
+текст, заголовок → ##, миниатюра справа, поля, картинка + галерея, подпись).
 """
 
 import discord
@@ -45,6 +48,66 @@ def extras_of(item):
     gallery = [str(u).strip() for u in (item.get("gallery") or []) if str(u or "").strip().startswith(("http", "attachment://"))]
     return {"gallery": gallery[:MAX_GALLERY - 1], "spoiler": bool(item.get("spoiler")),
             "dividers": item.get("dividers", True) is not False}
+
+
+BLOCK_TYPES = ("text", "section", "gallery", "separator")
+
+
+def block_text(block):
+    title, text = _clean(block.get("title")), _clean(block.get("text"))
+    return "\n".join(part for part in (f"## {title}" if title else "", text) if part)
+
+
+def _from_blocks(card):
+    """Карточка из блоков (собранная в редакторе контейнеров) -> Container."""
+    children = []
+    for block in card.get("blocks") or []:
+        kind = block.get("type")
+        if kind == "text" and block_text(block):
+            children.append(discord.ui.TextDisplay(block_text(block)))
+        elif kind == "section":
+            text, thumb = block_text(block), str(block.get("thumbnail") or "")
+            if text and thumb.startswith(("http", "attachment://")):
+                children.append(discord.ui.Section(discord.ui.TextDisplay(text), accessory=discord.ui.Thumbnail(thumb)))
+            elif text:
+                children.append(discord.ui.TextDisplay(text))
+        elif kind == "gallery":
+            images = [str(u) for u in block.get("images") or [] if str(u).startswith(("http", "attachment://"))]
+            if images:
+                children.append(discord.ui.MediaGallery(*(discord.MediaGalleryItem(u) for u in images[:MAX_GALLERY])))
+        elif kind == "separator":
+            children.append(discord.ui.Separator(
+                visible=block.get("line", True) is not False,
+                spacing=discord.SeparatorSpacing.large if block.get("big") else discord.SeparatorSpacing.small))
+    if not children:
+        children.append(discord.ui.TextDisplay(ZERO))
+    try:
+        colour = int(card.get("color")) if card.get("color") is not None else None
+    except (TypeError, ValueError):
+        colour = None
+    return discord.ui.Container(*children, accent_colour=colour, spoiler=bool(card.get("spoiler")))
+
+
+def blocks_from_embed(item):
+    """Старый embed -> блоки (открыли в редакторе контейнеров build, собранный из embed'а)."""
+    blocks = []
+    head = "\n".join(part for part in (f"-# {item['author_name']}" if item.get("author_name") else "",
+                                         _clean(item.get("description"))) if part)
+    if item.get("title") or head:
+        kind = "section" if item.get("thumbnail") else "text"
+        block = {"type": kind, "title": _clean(item.get("title")), "text": head}
+        if kind == "section":
+            block["thumbnail"] = item["thumbnail"]
+        blocks.append(block)
+    for field in item.get("fields") or []:
+        blocks.append({"type": "text", "title": "", "text": f"**{_clean(field.get('name'))}**\n{_clean(field.get('value'))}"})
+    images = ([item["image"]] if item.get("image") else []) + list(item.get("gallery") or [])
+    if images:
+        blocks.append({"type": "gallery", "images": images[:MAX_GALLERY]})
+    if item.get("footer_text"):
+        blocks.append({"type": "separator", "line": True, "big": False})
+        blocks.append({"type": "text", "title": "", "text": f"-# {item['footer_text']}"})
+    return blocks
 
 
 def _container(embed, extra):
@@ -135,7 +198,8 @@ def build_layout(content, embeds, view=None, extras=None):
             layout.add_item(discord.ui.TextDisplay(content))
         containers = []
         for index, embed in enumerate(embeds):
-            container = _container(embed, extras_of(extras[index] if index < len(extras) else {}))
+            item = extras[index] if index < len(extras) else {}
+            container = _from_blocks(item) if isinstance(item, dict) and "blocks" in item else _container(embed, extras_of(item))
             layout.add_item(container)
             containers.append(container)
         for row in _rows(view):

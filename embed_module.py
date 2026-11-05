@@ -126,6 +126,10 @@ class EmbedState:
 
 def editor_embeds(state):
     """Предпросмотр активного embed'а + пояснения к кнопкам редактора отдельным embed'ом."""
+    import container_editor
+    if container_editor.is_container(state):  # контейнер — свой конструктор из блоков
+        container_editor.prepare(state)
+        return [container_editor.editor_embed(state)]
     embeds = [render_active_preview(state)]
     hints = core.button_hints("embed.editor")
     if hints:
@@ -374,16 +378,44 @@ class CreateWhereView(PanelView):
 
     @discord.ui.button(label="Здесь, в Discord", emoji="💬", style=discord.ButtonStyle.primary)
     async def here(self, interaction, button):
-        state = EmbedState(self.guild_id, self.owner_id)
         await interaction.response.edit_message(
-            embed=panel_embed(interaction, "embed.visibility"),
-            view=VisibilityView(state, back_target=(core.screen(interaction), self))
+            embed=panel_embed(interaction, "embed.kind"),
+            view=KindChoiceView(self.guild_id, self.owner_id, back_target=(core.screen(interaction), self))
         )
 
     @discord.ui.button(label="На сайте", emoji="🌐", style=discord.ButtonStyle.success)
     async def site(self, interaction, button):
         import post_builder
         await post_builder.send_link(interaction)
+
+
+class KindChoiceView(PanelView):
+    """Что собираем: обычный embed или контейнер (новый вид Discord, container_editor.py)."""
+
+    texts = "embed.kind"
+
+    def __init__(self, guild_id, owner_id, back_target):
+        super().__init__(back_target=back_target)
+        self.guild_id, self.owner_id = guild_id, owner_id
+
+    async def start(self, interaction, container):
+        state = EmbedState(self.guild_id, self.owner_id)
+        if container:
+            import container_editor
+            state.layout = "container"
+            state.embeds = [container_editor.new_card()]
+        await interaction.response.edit_message(
+            embed=panel_embed(interaction, "embed.visibility"),
+            view=VisibilityView(state, back_target=(core.screen(interaction), self))
+        )
+
+    @discord.ui.button(label="Обычный embed", emoji="📰", style=discord.ButtonStyle.primary)
+    async def embed(self, interaction, button):
+        await self.start(interaction, False)
+
+    @discord.ui.button(label="Контейнер", emoji="🗂️", style=discord.ButtonStyle.success)
+    async def container(self, interaction, button):
+        await self.start(interaction, True)
 
 
 class AllTriggersView(PanelView):
@@ -599,8 +631,15 @@ class EmbedFieldSelect(discord.ui.Select):
 
 class EmbedEditorView(PanelView):
     texts = "embed.editor"
-    button_order = ('basic', 'meta', 'media', 'add_field', 'confirm', 'preview', 'author_footer', 'timestamp', 'container',
-                    'json_edit', 'visibility', 'delete_embed')
+
+    def __new__(cls, state, back_target=None):
+        # сообщение-контейнер открывается в своём конструкторе — откуда бы ни открывали редактор
+        import container_editor
+        if container_editor.is_container(state):
+            return container_editor.ContainerEditorView(state, back_target)
+        return super().__new__(cls)
+    button_order = ('basic', 'meta', 'media', 'add_field', 'confirm', 'preview', 'author_footer', 'timestamp', 'json_edit',
+                    'visibility', 'delete_embed')
 
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
@@ -655,10 +694,6 @@ class EmbedEditorView(PanelView):
         self.state.active_embed["timestamp"] = not self.state.active_embed.get("timestamp")
         await self.refresh(interaction)
 
-    @discord.ui.button(label="Контейнер", emoji="🗂️", style=discord.ButtonStyle.secondary, row=4)
-    async def container(self, interaction, button):
-        await interaction.response.send_modal(ContainerModal(self.state, self))
-
     @discord.ui.button(label="JSON", emoji="🧾", style=discord.ButtonStyle.secondary, row=4)
     async def json_edit(self, interaction, button):
         view = JsonView(interaction, self.state, back_target=(core.screen(interaction), self))
@@ -676,12 +711,16 @@ class EmbedEditorView(PanelView):
     @discord.ui.button(label="Подтвердить дизайн", emoji="✅", style=discord.ButtonStyle.success, row=2)
     async def confirm(self, interaction, button):
         back = (core.screen(interaction), self)
-        # сначала — вид сообщения: embed'ы (одним / разными сообщениями) или контейнеры
-        many = len(self.state.embeds) > 1
+        if len(self.state.embeds) > 1:
+            # несколько embed'ов — сначала спросить, как их отправлять
+            await interaction.response.edit_message(
+                embed=panel_embed(interaction, "embed.layout", count=len(self.state.embeds)),
+                view=LayoutChoiceView(self.state, back_target=back),
+            )
+            return
         await interaction.response.edit_message(
-            embed=panel_embed(interaction, "embed.layout", description=t(
-                "embed.layout.text" if many else "embed.layout.text_one", count=len(self.state.embeds))),
-            view=LayoutChoiceView(self.state, back_target=back),
+            embed=panel_embed(interaction, "embed.interactive", description=interactive_summary(self.state)),
+            view=InteractiveHubView(self.state, back_target=back)
         )
 
 
@@ -693,17 +732,8 @@ class LayoutChoiceView(PanelView):
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
-        if len(state.embeds) <= 1:  # один embed: «обычный вид» или «контейнер»
-            self.remove_item(self.split)
-            self.single.label = t("embed.layout.single_one")[:80]
 
     async def pick(self, interaction, layout):
-        if layout == "container":
-            problem = container_problem(dict_state(self.state, layout="container"))
-            if problem:
-                key, params = problem
-                await say(interaction, key, **params)
-                return
         if layout == "single":
             total = sum(len(build_discord_embed(e)) for e in self.state.embeds if embed_has_content(e))
             if total > EMBED_TOTAL_LIMIT:
@@ -723,18 +753,6 @@ class LayoutChoiceView(PanelView):
     async def split(self, interaction, button):
         await self.pick(interaction, "split")
 
-    @discord.ui.button(label="Контейнеры", emoji="🗂️", style=discord.ButtonStyle.success)
-    async def container(self, interaction, button):
-        await self.pick(interaction, "container")
-
-
-def dict_state(state, **changes):
-    """Копия состояния редактора с правками (проверить вид, не меняя сам редактор)."""
-    import copy
-    clone = copy.copy(state)
-    for key, value in changes.items():
-        setattr(clone, key, value)
-    return clone
 
 
 def _parse_color(text):
@@ -834,44 +852,6 @@ class EmbedMediaModal(Modal, title="ИЗОБРАЖЕНИЯ"):
         if urls is None:
             return
         await apply_embed_changes(interaction, self.state, self.editor_view, urls)
-
-
-class ContainerModal(Modal, title="КОНТЕЙНЕР"):
-    """Настройки карточки в виде «Контейнеры»: галерея, спойлер, разделители (containers.py)."""
-
-    texts = "embed.container_modal"
-    gallery_input = discord.ui.TextInput(label="Галерея: ещё картинки", required=False, max_length=3000,
-                                         style=discord.TextStyle.paragraph,
-                                         placeholder="https://… — по одной ссылке в строке, до 9")
-    spoiler_input = discord.ui.TextInput(label="Скрыть карточку под спойлер? (да / нет)", required=False,
-                                         max_length=3, placeholder="нет")
-    dividers_input = discord.ui.TextInput(label="Линии-разделители? (да / нет)", required=False, max_length=3,
-                                          placeholder="да")
-
-    def __init__(self, state, editor_view):
-        super().__init__()
-        self.state = state
-        self.editor_view = editor_view
-        data = state.active_embed
-        self.gallery_input.default = "\n".join(data.get("gallery") or [])
-        self.spoiler_input.default = "да" if data.get("spoiler") else "нет"
-        self.dividers_input.default = "нет" if data.get("dividers") is False else "да"
-
-    async def on_submit(self, interaction):
-        gallery = []
-        for raw in self.gallery_input.value.split():
-            url, ok = check_url(raw)
-            if not ok or not url:
-                await say(interaction, "embed.bad_url", field=self.gallery_input.label, value=raw[:100])
-                return
-            gallery.append(url)
-        if len(gallery) > 9:
-            await say(interaction, "embed.container_modal.too_many", count=len(gallery))
-            return
-        yes = ("да", "yes", "д", "y", "+")
-        changes = {"gallery": gallery, "spoiler": self.spoiler_input.value.strip().lower() in yes,
-                   "dividers": self.dividers_input.value.strip().lower() not in ("нет", "no", "н", "n", "-")}
-        await apply_embed_changes(interaction, self.state, self.editor_view, changes)
 
 
 class EmbedAuthorFooterModal(Modal, title="AUTHOR / FOOTER"):

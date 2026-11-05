@@ -624,49 +624,71 @@ class SendThenSaveTests(unittest.TestCase):
         state.layout = "split"
         self.assertIsNone(em.state_problem(state))
 
-    def test_container_layout_sends_one_v2_message(self):
-        """Вид «Контейнеры»: каждый embed — карточка, кнопки внутри последней, галерея и спойлер; лимиты Discord."""
+    def test_container_built_from_blocks(self):
+        """/embed → «Контейнер»: карточка из блоков (текст, текст+картинка, галерея, разделитель), отправка — V2."""
+        import container_editor as ce
         import containers
         em = self.em
         channel = FakeChannel(self.guild, 9310)
-        state = em.EmbedState(GUILD, STAFF)
-        state.embeds = [{"title": "Казна", "description": "текст", "thumbnail": "https://x.test/t.png",
-                         "image": "https://x.test/1.png", "gallery": ["https://x.test/2.png"], "footer_text": "п",
-                         "fields": [{"name": "A", "value": "B"}], "color": 0xB4EE3A},
-                        {"title": "Второй", "spoiler": True}]
-        state.buttons = [{"label": "Ок", "action_key": "message.send", "value": "hi", "style": "blue"}]
+        captured = []
 
         async def check():
-            view = em.LayoutChoiceView(state, back_target=None)
-            await view.container.callback(self.interaction())
-            self.assertEqual(state.layout, "container")
-            await em.send_from_editor(self.interaction(), state, [channel], em.InteractiveHubView(state, back_target=None))
-            self.assertEqual(len(channel.sent), 1)
-            layout = channel.sent[0]["view"]
-            self.assertTrue(containers.is_layout(layout) and layout.has_components_v2())
-            self.assertNotIn("embeds", channel.sent[0])
-            tree = layout.to_components()
-            self.assertEqual([c["type"] for c in tree], [17, 17])           # две карточки
-            first, second = tree
-            self.assertEqual(first["accent_color"], 0xB4EE3A)
-            self.assertEqual(first["components"][0]["type"], 9)             # текст + миниатюра справа
-            gallery = next(c for c in first["components"] if c["type"] == 12)
-            self.assertEqual(len(gallery["items"]), 2)                      # картинка + галерея
-            self.assertTrue(second["spoiler"])
-            self.assertEqual(second["components"][-1]["type"], 1)          # кнопки — внутри последней
-            self.assertEqual(database.get_message_build(state.build_id)[14], "container")
-            # по кнопке («показать сообщение») — то же одно сообщение
-            self.assertTrue(containers.is_layout(actions.button_message(actions.message_parts(state.build_id))["view"]))
+            i = self.interaction()
+            original = em.VisibilityView.__init__
 
+            def remember(view, state, *a, **k):
+                captured.append(state)
+                original(view, state, *a, **k)
+            with mock.patch.object(em.VisibilityView, "__init__", remember):
+                await em.KindChoiceView(GUILD, STAFF, back_target=None).container.callback(i)
+            state = captured[-1]
+            self.assertEqual(state.layout, "container")
+            editor = em.EmbedEditorView(state, back_target=None)          # редактор сам открывается конструктором
+            self.assertIsInstance(editor, ce.ContainerEditorView)
+            self.assertIn("пустая", em.editor_embeds(state)[0].description)
+            # блоки через окна
+            modal = ce.TextBlockModal(state, None)
+            modal.title_input._value, modal.text_input._value = "Казна", "Пополняется **наградами**"
+            await modal.on_submit(self.interaction())
+            modal = ce.TextBlockModal(state, None, section=True)
+            modal.title_input._value, modal.text_input._value = "", "Справа картинка"
+            modal.thumb_input._value = "https://x.test/t.png"
+            await modal.on_submit(self.interaction())
+            await ce.SeparatorView(state).line_big.callback(self.interaction())
+            gallery = ce.GalleryModal(state, None)
+            gallery.images_input._value = "https://x.test/1.png\nhttps://x.test/2.png"
+            await gallery.on_submit(self.interaction())
+            style = ce.StyleModal(state, None)
+            style.color_input._value, style.spoiler_input._value = "#B4EE3A", "нет"
+            await style.on_submit(self.interaction())
+            self.assertEqual([b["type"] for b in state.embeds[0]["blocks"]], ["text", "section", "separator", "gallery"])
+            # сдвинуть галерею выше разделителя
+            await ce.BlockActionsView(state, 3).up.callback(self.interaction())
+            self.assertEqual(state.embeds[0]["blocks"][2]["type"], "gallery")
+            self.assertIn("Галерея", em.editor_embeds(state)[0].description)
+            state.buttons = [{"label": "Ок", "action_key": "message.send", "value": "hi", "style": "blue"}]
+            await em.send_from_editor(self.interaction(), state, [channel], em.InteractiveHubView(state, back_target=None))
+            layout = channel.sent[0]["view"]
+            self.assertTrue(containers.is_layout(layout))
+            card = layout.to_components()[0]
+            self.assertEqual(card["type"], 17)
+            self.assertEqual(card["accent_color"], 0xB4EE3A)
+            self.assertEqual([c["type"] for c in card["components"]], [10, 9, 12, 14, 1])  # кнопки — внутри
+            self.assertTrue(card["components"][0]["content"].startswith("## Казна"))
+            self.assertEqual(card["components"][3]["spacing"], 2)                          # большой отступ
+            self.assertEqual(database.get_message_build(state.build_id)[14], "container")
+            # заново из сохранённого — снова конструктор блоков
+            reopened = em.EmbedState.from_build(database.get_message_build(state.build_id))
+            self.assertIsInstance(em.EmbedEditorView(reopened, back_target=None), ce.ContainerEditorView)
+            self.assertEqual(len(reopened.embeds[0]["blocks"]), 4)
+
+        from unittest import mock
         run(check())
-        # лимит 40 блоков: 10 карточек по полям, подписи и картинке
+        # лимит 40 блоков Discord
         big = em.EmbedState(GUILD, STAFF)
         big.layout = "container"
-        big.embeds = [{"title": f"t{n}", "fields": [{"name": "a", "value": "b"}], "footer_text": "f",
-                       "image": "https://x.test/i.png"} for n in range(10)]
+        big.embeds = [{"color": 1, "blocks": [{"type": "text", "title": "", "text": "x"}] * 45}]
         self.assertEqual(em.state_problem(big)[0], "containers.too_many")
-        big.embeds = [{"description": "x" * 3000}, {"description": "y" * 3000}]
-        self.assertEqual(em.state_problem(big)[0], "containers.too_long")
 
     def test_edit_sent_bot_message_in_place(self):
         """ПКМ → «Изменить сообщение»: сообщение бота не из build'а — в редактор, «Сохранить» обновляет его на месте."""

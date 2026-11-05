@@ -1594,32 +1594,82 @@ CATALOG = {
     "embed.layout.title": "КАК ОТПРАВИТЬ",
     "embed.layout.text": (
         "В сообщении {count} embed'ов. Как их отправлять?\n\n"
-        "🗂️ **Контейнеры** — новый вид Discord: каждый embed станет карточкой, кнопки — внутри последней, "
-        "у карточки — галерея до 10 картинок и спойлер (кнопка «Контейнер» в редакторе). "
-        "Отправленное контейнерами обратно в embed'ы не переделать.\n\n"
         "⚠️ Если потом прикрепить это сообщение к кнопке («показать сообщение» или «шаг»), "
         "по кнопке придёт **одно** сообщение: все embed'ы вместе, если влезут в лимит Discord "
         "(6000 символов на сообщение), иначе только первый."
     ),
-    "embed.layout.text_one": (
-        "Как будет выглядеть сообщение?\n\n"
-        "• **Обычный вид** — embed, как раньше.\n"
-        "• **Контейнеры** — новый вид Discord: карточка с цветной полосой, внутри — текст с заголовками, "
-        "миниатюра справа от текста, галерея до 10 картинок, разделители, кнопки прямо в карточке; "
-        "карточку можно скрыть под спойлер (настройки — кнопка «Контейнер» в редакторе).\n"
-        "⚠️ Отправленное контейнерами обратно в embed не переделать (так устроен Discord)."
+    "embed.layout.summary_container": "🗂️ Контейнер — карточек: **{count}**",
+    # /embed: что собираем — обычный embed или контейнер (container_editor.py)
+    "embed.kind.title": "ЧТО СОБИРАЕМ?",
+    "embed.kind.text": (
+        "**📰 Обычный embed** — привычная карточка: заголовок, текст, поля, одна большая картинка и маленькая справа.\n\n"
+        "**🗂️ Контейнер** — новый вид сообщений Discord. Собираешь карточку из блоков по одному, в любом порядке:\n"
+        "📝 текст с крупным заголовком · 🖼️ текст и картинка справа · 🎞️ галерея до 10 картинок сеткой · "
+        "➖ разделители-линии и отступы · кнопки прямо внутри карточки · можно скрыть под спойлер.\n\n"
+        "-# Контейнер, раз отправленный, обратно в обычный embed не переделать — так устроен Discord."
     ),
-    "embed.layout.single_one": "Обычный вид (embed)",
-    "embed.layout.container": "Контейнеры",
-    "embed.layout.container.hint": "новый вид Discord: карточки, галерея до 10 картинок, кнопки внутри, спойлер",
-    "embed.layout.summary_container": "Вид: **контейнеры** — карточек: {count}",
-    "embed.container_modal.title": "КОНТЕЙНЕР",
-    "embed.container_modal.gallery_input": "Галерея: ещё картинки",
-    "embed.container_modal.spoiler_input": "Скрыть карточку под спойлер? (да / нет)",
-    "embed.container_modal.dividers_input": "Линии-разделители? (да / нет)",
-    "embed.container_modal.too_many": "В галерею влезает 9 картинок (плюс большая картинка embed'а), а ссылок {count}.",
-    "embed.editor.container": "Контейнер",
-    "embed.editor.container.hint": "для вида «Контейнеры»: галерея, спойлер, разделители",
+    "embed.kind.embed": "Обычный embed",
+    "embed.kind.container": "Контейнер",
+    "embed.kind.embed.hint": "как раньше: заголовок, текст, поля, картинка",
+    "embed.kind.container.hint": "из блоков: тексты, картинки, галереи, разделители",
+    "container.editor.title": "🗂️ КОНТЕЙНЕР · карточка {n} из {total}",
+    "container.editor.empty": "Карточка пока пустая. Добавь первый блок кнопками ниже — например 📝 «Текст».",
+    "container.editor.spoiler_on": "🙈 Карточка скрыта под спойлер — откроется по нажатию.",
+    "container.editor.pick_block": "Выбери блок — изменить, сдвинуть или удалить",
+    "container.editor.pick_card": "Другая карточка",
+    "container.editor.card_n": "Карточка {n}",
+    "container.editor.text": "Текст",
+    "container.editor.section": "Текст и картинка справа",
+    "container.editor.gallery": "Галерея",
+    "container.editor.separator": "Разделитель",
+    "container.editor.done": "Готово",
+    "container.editor.preview": "Как выглядит",
+    "container.editor.style": "Оформление карточки",
+    "container.editor.add_card": "Ещё карточка",
+    "container.editor.delete_card": "Удалить карточку",
+    "container.editor.meta": "Название и текст сверху",
+    "container.editor.text.hint": "заголовок крупно и текст с разметкой",
+    "container.editor.section.hint": "текст, а справа от него — маленькая картинка",
+    "container.editor.gallery.hint": "до 10 картинок сеткой",
+    "container.editor.separator.hint": "линия или пустой отступ между блоками",
+    "container.editor.done.hint": "дальше — кнопки, меню, сохранить и отправить",
+    "container.editor.preview.hint": "пришлю настоящий контейнер (видно только тебе)",
+    "container.editor.style.hint": "цвет полосы слева и «скрыть под спойлер»",
+    "container.editor.add_card.hint": "несколько карточек в одном сообщении",
+    "container.editor.delete_card.hint": "убрать эту карточку",
+    "container.editor.meta.hint": "название в списках и текст над карточками",
+    "container.block.text": "Текст",
+    "container.block.section": "Текст и картинка",
+    "container.block.gallery": "Галерея",
+    "container.block.separator": "Разделитель",
+    "container.block.change_separator": "Другой разделитель",
+    "container.sep.line": "линия",
+    "container.sep.space": "пустой отступ",
+    "container.sep.small": "маленький",
+    "container.sep.big": "большой",
+    "container.separator.title": "➖ РАЗДЕЛИТЕЛЬ",
+    "container.separator.text": "Какой разделитель поставить?\n\n**Линия** — тонкая черта между блоками.\n**Пустой отступ** — просто воздух, без черты.\nОба бывают маленькие и большие.",
+    "container.separator.line_small": "Линия",
+    "container.separator.line_big": "Линия с большим отступом",
+    "container.separator.space_small": "Пустой отступ",
+    "container.separator.space_big": "Большой пустой отступ",
+    "container.text_modal.title": "ТЕКСТ",
+    "container.text_modal.section_title": "ТЕКСТ И КАРТИНКА СПРАВА",
+    "container.text_modal.heading": "Заголовок (крупно, можно пусто)",
+    "container.text_modal.heading_hint": "Например: Как пополнить казну",
+    "container.text_modal.text": "Текст",
+    "container.text_modal.text_hint": "**жирный**, *курсив*, - список, > цитата, -# мелкий текст, {переменные}",
+    "container.text_modal.thumbnail": "Картинка справа (ссылка)",
+    "container.text_modal.empty": "Напиши заголовок или текст — пустой блок не добавляю.",
+    "container.gallery_modal.title": "ГАЛЕРЕЯ",
+    "container.gallery_modal.images": "Картинки — по ссылке в строке",
+    "container.gallery_modal.placeholder": "https://… — от 1 до 10 ссылок, каждая с новой строки",
+    "container.gallery_modal.count": "В галерее должно быть от 1 до 10 картинок, а ссылок {count}.",
+    "container.style_modal.title": "ОФОРМЛЕНИЕ КАРТОЧКИ",
+    "container.style_modal.color": "Цвет полосы слева (HEX)",
+    "container.style_modal.spoiler": "Скрыть под спойлер? (да / нет)",
+    "container.style_modal.bad_color": "Не понимаю цвет «{value}» — нужен HEX, например #B4EE3A.",
+    "container.too_many_cards": "В одном сообщении — до {max} карточек.",
     "containers.too_many": "В контейнерах получается слишком много блоков — Discord пускает до {max} на сообщение (вместе с текстами, картинками, разделителями и кнопками). Убери часть полей, embed'ов или кнопок — или выбери обычный вид.",
     "containers.too_long": "Текста в контейнерах {length} символов, а Discord пускает до {max} на всё сообщение. Сократи текст или выбери обычный вид.",
     "embed.layout.single": "Одним сообщением",

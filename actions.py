@@ -97,7 +97,7 @@ def embed_has_content(data):
     return any(
         str(data.get(key) or "").strip()
         for key in ("title", "description", "image", "thumbnail", "author_name", "footer_text")
-    ) or bool(data.get("fields"))
+    ) or bool(data.get("fields")) or bool(data.get("blocks"))
 
 
 def valid_emoji(value):
@@ -342,6 +342,9 @@ def apply_variables(data, variables):
              "value": substitute(str(field.get("value") or ""), variables)}
             for field in embed.get("fields") or []
         ]
+        if embed.get("blocks"):  # карточка контейнера: тексты блоков
+            embed["blocks"] = [{**block, **{k: substitute(str(block[k]), variables) for k in ("title", "text")
+                                            if block.get(k)}} for block in embed["blocks"] if isinstance(block, dict)]
         embeds.append(embed)
     result["embeds"] = embeds
     return result

@@ -213,6 +213,35 @@ async def fetch_message_for(interaction, text):
 # ОЧИСТКА ПРИШЕДШИХ СНАРУЖИ ДАННЫХ
 # ============================================================
 
+def clean_blocks(raw_blocks):
+    """Блоки карточки контейнера из JSON/сайта: только известные типы, ссылки проверены."""
+    blocks = []
+    for raw in raw_blocks[:40]:
+        if not isinstance(raw, dict):
+            continue
+        kind = raw.get("type")
+        if kind in ("text", "section"):
+            block = {"type": kind, "title": str(raw.get("title") or "")[:256], "text": str(raw.get("text") or "")[:4000]}
+            if kind == "section":
+                url, ok = check_url(raw.get("thumbnail"))
+                if not ok or not url:
+                    block["type"] = "text"
+                else:
+                    block["thumbnail"] = url
+            blocks.append(block)
+        elif kind == "gallery":
+            images = []
+            for value in (raw.get("images") or [])[:10] if isinstance(raw.get("images"), list) else []:
+                url, ok = check_url(value)
+                if ok and url:
+                    images.append(url)
+            if images:
+                blocks.append({"type": "gallery", "images": images})
+        elif kind == "separator":
+            blocks.append({"type": "separator", "line": raw.get("line", True) is not False, "big": bool(raw.get("big"))})
+    return blocks
+
+
 def _clean_embed(raw):
     data = {key: raw.get(key) for key in _EMBED_KEYS if key in raw}
     for key in _URL_KEYS:
@@ -238,6 +267,8 @@ def _clean_embed(raw):
         data["spoiler"] = True
     if raw.get("dividers") is False:
         data["dividers"] = False
+    if isinstance(raw.get("blocks"), list):  # карточка контейнера (container_editor.py)
+        data["blocks"] = clean_blocks(raw["blocks"])
     data["fields"] = [
         {"name": str(f.get("name") or "​")[:256], "value": str(f.get("value") or "​")[:1024],
          "inline": bool(f.get("inline"))}

@@ -330,9 +330,9 @@ a.dl { color: var(--dc-link); text-decoration: none; }
     <label class="f">Уровень доступа</label><div class="chips" id="mLevels"></div>
     <label class="f">Или роли</label><div class="chips" id="mRoles"></div>
   </div>
-  <label class="f">Несколько embed'ов</label>
-  <div class="seg" id="mLayout"><button data-v="single" class="on">🧩 Одним сообщением</button><button data-v="split">📚 Разными сообщениями</button><button data-v="container">🗂️ Контейнеры</button></div>
-  <p class="hint">«Разными» — каждый embed отдельным сообщением (обходит лимит 6000 символов). «Контейнеры» — новый вид Discord: каждый embed становится карточкой, кнопки — внутри неё, у карточки можно галерею до 10 картинок и спойлер. До 40 блоков и 4000 символов текста на сообщение; отправленное контейнерами обратно в embed'ы не переделать.</p>
+  <div id="mLayoutBox"><label class="f">Несколько embed'ов</label>
+  <div class="seg" id="mLayout"><button data-v="single" class="on">🧩 Одним сообщением</button><button data-v="split">📚 Разными сообщениями</button></div>
+  <p class="hint">«Разными» — каждый embed отдельным сообщением (обходит лимит 6000 символов).</p></div>
   <div class="adds"><span style="flex:1"></span><button class="btn primary" data-close>Готово</button></div></dialog>
 
 <div id="toast"></div>
@@ -367,7 +367,8 @@ function normalize(p) {
   d.embeds = (Array.isArray(p.embeds) ? p.embeds : []).slice(0, 10).map(e => Object.assign(newEmbed(), e || {},
     { fields: Array.isArray((e || {}).fields) ? e.fields.map(f => ({ name: f.name || "", value: f.value || "", inline: !!f.inline })) : [],
       gallery: Array.isArray((e || {}).gallery) ? e.gallery.slice(0, 9).map(String) : [],
-      spoiler: !!(e || {}).spoiler, dividers: (e || {}).dividers !== false }));
+      spoiler: !!(e || {}).spoiler, dividers: (e || {}).dividers !== false,
+      ...(Array.isArray((e || {}).blocks) ? { blocks: e.blocks } : {}) }));
   d.buttons = (Array.isArray(p.buttons) ? p.buttons : []).slice(0, 20).map(b => ({
     label: b.label || "", emoji: b.emoji || "", style: STYLES[b.style] ? b.style : "blue", action_key: b.action_key || null,
     value: b.value == null ? "" : String(b.value) }));
@@ -506,15 +507,6 @@ function uploadButton(el, obj, key) {
   });
   return h("div", { style: "margin-top:4px" }, h("button", { type: "button", class: "btn upload" }, "📎 Загрузить файл", file));
 }
-function galleryInput(e) {
-  // галерея контейнера: ещё до 9 картинок к большой — по одной ссылке в строке
-  const area = h("textarea", { rows: 3, placeholder: "https://… — по одной ссылке в строке (до 9)" });
-  area.value = (e.gallery || []).join("\n");
-  area.addEventListener("input", () => {
-    e.gallery = area.value.split(/\s+/).map(v => v.trim()).filter(v => /^https?:\/\//.test(v)).slice(0, 9); changed();
-  });
-  return h("div", {}, h("label", { class: "f" }, "Галерея — ещё картинки сеткой"), area);
-}
 function check(label, obj, key, rerender) {
   const c = h("input", { type: "checkbox" }); c.checked = !!obj[key];
   c.addEventListener("change", () => { obj[key] = c.checked; changed(rerender); });
@@ -609,6 +601,10 @@ function renderEditor() {
     root.append(h("div", { class: "row" }, input("Имя (вебхук)", doc.webhook, "name", { max: 80, placeholder: info ? info.user.name : "" }),
       input("Аватарка", doc.webhook, "avatar", { type: "url", image: true, placeholder: "https://…" })));
   }
+  if (doc.layout === "container") {   // контейнер собирают из блоков в Discord — здесь только отправить и кнопки
+    root.append(h("div", { class: "note" }, "🗂️ Это сообщение-контейнер. Его блоки (тексты, картинки, галереи, разделители) правятся в Discord: /embed → «Мои сохранённые» → «Редактировать». Здесь можно поменять текст над карточками, кнопки, название — и отправить."));
+  }
+  const layoutBox = document.getElementById("mLayoutBox"); if (layoutBox) layoutBox.style.display = doc.layout === "container" ? "none" : "";
   root.append(input("Текст сообщения", doc, "content", { area: true, big: true, max: 2000 }));
   // embed'ы
   const total = doc.embeds.reduce((s, e) => s + [e.title, e.description, e.author_name, e.footer_text].join("").length
@@ -625,9 +621,6 @@ function renderEditor() {
       coll(`e${i}b`, "Основное", [input("Заголовок", e, "title", { max: 256 }), input("Описание", e, "description", { area: true, big: true, max: 4096 }),
         h("div", { class: "row" }, input("Ссылка заголовка", e, "url", { type: "url" }), h("div", { class: "tight" }, h("label", { class: "f" }, "Цвет"), h("div", { class: "color" }, color)))], { sub: true, open: true }),
       coll(`e${i}i`, "Картинки", [input("Большая снизу", e, "image", { type: "url", image: true }), input("Маленькая справа", e, "thumbnail", { type: "url", image: true })], { sub: true, open: true }),
-      doc.layout === "container" ? coll(`e${i}c`, "Контейнер", [galleryInput(e),
-        h("div", { class: "row" }, h("div", { class: "tight" }, check("скрыть под спойлер", e, "spoiler")),
-          h("div", { class: "tight" }, check("линии-разделители", e, "dividers")))], { sub: true, open: true }) : null,
       coll(`e${i}fo`, "Подпись", [input("Подпись", e, "footer_text", { max: 2048 }),
         h("div", { class: "row" }, input("Иконка подписи", e, "footer_icon", { type: "url", image: true }), h("div", { class: "tight", style: "padding-bottom:8px" }, check("время отправки", e, "timestamp")))], { sub: true, open: true }),
       coll(`e${i}fs`, "Поля", [fields, h("div", { class: "adds" },
@@ -636,7 +629,7 @@ function renderEditor() {
         { sub: true, count: e.fields.length + " / 25", open: e.fields.length > 0 }),
     ], { subtitle: e.author_name || e.title, tools: tools(doc.embeds, i), color: "#" + (e.color || 0).toString(16).padStart(6, "0") });
   });
-  root.append(coll("embeds", "Embed'ы", [embeds, h("div", { class: "adds" },
+  if (doc.layout !== "container") root.append(coll("embeds", "Embed'ы", [embeds, h("div", { class: "adds" },
     h("button", { class: "btn primary", disabled: doc.embeds.length >= 10 || null, onclick: () => { doc.embeds.push(newEmbed()); collapsed["e" + (doc.embeds.length - 1)] = true; changed(true); } }, "+ Embed"),
     doc.embeds.length ? h("button", { class: "btn danger", onclick: () => { if (confirm("Убрать все embed'ы?")) { doc.embeds = []; changed(true); } } }, "Очистить embed'ы") : null)],
     { big: true, open: true, count: `${doc.embeds.length} / 10 · ${total} / 6000 символов`, over: total > 6000 && doc.layout === "single" }));
@@ -728,8 +721,23 @@ function embedHtml(e, time) {
   const color = "#" + (e.color || 0).toString(16).padStart(6, "0");
   return `<div class="embed${safeUrl(e.thumbnail) ? " has-thumb" : ""}" style="border-left-color:${color}">${safeUrl(e.thumbnail) ? `<img class="thumb" src="${esc(e.thumbnail)}">` : ""}${inner}</div>`;
 }
+function blocksHtml(e) {
+  // карточка из блоков (собрана в Discord): текст, текст + картинка, галерея, разделитель
+  return (e.blocks || []).map(b => {
+    const text = (b.title ? `<div class="ctitle">${inline(esc(b.title))}</div>` : "") + (b.text ? `<div class="desc">${md(b.text)}</div>` : "");
+    if (b.type === "text") return text;
+    if (b.type === "section") return `<div class="csec"><div class="ctext">${text}</div>${safeUrl(b.thumbnail) ? `<img class="cthumb" src="${esc(b.thumbnail)}">` : ""}</div>`;
+    if (b.type === "gallery") { const m = (b.images || []).filter(safeUrl).slice(0, 10); return `<div class="cgal n${Math.min(m.length, 4)}">${m.map(u => `<img src="${esc(u)}">`).join("")}</div>`; }
+    if (b.type === "separator") return b.line === false ? `<div style="height:${b.big ? 24 : 10}px"></div>` : `<div class="csep" style="margin:${b.big ? 20 : 10}px 0"></div>`;
+    return "";
+  }).join("");
+}
 function containerHtml(e, time, last) {
   // контейнер (Components V2): карточка с полосой, миниатюра справа от текста, галерея, мелкая подпись
+  if (Array.isArray(e.blocks)) {
+    const color = "#" + (e.color || 0).toString(16).padStart(6, "0");
+    return `<div class="cbox${e.spoiler ? " cspoiler" : ""}" style="border-left-color:${color}">${blocksHtml(e) || "&nbsp;"}${last ? componentsHtml() : ""}</div>`;
+  }
   const head = [];
   if (e.author_name) head.push(`<div class="csmall">${esc(e.author_name)}</div>`);
   if (e.title) head.push(`<div class="ctitle">${safeUrl(e.url) ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${inline(esc(e.title))}</a>` : inline(esc(e.title))}</div>`);
@@ -764,7 +772,7 @@ function renderPreview() {
   const embeds = doc.embeds.map(e => embedHtml(e, time)).filter(Boolean);
   let out = "";
   if (doc.layout === "container") {
-    const list = doc.embeds.filter(e => e.title || e.description || e.author_name || e.footer_text || e.image || e.thumbnail || e.fields.length);
+    const list = doc.embeds.filter(e => (e.blocks && e.blocks.length) || e.title || e.description || e.author_name || e.footer_text || e.image || e.thumbnail || e.fields.length);
     const html = (doc.content ? `<div class="content">${md(doc.content)}</div>` : "")
       + list.map((e, i) => containerHtml(e, time, i === list.length - 1)).join("") + (list.length ? "" : componentsHtml());
     root.innerHTML = wrapMsg(html || '<div class="content" style="color:var(--dc-muted)">Пустое сообщение — начни слева.</div>', true);
