@@ -182,6 +182,21 @@ dialog textarea.code { min-height: 55vh; font: 12px/1.45 ui-monospace, Menlo, Co
 .embed .field .fn { font-weight: 600; color: #f2f3f5; margin-bottom: 2px; }
 .embed .field .fv { white-space: pre-wrap; word-wrap: break-word; }
 .embed .image { margin-top: 16px; max-width: 100%; border-radius: 4px; display: block; }
+.cbox { max-width: 560px; background: var(--dc-embed); border-radius: 8px; border-left: 4px solid #1e1f22; padding: 12px 16px; margin-top: 6px; }
+.cbox.cspoiler { filter: blur(6px); }
+.cbox .desc { font-size: 14px; white-space: pre-wrap; word-wrap: break-word; margin-top: 2px; }
+.cbox .buttons, .cbox .dselect { margin-top: 10px; }
+.cbox .csec { display: flex; gap: 12px; align-items: flex-start; }
+.cbox .ctext { flex: 1; min-width: 0; }
+.cbox .cthumb { width: 85px; height: 85px; object-fit: cover; border-radius: 8px; }
+.cbox .ctitle { font-weight: 700; color: #f2f3f5; font-size: 20px; margin: 2px 0 4px; }
+.cbox .ctitle a { color: var(--dc-link); text-decoration: none; }
+.cbox .csmall { font-size: 12px; color: var(--dc-muted); margin-top: 4px; }
+.cbox .csep { border-top: 1px solid #3f4147; margin: 10px 0; }
+.cbox .cgal { display: grid; gap: 4px; margin-top: 8px; grid-template-columns: repeat(2, 1fr); }
+.cbox .cgal.n1 { grid-template-columns: 1fr; }
+.cbox .cgal.n3 { grid-template-columns: repeat(3, 1fr); }
+.cbox .cgal img { width: 100%; border-radius: 6px; display: block; object-fit: cover; max-height: 300px; }
 .embed .footer { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--dc-muted); }
 .embed .footer img { width: 20px; height: 20px; border-radius: 50%; }
 .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
@@ -316,8 +331,8 @@ a.dl { color: var(--dc-link); text-decoration: none; }
     <label class="f">Или роли</label><div class="chips" id="mRoles"></div>
   </div>
   <label class="f">Несколько embed'ов</label>
-  <div class="seg" id="mLayout"><button data-v="single" class="on">🧩 Одним сообщением</button><button data-v="split">📚 Разными сообщениями</button></div>
-  <p class="hint">«Разными» — каждый embed отдельным сообщением (обходит лимит 6000 символов).</p>
+  <div class="seg" id="mLayout"><button data-v="single" class="on">🧩 Одним сообщением</button><button data-v="split">📚 Разными сообщениями</button><button data-v="container">🗂️ Контейнеры</button></div>
+  <p class="hint">«Разными» — каждый embed отдельным сообщением (обходит лимит 6000 символов). «Контейнеры» — новый вид Discord: каждый embed становится карточкой, кнопки — внутри неё, у карточки можно галерею до 10 картинок и спойлер. До 40 блоков и 4000 символов текста на сообщение; отправленное контейнерами обратно в embed'ы не переделать.</p>
   <div class="adds"><span style="flex:1"></span><button class="btn primary" data-close>Готово</button></div></dialog>
 
 <div id="toast"></div>
@@ -343,13 +358,16 @@ function blank() {
 }
 function newEmbed() {
   return { title: "", description: "", url: "", color: 0xC6F135, author_name: "", author_url: "", author_icon: "",
-           thumbnail: "", image: "", footer_text: "", footer_icon: "", timestamp: false, fields: [] };
+           thumbnail: "", image: "", footer_text: "", footer_icon: "", timestamp: false, fields: [],
+           gallery: [], spoiler: false, dividers: true };
 }
 function normalize(p) {
   const d = blank();
   d.content = String(p.content || "");
   d.embeds = (Array.isArray(p.embeds) ? p.embeds : []).slice(0, 10).map(e => Object.assign(newEmbed(), e || {},
-    { fields: Array.isArray((e || {}).fields) ? e.fields.map(f => ({ name: f.name || "", value: f.value || "", inline: !!f.inline })) : [] }));
+    { fields: Array.isArray((e || {}).fields) ? e.fields.map(f => ({ name: f.name || "", value: f.value || "", inline: !!f.inline })) : [],
+      gallery: Array.isArray((e || {}).gallery) ? e.gallery.slice(0, 9).map(String) : [],
+      spoiler: !!(e || {}).spoiler, dividers: (e || {}).dividers !== false }));
   d.buttons = (Array.isArray(p.buttons) ? p.buttons : []).slice(0, 20).map(b => ({
     label: b.label || "", emoji: b.emoji || "", style: STYLES[b.style] ? b.style : "blue", action_key: b.action_key || null,
     value: b.value == null ? "" : String(b.value) }));
@@ -359,7 +377,7 @@ function normalize(p) {
   else if (it && it.type === "role_menu") d.interactive = { type: "role_menu", roles: (it.roles || []).map(String), single: !!it.single };
   else if (it && it.type === "form_packs") d.interactive = { type: "form_packs", packs: (it.packs || []).map(String) };
   else d.interactive = null;
-  d.layout = p.layout === "split" ? "split" : "single";
+  d.layout = ["split", "container"].includes(p.layout) ? p.layout : "single";
   if (p.meta) d.meta = Object.assign(d.meta, p.meta);
   if (p.webhook) d.webhook = Object.assign(d.webhook, p.webhook);
   return d;
@@ -488,6 +506,15 @@ function uploadButton(el, obj, key) {
   });
   return h("div", { style: "margin-top:4px" }, h("button", { type: "button", class: "btn upload" }, "📎 Загрузить файл", file));
 }
+function galleryInput(e) {
+  // галерея контейнера: ещё до 9 картинок к большой — по одной ссылке в строке
+  const area = h("textarea", { rows: 3, placeholder: "https://… — по одной ссылке в строке (до 9)" });
+  area.value = (e.gallery || []).join("\n");
+  area.addEventListener("input", () => {
+    e.gallery = area.value.split(/\s+/).map(v => v.trim()).filter(v => /^https?:\/\//.test(v)).slice(0, 9); changed();
+  });
+  return h("div", {}, h("label", { class: "f" }, "Галерея — ещё картинки сеткой"), area);
+}
 function check(label, obj, key, rerender) {
   const c = h("input", { type: "checkbox" }); c.checked = !!obj[key];
   c.addEventListener("change", () => { obj[key] = c.checked; changed(rerender); });
@@ -598,6 +625,9 @@ function renderEditor() {
       coll(`e${i}b`, "Основное", [input("Заголовок", e, "title", { max: 256 }), input("Описание", e, "description", { area: true, big: true, max: 4096 }),
         h("div", { class: "row" }, input("Ссылка заголовка", e, "url", { type: "url" }), h("div", { class: "tight" }, h("label", { class: "f" }, "Цвет"), h("div", { class: "color" }, color)))], { sub: true, open: true }),
       coll(`e${i}i`, "Картинки", [input("Большая снизу", e, "image", { type: "url", image: true }), input("Маленькая справа", e, "thumbnail", { type: "url", image: true })], { sub: true, open: true }),
+      doc.layout === "container" ? coll(`e${i}c`, "Контейнер", [galleryInput(e),
+        h("div", { class: "row" }, h("div", { class: "tight" }, check("скрыть под спойлер", e, "spoiler")),
+          h("div", { class: "tight" }, check("линии-разделители", e, "dividers")))], { sub: true, open: true }) : null,
       coll(`e${i}fo`, "Подпись", [input("Подпись", e, "footer_text", { max: 2048 }),
         h("div", { class: "row" }, input("Иконка подписи", e, "footer_icon", { type: "url", image: true }), h("div", { class: "tight", style: "padding-bottom:8px" }, check("время отправки", e, "timestamp")))], { sub: true, open: true }),
       coll(`e${i}fs`, "Поля", [fields, h("div", { class: "adds" },
@@ -698,6 +728,22 @@ function embedHtml(e, time) {
   const color = "#" + (e.color || 0).toString(16).padStart(6, "0");
   return `<div class="embed${safeUrl(e.thumbnail) ? " has-thumb" : ""}" style="border-left-color:${color}">${safeUrl(e.thumbnail) ? `<img class="thumb" src="${esc(e.thumbnail)}">` : ""}${inner}</div>`;
 }
+function containerHtml(e, time, last) {
+  // контейнер (Components V2): карточка с полосой, миниатюра справа от текста, галерея, мелкая подпись
+  const head = [];
+  if (e.author_name) head.push(`<div class="csmall">${esc(e.author_name)}</div>`);
+  if (e.title) head.push(`<div class="ctitle">${safeUrl(e.url) ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${inline(esc(e.title))}</a>` : inline(esc(e.title))}</div>`);
+  if (e.description) head.push(`<div class="desc">${md(e.description)}</div>`);
+  let inner = head.length ? `<div class="csec">${`<div class="ctext">${head.join("")}</div>`}${safeUrl(e.thumbnail) ? `<img class="cthumb" src="${esc(e.thumbnail)}">` : ""}</div>` : "";
+  const sep = () => (e.dividers !== false && inner ? `<div class="csep"></div>` : "");
+  if (e.fields.length) inner += sep() + `<div class="desc">${e.fields.map(f => `<b>${inline(esc(f.name || ""))}</b>\n${md(f.value || "", false)}`).join("\n\n")}</div>`;
+  const media = [e.image, ...(e.gallery || [])].filter(safeUrl).slice(0, 10);
+  if (media.length) inner += `<div class="cgal n${Math.min(media.length, 4)}">${media.map(u => `<img src="${esc(u)}">`).join("")}</div>`;
+  if (e.footer_text || e.timestamp) inner += sep() + `<div class="csmall">${esc(e.footer_text || "")}${e.footer_text && e.timestamp ? " · " : ""}${e.timestamp ? "сегодня, в " + time : ""}</div>`;
+  if (last) inner += componentsHtml();
+  const color = "#" + (e.color || 0).toString(16).padStart(6, "0");
+  return `<div class="cbox${e.spoiler ? " cspoiler" : ""}" style="border-left-color:${color}">${inner || "&nbsp;"}</div>`;
+}
 function componentsHtml() {
   let html = "";
   const it = doc.interactive;
@@ -717,6 +763,13 @@ function renderPreview() {
   const wrapMsg = (html, withHead) => `<div class="msg"><div class="ava" style="background-image:url('${esc(avatar)}');${withHead ? "" : "visibility:hidden"}"></div><div class="main">${withHead ? head : ""}${html}</div></div>`;
   const embeds = doc.embeds.map(e => embedHtml(e, time)).filter(Boolean);
   let out = "";
+  if (doc.layout === "container") {
+    const list = doc.embeds.filter(e => e.title || e.description || e.author_name || e.footer_text || e.image || e.thumbnail || e.fields.length);
+    const html = (doc.content ? `<div class="content">${md(doc.content)}</div>` : "")
+      + list.map((e, i) => containerHtml(e, time, i === list.length - 1)).join("") + (list.length ? "" : componentsHtml());
+    root.innerHTML = wrapMsg(html || '<div class="content" style="color:var(--dc-muted)">Пустое сообщение — начни слева.</div>', true);
+    return;
+  }
   if (doc.layout === "split" && embeds.length > 1) {
     embeds.forEach((e, i) => { out += wrapMsg((i === 0 && doc.content ? `<div class="content">${md(doc.content)}</div>` : "") + e + (i === embeds.length - 1 ? componentsHtml() : ""), i === 0); });
   } else {
@@ -833,7 +886,7 @@ function openMeta() {
   document.getElementById("catList").innerHTML = [...new Set(info.builds.map(b => b.category))].map(c => `<option value="${esc(c)}">`).join("");
   const restricted = () => { document.getElementById("mRestricted").style.display = m.visibility === "restricted" ? "" : "none"; };
   seg("mVis", m.visibility, v => { m.visibility = v; restricted(); changed(); }); restricted();
-  seg("mLayout", doc.layout, v => { doc.layout = v; changed(); });
+  seg("mLayout", doc.layout, v => { doc.layout = v; changed(true); });  // у контейнеров — свои настройки у embed'ов
   const lv = document.getElementById("mLevels"); lv.innerHTML = "";
   Object.entries(LEVELS).forEach(([k, t]) => { const on = m.levels.includes(k);
     lv.append(h("span", { class: "chip" + (on ? " on" : ""), onclick: () => { const i = m.levels.indexOf(k); i >= 0 ? m.levels.splice(i, 1) : m.levels.push(k); openMeta(); changed(); } }, t)); });

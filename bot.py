@@ -391,6 +391,8 @@ logo_module.register_logo(bot)
 web_panel.register_panel(bot)
 import post_builder  # noqa: E402
 post_builder.register(bot)  # /post — конструктор постов на сайте бота
+import message_edit  # noqa: E402
+message_edit.register(bot)  # «Изменить сообщение» по ПКМ на сообщении бота
 import clans_now  # noqa: E402
 clans_now.register(bot)  # /clans-now — пост «как кланы устроены сейчас» для инфо-канала
 import scene_editor  # noqa: E402

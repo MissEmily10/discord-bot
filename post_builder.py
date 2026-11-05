@@ -269,7 +269,7 @@ def clean(actor, payload):
     safe["content"] = content
     state = EmbedState(actor.guild.id, actor.user.id)
     state.load_payload(safe)
-    state.layout = payload.get("layout") if payload.get("layout") in ("single", "split") else "single"
+    state.layout = payload.get("layout") if payload.get("layout") in ("single", "split", "container") else "single"
     problem = state_problem(state)
     if problem:
         return None, t(problem[0], **problem[1])

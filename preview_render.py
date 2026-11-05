@@ -821,6 +821,13 @@ def messages_from_parts(parts):
     messages = []
     for part in parts or []:
         view = part.get("view")
+        preview = getattr(view, "_purr_preview", None)
+        if preview is not None:  # контейнеры: картинкой — теми же карточками, кнопки — рядами
+            import discord
+            rows = [row.to_component_dict() for row in view.walk_children() if isinstance(row, discord.ui.ActionRow)]
+            messages.append({"content": preview["content"], "embeds": preview["embeds"], "components": rows,
+                             "containers": True})
+            continue
         messages.append({
             "content": part.get("content") or "",
             "embeds": [embed.to_dict() for embed in part_embeds(part)],

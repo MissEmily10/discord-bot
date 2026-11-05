@@ -498,7 +498,7 @@ def save_message_build(
     """, (
         guild_id, owner_id, name, content, embeds_json, buttons_json,
         visibility, category, allowed_role_ids_json, visibility_levels_json,
-        interactive_json, now, now, int(bool(listed)), layout if layout in ("single", "split") else "split"
+        interactive_json, now, now, int(bool(listed)), layout if layout in ("single", "split", "container") else "split"
     ))
 
     build_id = cursor.lastrowid
@@ -590,7 +590,7 @@ def update_message_build(
         _now(), build_id,
     ))
     changed = cursor.rowcount > 0
-    if layout in ("single", "split"):
+    if layout in ("single", "split", "container"):
         cursor.execute("UPDATE message_builds SET layout = ? WHERE id = ?", (layout, build_id))
     connection.commit()
     connection.close()

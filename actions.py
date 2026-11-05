@@ -20,9 +20,13 @@ import re
 import time
 from datetime import datetime
 
+import logging
+
 import discord
 
 import core
+
+_log = logging.getLogger(__name__)
 from core import t, Modal, PanelView, get_user_level, member_level, role_problem
 from database import get_message_build, get_button_set, get_template, get_form, get_webhook, get_build_settings
 
@@ -221,7 +225,7 @@ def load_source(src, source_id):
             "guild_id": row[1], "owner_id": row[2], "content": row[4] or "",
             "embeds": embeds, "buttons": _json(row[6], []),
             "interactive": _json(row[11], None), "row": row, "settings": settings,
-            "layout": row[14] if len(row) > 14 and row[14] in ("single", "split") else "split",
+            "layout": row[14] if len(row) > 14 and row[14] in ("single", "split", "container") else "split",
         }
     if src == "s":
         row = get_button_set(source_id)
@@ -443,16 +447,22 @@ def render_source(src, source_id, data=None, variables=None):
     if not data:
         return None, [], None
     data = apply_variables(data, variables)
-    items = [item for item in data["embeds"][:MAX_EMBEDS] if isinstance(item, dict)]
     view = build_components(src, source_id, data["buttons"], data["interactive"])
-    # Пустые embed'ы не отправляем — так можно собрать сообщение из одного
-    # текста с кнопками. Но сообщение только из кнопок Discord не примет:
-    # тогда оставляем один (пустой) embed как основу.
+    embeds = [build_discord_embed(item) for item in visible_items(data, view)]
+    return (data["content"] or None), embeds, view
+
+
+def visible_items(data, view=None):
+    """
+    Embed'ы build'а, которые правда отправляются. Пустые не отправляем — так можно
+    собрать сообщение из одного текста с кнопками. Но сообщение только из кнопок
+    Discord не примет: тогда оставляем один (пустой) embed как основу.
+    """
+    items = [item for item in data["embeds"][:MAX_EMBEDS] if isinstance(item, dict)]
     visible = [item for item in items if embed_has_content(item)]
     if not visible and not data["content"] and view is not None and items:
         visible = items[:1]
-    embeds = [build_discord_embed(item) for item in visible]
-    return (data["content"] or None), embeds, view
+    return visible
 
 
 def message_parts(build_id, variables=None, data=None):
@@ -462,6 +472,14 @@ def message_parts(build_id, variables=None, data=None):
     if not data:
         return None
     content, embeds, view = render_source("b", build_id, data, variables)
+    if data.get("layout") == "container" and (embeds or content):
+        # новый вид Discord: каждый embed — карточка-контейнер, кнопки внутри (containers.py)
+        import containers
+        layout = containers.build_layout(content, embeds, view, visible_items(apply_variables(data, variables), view))
+        if containers.problem(layout) is None:
+            return [{"view": layout}]
+        _log.info("build %s: containers over Discord limits — sent as embeds", build_id)
+        view = build_components("b", build_id, data["buttons"], data["interactive"])
     if data.get("layout") == "single" and len(embeds) > 1 \
             and sum(len(embed) for embed in embeds) <= EMBED_TOTAL_LIMIT:
         # все embed'ы одним сообщением (Discord: до 10 штук и 6000 символов на всё сообщение)
@@ -486,6 +504,9 @@ def single_message(parts):
     """Склеить части в одно сообщение (для правки на месте). None — не влезает."""
     if not parts:
         return None
+    import containers
+    if containers.is_layout(parts[0].get("view")):  # контейнеры — всегда одно сообщение
+        return dict(parts[0])
     embeds = [embed for part in parts for embed in part_embeds(part)]
     if sum(len(embed) for embed in embeds) > EMBED_TOTAL_LIMIT:
         return None

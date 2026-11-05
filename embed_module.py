@@ -111,7 +111,7 @@ class EmbedState:
         state.visibility_roles = _json(row[9], [])
         state.visibility_levels = _json(row[10], [])
         state.interactive = _json(row[11], None)
-        state.layout = row[14] if len(row) > 14 and row[14] in ("single", "split") else "split"
+        state.layout = row[14] if len(row) > 14 and row[14] in ("single", "split", "container") else "split"
         return state
 
     def load_payload(self, payload):
@@ -121,7 +121,7 @@ class EmbedState:
         self.embeds = [e for e in (payload.get("embeds") or []) if isinstance(e, dict)][:MAX_EMBEDS] or [default_embed_data()]
         self.buttons = list(payload.get("buttons") or [])[:MAX_BUTTONS]
         self.interactive = payload.get("interactive")
-        self.layout = payload.get("layout") if payload.get("layout") in ("single", "split") else "single"
+        self.layout = payload.get("layout") if payload.get("layout") in ("single", "split", "container") else "single"
 
 
 def editor_embeds(state):
@@ -163,7 +163,7 @@ def interactive_summary(state):
         extra = packs_summary(interactive)
     else:
         extra = t("embed.interactive.summary_none")
-    if len(state.embeds) > 1:
+    if len(state.embeds) > 1 or state.layout == "container":
         extra += "\n" + t(f"embed.layout.summary_{state.layout}", count=len(state.embeds))
     return t("embed.interactive.text", buttons=len(state.buttons), max=MAX_BUTTONS, extra=extra)
 
@@ -599,8 +599,8 @@ class EmbedFieldSelect(discord.ui.Select):
 
 class EmbedEditorView(PanelView):
     texts = "embed.editor"
-    button_order = ('basic', 'meta', 'media', 'add_field', 'confirm', 'preview', 'author_footer', 'timestamp', 'json_edit',
-                    'visibility', 'delete_embed')
+    button_order = ('basic', 'meta', 'media', 'add_field', 'confirm', 'preview', 'author_footer', 'timestamp', 'container',
+                    'json_edit', 'visibility', 'delete_embed')
 
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
@@ -655,6 +655,10 @@ class EmbedEditorView(PanelView):
         self.state.active_embed["timestamp"] = not self.state.active_embed.get("timestamp")
         await self.refresh(interaction)
 
+    @discord.ui.button(label="Контейнер", emoji="🗂️", style=discord.ButtonStyle.secondary, row=4)
+    async def container(self, interaction, button):
+        await interaction.response.send_modal(ContainerModal(self.state, self))
+
     @discord.ui.button(label="JSON", emoji="🧾", style=discord.ButtonStyle.secondary, row=4)
     async def json_edit(self, interaction, button):
         view = JsonView(interaction, self.state, back_target=(core.screen(interaction), self))
@@ -672,16 +676,12 @@ class EmbedEditorView(PanelView):
     @discord.ui.button(label="Подтвердить дизайн", emoji="✅", style=discord.ButtonStyle.success, row=2)
     async def confirm(self, interaction, button):
         back = (core.screen(interaction), self)
-        if len(self.state.embeds) > 1:
-            # несколько embed'ов — сначала спросить, как их отправлять
-            await interaction.response.edit_message(
-                embed=panel_embed(interaction, "embed.layout", count=len(self.state.embeds)),
-                view=LayoutChoiceView(self.state, back_target=back),
-            )
-            return
+        # сначала — вид сообщения: embed'ы (одним / разными сообщениями) или контейнеры
+        many = len(self.state.embeds) > 1
         await interaction.response.edit_message(
-            embed=panel_embed(interaction, "embed.interactive", description=interactive_summary(self.state)),
-            view=InteractiveHubView(self.state, back_target=back)
+            embed=panel_embed(interaction, "embed.layout", description=t(
+                "embed.layout.text" if many else "embed.layout.text_one", count=len(self.state.embeds))),
+            view=LayoutChoiceView(self.state, back_target=back),
         )
 
 
@@ -693,8 +693,17 @@ class LayoutChoiceView(PanelView):
     def __init__(self, state, back_target):
         super().__init__(back_target=back_target)
         self.state = state
+        if len(state.embeds) <= 1:  # один embed: «обычный вид» или «контейнер»
+            self.remove_item(self.split)
+            self.single.label = t("embed.layout.single_one")[:80]
 
     async def pick(self, interaction, layout):
+        if layout == "container":
+            problem = container_problem(dict_state(self.state, layout="container"))
+            if problem:
+                key, params = problem
+                await say(interaction, key, **params)
+                return
         if layout == "single":
             total = sum(len(build_discord_embed(e)) for e in self.state.embeds if embed_has_content(e))
             if total > EMBED_TOTAL_LIMIT:
@@ -713,6 +722,19 @@ class LayoutChoiceView(PanelView):
     @discord.ui.button(label="Разными сообщениями", emoji="📚", style=discord.ButtonStyle.secondary)
     async def split(self, interaction, button):
         await self.pick(interaction, "split")
+
+    @discord.ui.button(label="Контейнеры", emoji="🗂️", style=discord.ButtonStyle.success)
+    async def container(self, interaction, button):
+        await self.pick(interaction, "container")
+
+
+def dict_state(state, **changes):
+    """Копия состояния редактора с правками (проверить вид, не меняя сам редактор)."""
+    import copy
+    clone = copy.copy(state)
+    for key, value in changes.items():
+        setattr(clone, key, value)
+    return clone
 
 
 def _parse_color(text):
@@ -812,6 +834,44 @@ class EmbedMediaModal(Modal, title="ИЗОБРАЖЕНИЯ"):
         if urls is None:
             return
         await apply_embed_changes(interaction, self.state, self.editor_view, urls)
+
+
+class ContainerModal(Modal, title="КОНТЕЙНЕР"):
+    """Настройки карточки в виде «Контейнеры»: галерея, спойлер, разделители (containers.py)."""
+
+    texts = "embed.container_modal"
+    gallery_input = discord.ui.TextInput(label="Галерея: ещё картинки", required=False, max_length=3000,
+                                         style=discord.TextStyle.paragraph,
+                                         placeholder="https://… — по одной ссылке в строке, до 9")
+    spoiler_input = discord.ui.TextInput(label="Скрыть карточку под спойлер? (да / нет)", required=False,
+                                         max_length=3, placeholder="нет")
+    dividers_input = discord.ui.TextInput(label="Линии-разделители? (да / нет)", required=False, max_length=3,
+                                          placeholder="да")
+
+    def __init__(self, state, editor_view):
+        super().__init__()
+        self.state = state
+        self.editor_view = editor_view
+        data = state.active_embed
+        self.gallery_input.default = "\n".join(data.get("gallery") or [])
+        self.spoiler_input.default = "да" if data.get("spoiler") else "нет"
+        self.dividers_input.default = "нет" if data.get("dividers") is False else "да"
+
+    async def on_submit(self, interaction):
+        gallery = []
+        for raw in self.gallery_input.value.split():
+            url, ok = check_url(raw)
+            if not ok or not url:
+                await say(interaction, "embed.bad_url", field=self.gallery_input.label, value=raw[:100])
+                return
+            gallery.append(url)
+        if len(gallery) > 9:
+            await say(interaction, "embed.container_modal.too_many", count=len(gallery))
+            return
+        yes = ("да", "yes", "д", "y", "+")
+        changes = {"gallery": gallery, "spoiler": self.spoiler_input.value.strip().lower() in yes,
+                   "dividers": self.dividers_input.value.strip().lower() not in ("нет", "no", "н", "n", "-")}
+        await apply_embed_changes(interaction, self.state, self.editor_view, changes)
 
 
 class EmbedAuthorFooterModal(Modal, title="AUTHOR / FOOTER"):
@@ -1424,7 +1484,20 @@ def state_problem(state):
         total = sum(len(build_discord_embed(e)) for e in state.embeds if embed_has_content(e))
         if total > EMBED_TOTAL_LIMIT:
             return "embed.layout.too_long", {"length": total, "max": EMBED_TOTAL_LIMIT}
+    if state.layout == "container":
+        return container_problem(state)
     return None
+
+
+def container_problem(state):
+    """Вид «Контейнеры»: влезает ли в лимиты Discord (40 блоков, 4000 символов текста)."""
+    import containers
+    from actions import build_components, visible_items
+    data = state_source(state)
+    view = build_components("b", state.build_id or 0, data["buttons"], data["interactive"])
+    items = visible_items(data, view)
+    layout = containers.build_layout(data["content"], [build_discord_embed(e) for e in items], view, items)
+    return containers.problem(layout)
 
 
 async def persist_state(interaction, state, listed=True):
@@ -1505,14 +1578,27 @@ async def finish_message_build(interaction, state):
     build_id = await persist_state(interaction, state, listed=True)
     if build_id is None:
         return
-    # правили уже отправленное — напоминаем обновить копии в каналах
-    key = "embed.saved_build.updated" if existed and get_sent_instances(build_id) else "embed.saved_build.text"
+    attach = getattr(state, "attach_message", None)
+    if attach:  # правили отправленное сообщение бота — теперь оно копия этого build'а
+        from database import save_sent_instance
+        save_sent_instance(build_id, attach[0], attach[1], interaction.guild.id, 0)
+        state.attach_message = None
+    if getattr(state, "resync_on_save", False) and get_sent_instances(build_id):
+        # открыли с самого сообщения («Изменить сообщение») — обновляем его и копии сразу
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        updated, removed, added, missing = await resync_instances(interaction, build_id)
+        core.audit(interaction, "build.resynced", "build", build_id, f"updated={updated} on save")
+        text = t("message_edit.saved", updated=updated, id=build_id,
+                 missing_note=t("message_edit.missing", count=missing) if missing else "")
+    else:
+        # правили уже отправленное — напоминаем обновить копии в каналах
+        key = "embed.saved_build.updated" if existed and get_sent_instances(build_id) else "embed.saved_build.text"
+        text = t(key, id=build_id, embeds=len(state.embeds), buttons=len(state.buttons),
+                 sent=len(get_sent_instances(build_id)))
     await edit_panel(interaction,
         content=None,  # убираем подсказку импорта, если была
-        embed=panel_embed(interaction, "embed.saved_build", description=t(
-            key, id=build_id, embeds=len(state.embeds), buttons=len(state.buttons),
-            sent=len(get_sent_instances(build_id)),
-        )),
+        embed=panel_embed(interaction, "embed.saved_build", description=text),
         view=MessageBuildFinalView(build_id, back_target=None)
     )
 

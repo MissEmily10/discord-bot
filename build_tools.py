@@ -134,11 +134,12 @@ def _copied_list(custom_id, guild_id=None):
     return interactive if interactive.get("type") == "list" else None
 
 
-def message_to_payload(message, guild_id=None):
+def message_to_payload(message, guild_id=None, with_files=True):
     """
     discord.Message -> payload в формате шаблонов/экспорта.
     Кнопки и списки нашего бота копируются вместе с действиями;
     чужие — только внешний вид (действие нужно назначить заново).
+    with_files=False — правка этого же сообщения: вложения в нём и так остаются.
     """
     buttons, interactive = [], None
     for row in message.components:
@@ -165,7 +166,7 @@ def message_to_payload(message, guild_id=None):
                 ]}
     embeds = [embed_to_data(embed) for embed in message.embeds if embed.type == "rich"]
     # Картинки, прикреплённые к сообщению файлами, — отдельными embed'ами с картинкой.
-    for attachment in getattr(message, "attachments", None) or []:
+    for attachment in (getattr(message, "attachments", None) or []) if with_files else []:
         if (attachment.content_type or "").startswith("image/") and len(embeds) < MAX_EMBEDS:
             embeds.append({"title": "", "description": "", "image": attachment.url, "fields": []})
     return {
@@ -225,6 +226,18 @@ def _clean_embed(raw):
     except (TypeError, ValueError):
         data["color"] = core.embed_color().value
     data["timestamp"] = bool(data.get("timestamp"))
+    # настройки вида «Контейнеры»: галерея (ещё до 9 картинок), спойлер, разделители
+    gallery = []
+    for url in (raw.get("gallery") or [])[:9] if isinstance(raw.get("gallery"), list) else []:
+        url, ok = check_url(url)
+        if ok and url:
+            gallery.append(url)
+    if gallery:
+        data["gallery"] = gallery
+    if raw.get("spoiler"):
+        data["spoiler"] = True
+    if raw.get("dividers") is False:
+        data["dividers"] = False
     data["fields"] = [
         {"name": str(f.get("name") or "​")[:256], "value": str(f.get("value") or "​")[:1024],
          "inline": bool(f.get("inline"))}
@@ -306,7 +319,7 @@ def sanitize_payload(interaction, payload):
         interactive = None
 
     return {
-        "layout": payload.get("layout") if payload.get("layout") in ("single", "split") else "single",
+        "layout": payload.get("layout") if payload.get("layout") in ("single", "split", "container") else "single",
         "content": str(payload.get("content") or "")[:2000],
         "embeds": embeds,
         "buttons": buttons,
@@ -487,8 +500,12 @@ def state_json(state):
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-async def open_imported(interaction, payload, name=None, source_key="build_tools.import.done"):
-    """Открыть редактор с импортированным содержимым (ещё не сохранено)."""
+async def open_imported(interaction, payload, name=None, source_key="build_tools.import.done", attach=None):
+    """
+    Открыть редактор с импортированным содержимым (ещё не сохранено).
+    attach=(message_id, channel_id) — правим это сообщение: после «Сохранить»
+    оно станет копией build'а и обновится само (message_edit.py).
+    """
     from embed_module import EmbedState, EmbedEditorView, editor_embeds
 
     import media
@@ -500,6 +517,9 @@ async def open_imported(interaction, payload, name=None, source_key="build_tools
     state.load_payload(clean)
     if name:
         state.name = str(name)[:100]
+    if attach:
+        state.attach_message = attach
+        state.resync_on_save = True
     if isinstance(payload.get("category"), str) and payload["category"].strip():
         state.category = payload["category"].strip()[:50]
     note = t(source_key, embeds=len(clean["embeds"]), buttons=len(clean["buttons"]))
@@ -510,7 +530,7 @@ async def open_imported(interaction, payload, name=None, source_key="build_tools
         note += "\n" + t("build_tools.import.unconfigured", count=unconfigured)
     for key, params in media_warnings:
         note += "\n⚠️ " + t(key, **params)
-    note += "\n" + t("build_tools.import.save_hint")
+    note += "\n" + t("message_edit.save_hint" if attach else "build_tools.import.save_hint")
     kwargs = dict(content=note, embeds=editor_embeds(state), view=EmbedEditorView(state, back_target=None))
     if interaction.response.is_done():
         await interaction.followup.send(ephemeral=True, **kwargs)

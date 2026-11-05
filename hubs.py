@@ -63,6 +63,11 @@ class LibraryHome(PanelView):
         import image_library
         await image_library.open_home(interaction, back_target=(core.screen(interaction), self))
 
+    @discord.ui.button(label="Изменить отправленное", emoji="✏️", style=discord.ButtonStyle.success)
+    async def edit_sent(self, interaction, button):
+        import message_edit
+        await interaction.response.send_modal(message_edit.LinkModal())
+
 
 # ============================================================
 # /interactive

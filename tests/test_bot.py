@@ -624,6 +624,106 @@ class SendThenSaveTests(unittest.TestCase):
         state.layout = "split"
         self.assertIsNone(em.state_problem(state))
 
+    def test_container_layout_sends_one_v2_message(self):
+        """Вид «Контейнеры»: каждый embed — карточка, кнопки внутри последней, галерея и спойлер; лимиты Discord."""
+        import containers
+        em = self.em
+        channel = FakeChannel(self.guild, 9310)
+        state = em.EmbedState(GUILD, STAFF)
+        state.embeds = [{"title": "Казна", "description": "текст", "thumbnail": "https://x.test/t.png",
+                         "image": "https://x.test/1.png", "gallery": ["https://x.test/2.png"], "footer_text": "п",
+                         "fields": [{"name": "A", "value": "B"}], "color": 0xB4EE3A},
+                        {"title": "Второй", "spoiler": True}]
+        state.buttons = [{"label": "Ок", "action_key": "message.send", "value": "hi", "style": "blue"}]
+
+        async def check():
+            view = em.LayoutChoiceView(state, back_target=None)
+            await view.container.callback(self.interaction())
+            self.assertEqual(state.layout, "container")
+            await em.send_from_editor(self.interaction(), state, [channel], em.InteractiveHubView(state, back_target=None))
+            self.assertEqual(len(channel.sent), 1)
+            layout = channel.sent[0]["view"]
+            self.assertTrue(containers.is_layout(layout) and layout.has_components_v2())
+            self.assertNotIn("embeds", channel.sent[0])
+            tree = layout.to_components()
+            self.assertEqual([c["type"] for c in tree], [17, 17])           # две карточки
+            first, second = tree
+            self.assertEqual(first["accent_color"], 0xB4EE3A)
+            self.assertEqual(first["components"][0]["type"], 9)             # текст + миниатюра справа
+            gallery = next(c for c in first["components"] if c["type"] == 12)
+            self.assertEqual(len(gallery["items"]), 2)                      # картинка + галерея
+            self.assertTrue(second["spoiler"])
+            self.assertEqual(second["components"][-1]["type"], 1)          # кнопки — внутри последней
+            self.assertEqual(database.get_message_build(state.build_id)[14], "container")
+            # по кнопке («показать сообщение») — то же одно сообщение
+            self.assertTrue(containers.is_layout(actions.button_message(actions.message_parts(state.build_id))["view"]))
+
+        run(check())
+        # лимит 40 блоков: 10 карточек по полям, подписи и картинке
+        big = em.EmbedState(GUILD, STAFF)
+        big.layout = "container"
+        big.embeds = [{"title": f"t{n}", "fields": [{"name": "a", "value": "b"}], "footer_text": "f",
+                       "image": "https://x.test/i.png"} for n in range(10)]
+        self.assertEqual(em.state_problem(big)[0], "containers.too_many")
+        big.embeds = [{"description": "x" * 3000}, {"description": "y" * 3000}]
+        self.assertEqual(em.state_problem(big)[0], "containers.too_long")
+
+    def test_edit_sent_bot_message_in_place(self):
+        """ПКМ → «Изменить сообщение»: сообщение бота не из build'а — в редактор, «Сохранить» обновляет его на месте."""
+        import message_edit
+        em = self.em
+        edits = []
+
+        class Partial:
+            def __init__(self, mid):
+                self.id = mid
+
+            async def edit(self, **kwargs):
+                edits.append((self.id, kwargs))
+
+        class Channel(FakeChannel):
+            name = "новости"
+
+            def get_partial_message(self, mid):
+                return Partial(mid)
+
+        channel = Channel(self.guild, 9320)
+        message = types.SimpleNamespace(
+            id=555001, guild=self.guild, channel=channel, author=self.guild.me, webhook_id=None,
+            content="старый текст", embeds=[discord.Embed(title="Старый", description="текст")], components=[],
+            attachments=[], flags=discord.MessageFlags())
+        opened = []
+
+        async def check():
+            i = self.interaction()
+            original = em.EmbedState.__init__
+
+            def remember(state, *a, **k):
+                original(state, *a, **k)
+                opened.append(state)
+            with mock.patch.object(em.EmbedState, "__init__", remember):
+                await message_edit.open_for(i, message)
+            state = opened[-1]
+            self.assertEqual(state.attach_message, (555001, 9320))
+            self.assertEqual(state.embeds[0]["title"], "Старый")
+            state.embeds[0]["title"] = "Новый"
+            await em.finish_message_build(self.interaction(), state)
+            self.assertEqual(database.get_instance_build(555001), state.build_id)   # теперь копия build'а
+            self.assertEqual(edits[-1][0], 555001)
+            self.assertEqual(edits[-1][1]["embeds"][0].title, "Новый")            # обновлено на месте
+            # второй раз — уже как сообщение из build'а
+            again = self.interaction()
+            await message_edit.open_for(again, message)
+            self.assertIn("Правишь отправленное", again.response.sent[-1])
+            # чужое сообщение — предложить копию
+            other = types.SimpleNamespace(**{**vars(message), "author": self.guild.members[STAFF], "id": 555002})
+            third = self.interaction()
+            await message_edit.open_for(third, other)
+            self.assertIn("не бот", third.response.sent[-1])
+
+        from unittest import mock
+        run(check())
+
     def test_plain_save_is_listed(self):
         em = self.em
         state = em.EmbedState(GUILD, STAFF)
@@ -4080,6 +4180,7 @@ class ViewSmokeTests(unittest.TestCase):
         # docs/STRUCTURE.md: 6 команд вместо 12
         self.assertEqual(names, sorted(["embed", "library", "interactive", "forms", "logo", "eminemovna", "webhook",
                                         "emoji", "pictures", "whisper", "post", "clan", "admin-clan", "clans-now", "В референсы стиля",
+                                        "Изменить сообщение",
                                     "В цитаты дня", "Шепнуть"]))
 
 
